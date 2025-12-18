@@ -43,7 +43,7 @@ class _Member3PageState extends State<Member3Page> {
   String connectionStatus = "Disconnected";
   
   // ESP32 BLE Configuration - UPDATE THESE VALUES
-  static const String targetDeviceName = "ESP32_IMU"; // Change to your ESP32 device name
+  static const String targetDeviceName = "SmartHelmet_ESP32"; // Change to your ESP32 device name
   static const String serviceUUID = "4fafc201-1fb5-459e-8fcc-c5c9c331914b"; // Your service UUID
   static const String characteristicUUID = "beb5483e-36e1-4688-b7f5-ea07361b26a8"; // Your characteristic UUID
   
