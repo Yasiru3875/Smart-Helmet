@@ -7,7 +7,7 @@ import 'package:provider/provider.dart';
 import 'services/auth_service.dart'; // Manages authentication state
 import 'screens/auth/login_screen.dart'; // User login interface
 import 'screens/home/home_screen.dart'; // Main application screen
-import 'screens/member_one/member1_page.dart'; // Your BLE dashboard
+import 'screens/home/members/Health_Monitoring/member1_page.dart'; // Your BLE dashboard
 
 void main() async {
   // Ensure that Flutter widgets binding is initialized before calling native code (like Firebase)
