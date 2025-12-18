@@ -1,15 +1,8 @@
-import 'package:flutter/material.dart';
 import 'dart:async';
 import 'dart:convert';
-import 'package:flutter_blue_plus/flutter_blue_plus.dart';
-import 'package:firebase_database/firebase_database.dart';
-
-// --- BLE UUIDs ---
-final Guid SERVICE_UUID = Guid("4fafc201-1fb5-459e-8fcc-c200c200c200");
-final Guid CHARACTERISTIC_UUID = Guid("beb5483e-36e1-4688-b7f5-ea07361b26a8");
-
-// Firebase reference
-final databaseRef = FirebaseDatabase.instance.ref("SmartHelmetData");
+import 'package:flutter/material.dart';
+import 'package:provider/provider.dart';
+import '../../../../services/bluetooth_manager.dart';
 
 class Member1Page extends StatefulWidget {
   const Member1Page({super.key});
@@ -19,197 +12,426 @@ class Member1Page extends StatefulWidget {
 }
 
 class _Member1PageState extends State<Member1Page> {
-  String connectionStatus = "Disconnected";
-  double latestHR = 0.0;
-  double latestTemp = 0.0;
-  String predictionResult = "Awaiting Sensor Data...";
-  int _riskLevel = -1;
+  static const String deviceName = "SmartHelmet_ESP32";
 
-  BluetoothDevice? esp32Device;
-  StreamSubscription<List<ScanResult>>? scanSub;
-  StreamSubscription<List<int>>? notifySub;
-  StreamSubscription<BluetoothConnectionState>? disconnectSub;
+  String status = "Waiting...";
+  String errorMessage = "";
+  StreamSubscription? _dataSubscription;
+  int reconnectAttempts = 0;
+  final int maxReconnectAttempts = 3;
+
+  // Parsed sensor values
+  double heartRate = 0.0;
+  double bodyTemperature = 0.0;
+  String riskLevel = "Unknown";
+  Color riskColor = Colors.grey;
 
   @override
   void initState() {
     super.initState();
-    _startBLEScan();
+    _init();
+  }
+
+  Future<void> _init() async {
+    final btManager = context.read<BluetoothManager>();
+    await btManager.requestPermissions();
+
+    if (btManager.isConnected(deviceName)) {
+      _subscribeToData();
+      setState(() => status = "Connected");
+    }
+  }
+
+  void _subscribeToData() {
+    final btManager = context.read<BluetoothManager>();
+    final dataStream = btManager.getDataStream(deviceName);
+
+    String buffer = '';
+
+    _dataSubscription?.cancel();
+    _dataSubscription = dataStream?.listen(
+      (data) {
+        if (!mounted) return;
+        buffer += String.fromCharCodes(data);
+
+        // Split by newline (ESP32 sends with println)
+        List<String> lines = buffer.split('\n');
+        if (lines.length > 1) {
+          for (int i = 0; i < lines.length - 1; i++) {
+            String line = lines[i].trim();
+            if (line.isNotEmpty) {
+              _parseAndUpdateData(line);
+            }
+          }
+          buffer = lines.last; // Keep incomplete part
+        }
+      },
+      onError: (e) {
+        debugPrint("Data stream error: $e");
+        if (mounted) {
+          setState(() => errorMessage = "Stream error: ${e.toString()}");
+        }
+      },
+      onDone: () {
+        debugPrint("$deviceName stream closed");
+        if (mounted) {
+          setState(() {
+            status = "Disconnected";
+            riskLevel = "Unknown";
+            riskColor = Colors.grey;
+          });
+        }
+      },
+    );
+  }
+
+  void _parseAndUpdateData(String jsonString) {
+    try {
+      final Map<String, dynamic> json = jsonDecode(jsonString);
+      final double hr = (json['hr'] as num?)?.toDouble() ?? 0.0;
+      final double temp = (json['temp'] as num?)?.toDouble() ?? 0.0;
+
+      String newRisk = "Low";
+      Color newRiskColor = Colors.green;
+
+      // Simple risk assessment logic (customize as needed)
+      if (hr > 100 || temp > 38.0) {
+        newRisk = "High";
+        newRiskColor = Colors.red;
+      } else if (hr > 90 || temp > 37.5) {
+        newRisk = "Medium";
+        newRiskColor = Colors.orange;
+      }
+
+      if (mounted) {
+        setState(() {
+          heartRate = hr;
+          bodyTemperature = temp;
+          riskLevel = newRisk;
+          riskColor = newRiskColor;
+        });
+      }
+    } catch (e) {
+      debugPrint("JSON parse error: $e | Raw: $jsonString");
+    }
+  }
+
+  Future<void> connectToDevice() async {
+    final btManager = context.read<BluetoothManager>();
+
+    setState(() {
+      status = "Connecting...";
+      errorMessage = "";
+    });
+
+    await Future.delayed(const Duration(seconds: 2));
+
+    try {
+      final result = await btManager.connectToDevice(deviceName);
+
+      if (mounted) {
+        setState(() => status = result);
+
+        if (btManager.isConnected(deviceName)) {
+          reconnectAttempts = 0;
+          _subscribeToData();
+          setState(() {
+            status = "Connected";
+            errorMessage = "";
+          });
+        } else {
+          errorMessage = result;
+          if (reconnectAttempts < maxReconnectAttempts) {
+            reconnectAttempts++;
+            debugPrint(
+              "Reconnection attempt $reconnectAttempts/$maxReconnectAttempts",
+            );
+            await Future.delayed(const Duration(seconds: 3));
+            if (mounted && !btManager.isConnected(deviceName))
+              connectToDevice();
+          } else {
+            setState(() {
+              status = "Connection failed";
+              errorMessage =
+                  "Failed after $maxReconnectAttempts attempts.\n\nTroubleshooting:\n"
+                  "• Ensure ESP32 is powered on\n"
+                  "• Check pairing in Bluetooth settings\n"
+                  "• Unpair & re-pair device\n"
+                  "• Restart ESP32\n"
+                  "• Stay within 10m range";
+            });
+          }
+        }
+      }
+    } catch (e) {
+      if (mounted) {
+        setState(() {
+          status = "Connection failed";
+          errorMessage = "Error: ${e.toString()}";
+        });
+      }
+    }
+  }
+
+  Future<void> disconnectDevice() async {
+    final btManager = context.read<BluetoothManager>();
+    await btManager.disconnectDevice(deviceName);
+    _dataSubscription?.cancel();
+    _dataSubscription = null;
+
+    setState(() {
+      status = "Disconnected";
+      errorMessage = "";
+      heartRate = 0.0;
+      bodyTemperature = 0.0;
+      riskLevel = "Unknown";
+      riskColor = Colors.grey;
+    });
   }
 
   @override
   void dispose() {
-    scanSub?.cancel();
-    notifySub?.cancel();
-    disconnectSub?.cancel();
-    esp32Device?.disconnect();
+    _dataSubscription?.cancel();
     super.dispose();
   }
 
-  // ==============================
-  // SCAN FOR DEVICE
-  // ==============================
-  void _startBLEScan() {
-    setState(() => connectionStatus = "Scanning...");
-
-    FlutterBluePlus.startScan();
-
-    scanSub = FlutterBluePlus.scanResults.listen((results) {
-      for (var r in results) {
-        if (r.device.platformName == "SmartHelmet_ESP32") {
-          esp32Device = r.device;
-          FlutterBluePlus.stopScan();
-          scanSub?.cancel();
-          _connectToDevice(esp32Device!);
-          break;
-        }
-      }
-    });
-  }
-
-  // ==============================
-  // CONNECT TO DEVICE
-  // ==============================
-  void _connectToDevice(BluetoothDevice device) async {
-    setState(() => connectionStatus = "Connecting...");
-
-    await device.connect();
-
-    // Handle disconnects
-    disconnectSub = device.connectionState.listen((state) {
-      if (state == BluetoothConnectionState.disconnected) {
-        setState(() => connectionStatus = "Disconnected. Retrying...");
-        _startBLEScan();
-      }
-    });
-
-    setState(() => connectionStatus = "Discovering services...");
-    _discoverServices(device);
-  }
-
-  // ==============================
-  // DISCOVER + SUBSCRIBE
-  // ==============================
-  void _discoverServices(BluetoothDevice device) async {
-    List<BluetoothService> services = await device.discoverServices();
-
-    for (var service in services) {
-      if (service.uuid == SERVICE_UUID) {
-        for (var char in service.characteristics) {
-          if (char.uuid == CHARACTERISTIC_UUID) {
-            await char.setNotifyValue(true);
-
-            notifySub = char.lastValueStream.listen(_processBLEData);
-
-            setState(() => connectionStatus = "Connected & Receiving");
-            return;
-          }
-        }
-      }
-    }
-
-    setState(() => connectionStatus = "Characteristic not found");
-  }
-
-  // ==============================
-  // PROCESS DATA
-  // ==============================
-  void _processBLEData(List<int> value) {
-    if (value.isEmpty) return;
-
-    String jsonString = utf8.decode(value);
-
-    try {
-      Map<String, dynamic> data = jsonDecode(jsonString);
-      double hr = (data["hr"] ?? 0).toDouble();
-      double temp = (data["temp"] ?? 0).toDouble();
-
-      int risk = _runPredictionModel(hr, temp);
-
-      setState(() {
-        latestHR = hr;
-        latestTemp = temp;
-        _riskLevel = risk;
-        predictionResult = (risk == 1)
-            ? "⚠️ HIGH RISK"
-            : "✅ LOW RISK";
-      });
-
-      _sendToFirebase(hr, temp, risk);
-    } catch (e) {
-      print("JSON error: $e");
-    }
-  }
-
-  // Simple rule-based prediction
-  int _runPredictionModel(double hr, double temp) {
-    return (hr > 100 && temp > 38) ? 1 : 0;
-  }
-
-  void _sendToFirebase(double hr, double temp, int risk) {
-    databaseRef.push().set({
-      "timestamp": DateTime.now().toIso8601String(),
-      "heart_rate": hr,
-      "body_temperature": temp,
-      "predicted_risk": risk
-    });
-  }
-
-  // ==============================
-  // UI
-  // ==============================
   @override
   Widget build(BuildContext context) {
+    final btManager = context.watch<BluetoothManager>();
+    final isConnected = btManager.isConnected(deviceName);
+
     return Scaffold(
       appBar: AppBar(
-        title: const Text("Member 1 - Monitoring"),
+        title: const Text("Health Monitoring"),
         backgroundColor: Colors.indigo,
         foregroundColor: Colors.white,
+        elevation: 4,
       ),
-      body: Padding(
-        padding: const EdgeInsets.all(16.0),
-        child: Column(
-          children: [
-            _buildStatusCard(),
-            const SizedBox(height: 20),
-            _buildPredictionCard(),
-            const SizedBox(height: 20),
-            Row(
-              children: [
-                Expanded(child: _buildDataCard("Heart Rate", latestHR, Icons.favorite, Colors.red)),
-                const SizedBox(width: 10),
-                Expanded(child: _buildDataCard("Temp (°C)", latestTemp, Icons.thermostat, Colors.orange)),
-              ],
-            ),
-          ],
-        ),
-      ),
-    );
-  }
-
-  Widget _buildStatusCard() {
-    return Card(
-      child: ListTile(
-        title: const Text("Bluetooth Status"),
-        subtitle: Text(connectionStatus),
-        leading: const Icon(Icons.bluetooth),
-      ),
-    );
-  }
-
-  Widget _buildPredictionCard() {
-    Color c = (_riskLevel == 1) ? Colors.red : Colors.green;
-    return Card(
-      color: c.withOpacity(0.8),
-      child: Padding(
+      body: SingleChildScrollView(
         padding: const EdgeInsets.all(20),
         child: Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
-            Icon((_riskLevel == 1) ? Icons.warning : Icons.check_circle,
-                size: 40, color: Colors.white),
-            const SizedBox(height: 10),
+            // Connection Card
+            Card(
+              elevation: 6,
+              shape: RoundedRectangleBorder(
+                borderRadius: BorderRadius.circular(16),
+              ),
+              child: Padding(
+                padding: const EdgeInsets.all(20),
+                child: Column(
+                  children: [
+                    Row(
+                      mainAxisAlignment: MainAxisAlignment.center,
+                      children: [
+                        Expanded(
+                          child: ElevatedButton.icon(
+                            onPressed: isConnected ? null : connectToDevice,
+                            icon: const Icon(Icons.bluetooth_connected),
+                            label: const Text("Connect"),
+                            style: ElevatedButton.styleFrom(
+                              backgroundColor: Colors.indigo,
+                              foregroundColor: Colors.white,
+                              padding: const EdgeInsets.symmetric(vertical: 14),
+                              shape: RoundedRectangleBorder(
+                                borderRadius: BorderRadius.circular(12),
+                              ),
+                            ),
+                          ),
+                        ),
+                        const SizedBox(width: 12),
+                        Expanded(
+                          child: ElevatedButton.icon(
+                            onPressed: isConnected ? disconnectDevice : null,
+                            icon: const Icon(Icons.bluetooth_disabled),
+                            label: const Text("Disconnect"),
+                            style: ElevatedButton.styleFrom(
+                              backgroundColor: Colors.redAccent,
+                              foregroundColor: Colors.white,
+                              padding: const EdgeInsets.symmetric(vertical: 14),
+                              shape: RoundedRectangleBorder(
+                                borderRadius: BorderRadius.circular(12),
+                              ),
+                            ),
+                          ),
+                        ),
+                      ],
+                    ),
+                    const SizedBox(height: 16),
+                    Row(
+                      mainAxisAlignment: MainAxisAlignment.center,
+                      children: [
+                        Icon(
+                          isConnected ? Icons.circle : Icons.circle_outlined,
+                          color: isConnected ? Colors.green : Colors.orange,
+                          size: 18,
+                        ),
+                        const SizedBox(width: 10),
+                        Text(
+                          status,
+                          style: TextStyle(
+                            fontSize: 18,
+                            fontWeight: FontWeight.bold,
+                            color: isConnected ? Colors.green : Colors.orange,
+                          ),
+                        ),
+                      ],
+                    ),
+                    if (errorMessage.isNotEmpty) ...[
+                      const SizedBox(height: 12),
+                      Container(
+                        padding: const EdgeInsets.all(14),
+                        decoration: BoxDecoration(
+                          color: Colors.red.shade50,
+                          borderRadius: BorderRadius.circular(12),
+                          border: Border.all(color: Colors.red.shade300),
+                        ),
+                        child: Row(
+                          children: [
+                            Icon(
+                              Icons.error_outline,
+                              color: Colors.red.shade700,
+                            ),
+                            const SizedBox(width: 10),
+                            Expanded(
+                              child: Text(
+                                errorMessage,
+                                style: TextStyle(
+                                  color: Colors.red.shade700,
+                                  fontSize: 13,
+                                ),
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                    ],
+                  ],
+                ),
+              ),
+            ),
+
+            const SizedBox(height: 24),
+
+            // Vital Signs Cards
+            Row(
+              children: [
+                Expanded(
+                  child: _buildVitalCard(
+                    title: "Heart Rate",
+                    value: heartRate > 0
+                        ? "${heartRate.toStringAsFixed(0)} BPM"
+                        : "--",
+                    icon: Icons.favorite,
+                    color: Colors.red.shade400,
+                  ),
+                ),
+                const SizedBox(width: 16),
+                Expanded(
+                  child: _buildVitalCard(
+                    title: "Body Temperature",
+                    value: bodyTemperature > 0
+                        ? "${bodyTemperature.toStringAsFixed(1)} °C"
+                        : "--",
+                    icon: Icons.thermostat,
+                    color: Colors.blue.shade400,
+                  ),
+                ),
+              ],
+            ),
+
+            const SizedBox(height: 24),
+
+            // Risk Assessment Card
+            Card(
+              elevation: 8,
+              shape: RoundedRectangleBorder(
+                borderRadius: BorderRadius.circular(20),
+              ),
+              child: Container(
+                padding: const EdgeInsets.all(24),
+                decoration: BoxDecoration(
+                  borderRadius: BorderRadius.circular(20),
+                  gradient: LinearGradient(
+                    colors: [
+                      riskColor.withOpacity(0.2),
+                      riskColor.withOpacity(0.05),
+                    ],
+                    begin: Alignment.topLeft,
+                    end: Alignment.bottomRight,
+                  ),
+                ),
+                child: Column(
+                  children: [
+                    Icon(Icons.monitor_heart, size: 60, color: riskColor),
+                    const SizedBox(height: 16),
+                    const Text(
+                      "Cardiac Risk Assessment",
+                      style: TextStyle(
+                        fontSize: 20,
+                        fontWeight: FontWeight.bold,
+                        color: Colors.black87,
+                      ),
+                    ),
+                    const SizedBox(height: 12),
+                    Text(
+                      riskLevel,
+                      style: TextStyle(
+                        fontSize: 36,
+                        fontWeight: FontWeight.w900,
+                        color: riskColor,
+                        letterSpacing: 1.2,
+                      ),
+                    ),
+                    const SizedBox(height: 8),
+                    Text(
+                      _getRiskMessage(),
+                      textAlign: TextAlign.center,
+                      style: const TextStyle(
+                        fontSize: 14,
+                        color: Colors.black54,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ),
+
+            const SizedBox(height: 40),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _buildVitalCard({
+    required String title,
+    required String value,
+    required IconData icon,
+    required Color color,
+  }) {
+    return Card(
+      elevation: 6,
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+      child: Padding(
+        padding: const EdgeInsets.symmetric(vertical: 24, horizontal: 16),
+        child: Column(
+          children: [
+            Icon(icon, size: 48, color: color),
+            const SizedBox(height: 12),
             Text(
-              predictionResult,
-              style: const TextStyle(fontSize: 24, color: Colors.white),
+              title,
+              style: const TextStyle(fontSize: 16, color: Colors.black54),
+            ),
+            const SizedBox(height: 8),
+            Text(
+              value,
+              style: TextStyle(
+                fontSize: 28,
+                fontWeight: FontWeight.bold,
+                color: color,
+              ),
             ),
           ],
         ),
@@ -217,20 +439,16 @@ class _Member1PageState extends State<Member1Page> {
     );
   }
 
-  Widget _buildDataCard(String title, double value, IconData icon, Color color) {
-    return Card(
-      child: Padding(
-        padding: const EdgeInsets.all(15),
-        child: Column(
-          children: [
-            Icon(icon, color: color, size: 32),
-            const SizedBox(height: 10),
-            Text(title),
-            Text(value.toStringAsFixed(1),
-                style: const TextStyle(fontSize: 28, fontWeight: FontWeight.bold)),
-          ],
-        ),
-      ),
-    );
+  String _getRiskMessage() {
+    switch (riskLevel) {
+      case "High":
+        return "Immediate attention recommended.\nHigh heart rate or elevated temperature detected.";
+      case "Medium":
+        return "Monitor closely.\nSlightly elevated vitals – rest and hydrate.";
+      case "Low":
+        return "Vitals appear normal.\nContinue regular monitoring.";
+      default:
+        return "Waiting for data...";
+    }
   }
 }

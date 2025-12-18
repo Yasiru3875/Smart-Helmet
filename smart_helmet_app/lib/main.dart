@@ -5,6 +5,7 @@ import 'package:provider/provider.dart';
 
 // Import necessary files for your application's structure
 import 'services/auth_service.dart'; // Manages authentication state
+import 'services/bluetooth_manager.dart'; // Manages Bluetooth connections
 import 'screens/auth/login_screen.dart'; // User login interface
 import 'screens/home/home_screen.dart'; // Main application screen
 import 'screens/home/members/Health_Monitoring/member1_page.dart'; // Your BLE dashboard
@@ -12,11 +13,9 @@ import 'screens/home/members/Health_Monitoring/member1_page.dart'; // Your BLE d
 void main() async {
   // Ensure that Flutter widgets binding is initialized before calling native code (like Firebase)
   WidgetsFlutterBinding.ensureInitialized();
-  
+
   // Initialize Firebase with your project's configuration
-  await Firebase.initializeApp(
-    options: DefaultFirebaseOptions.currentPlatform,
-  );
+  await Firebase.initializeApp(options: DefaultFirebaseOptions.currentPlatform);
 
   // Run the main application widget
   runApp(const SmartHelmetApp());
@@ -28,10 +27,11 @@ class SmartHelmetApp extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    // MultiProvider makes the AuthService available throughout the app
+    // MultiProvider makes the AuthService and BluetoothManager available throughout the app
     return MultiProvider(
       providers: [
         ChangeNotifierProvider(create: (_) => AuthService()),
+        ChangeNotifierProvider(create: (_) => BluetoothManager()),
         // Add other providers for state management here if needed
       ],
       child: MaterialApp(
@@ -42,8 +42,8 @@ class SmartHelmetApp extends StatelessWidget {
           primarySwatch: Colors.indigo, // Set a primary color palette
         ),
         // The EntryPoint handles the initial routing decision (Logged In vs. Logged Out)
-        home: const EntryPoint(), 
-        
+        home: const EntryPoint(),
+
         // Define routes for easy navigation (Optional, but good practice)
         routes: {
           '/member1': (context) => const Member1Page(),
@@ -63,7 +63,7 @@ class EntryPoint extends StatelessWidget {
   Widget build(BuildContext context) {
     // Access the AuthService instance
     final auth = Provider.of<AuthService>(context);
-    
+
     // StreamBuilder listens for changes in the user's login status
     return StreamBuilder(
       stream: auth.authStateChanges,
@@ -74,13 +74,13 @@ class EntryPoint extends StatelessWidget {
             body: Center(child: CircularProgressIndicator()),
           );
         }
-        
+
         // If snapshot has data (user is logged in)
         if (snapshot.hasData) {
           // Send the user to the main application screen
           return const HomeScreen();
         }
-        
+
         // If no user data (user is logged out)
         return const LoginScreen();
       },
