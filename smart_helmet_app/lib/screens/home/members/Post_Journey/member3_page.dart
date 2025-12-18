@@ -1,8 +1,9 @@
 import 'package:flutter/material.dart';
 import 'dart:async';
-// import 'dart:math';
 import 'dart:convert';
-import 'package:flutter_blue_plus/flutter_blue_plus.dart';
+import 'dart:typed_data';
+import 'package:flutter_bluetooth_serial/flutter_bluetooth_serial.dart';
+import 'package:permission_handler/permission_handler.dart';
 
 class Member3Page extends StatefulWidget {
   const Member3Page({super.key});
@@ -19,198 +20,144 @@ class _Member3PageState extends State<Member3Page> {
   double accelX = 0.0;
   double accelY = 0.0;
   double accelZ = 0.0;
-  
+
   // Turn Detection
   int sharpTurnCount = 0;
   int riskyTurnCount = 0;
   String currentTurnStatus = "Normal";
   Color statusColor = Colors.green;
-  
+
   // Historical data for graph
   List<double> gyroZHistory = [];
   final int maxHistoryLength = 50;
-  
+
   // Thresholds (adjust based on calibration)
   final double sharpTurnThreshold = 100.0; // degrees/sec
   final double riskyTurnThreshold = 150.0; // degrees/sec
-  
-  // BLE Connection
-  BluetoothDevice? connectedDevice;
-  BluetoothCharacteristic? imuCharacteristic;
-  StreamSubscription? _characteristicSubscription;
+
+  // Bluetooth Classic Connection
+  BluetoothConnection? _connection;
   bool isConnected = false;
-  bool isScanning = false;
+  bool isConnecting = false;
   String connectionStatus = "Disconnected";
-  
-  // ESP32 BLE Configuration - UPDATE THESE VALUES
-  static const String targetDeviceName = "SmartHelmet_ESP32"; // Change to your ESP32 device name
-  static const String serviceUUID = "4fafc201-1fb5-459e-8fcc-c5c9c331914b"; // Your service UUID
-  static const String characteristicUUID = "beb5483e-36e1-4688-b7f5-ea07361b26a8"; // Your characteristic UUID
-  
+  String _dataBuffer = "";
+
+  // ESP32 Configuration
+  static const String targetDeviceName = "SmartHelmet_ESP32";
+
   @override
   void initState() {
     super.initState();
-    _initializeBLE();
+    _requestPermissions();
   }
-  
+
   @override
   void dispose() {
-    _characteristicSubscription?.cancel();
-    connectedDevice?.disconnect();
+    _disconnect();
     super.dispose();
   }
-  
-  // Initialize BLE and check adapter state
-  Future<void> _initializeBLE() async {
-    // Check if Bluetooth is supported
-    if (await FlutterBluePlus.isSupported == false) {
-      setState(() {
-        connectionStatus = "BLE not supported";
-      });
-      return;
-    }
-    
-    // Listen to Bluetooth adapter state
-    FlutterBluePlus.adapterState.listen((state) {
-      if (state == BluetoothAdapterState.on) {
-        // Bluetooth is on, ready to scan
-      } else {
-        setState(() {
-          connectionStatus = "Turn on Bluetooth";
-        });
-      }
-    });
+
+  // Request Bluetooth permissions
+  Future<void> _requestPermissions() async {
+    await [
+      Permission.bluetooth,
+      Permission.bluetoothConnect,
+      Permission.bluetoothScan,
+      Permission.location,
+    ].request();
   }
-  
-  // Scan for ESP32 device
+
+  // Scan and connect to device
   Future<void> _scanAndConnect() async {
+    if (!mounted) return;
     setState(() {
-      isScanning = true;
+      isConnecting = true;
       connectionStatus = "Scanning...";
     });
-    
+
     try {
-      // Start scanning
-      await FlutterBluePlus.startScan(timeout: const Duration(seconds: 10));
-      
-      // Listen to scan results
-      FlutterBluePlus.scanResults.listen((results) {
-        for (ScanResult result in results) {
-          // Find device by name
-          if (result.device.platformName == targetDeviceName) {
-            FlutterBluePlus.stopScan();
-            _connectToDevice(result.device);
-            break;
-          }
+      // Get bonded (paired) devices
+      List<BluetoothDevice> bondedDevices =
+          await FlutterBluetoothSerial.instance.getBondedDevices();
+
+      // Find target device
+      BluetoothDevice? targetDevice;
+      for (BluetoothDevice device in bondedDevices) {
+        if (device.name == targetDeviceName) {
+          targetDevice = device;
+          break;
+        }
+      }
+
+      if (targetDevice == null) {
+        if (!mounted) return;
+        setState(() {
+          connectionStatus = "Device not paired. Pair '$targetDeviceName' in Bluetooth settings.";
+          isConnecting = false;
+        });
+        return;
+      }
+
+      // Connect to device
+      if (!mounted) return;
+      setState(() {
+        connectionStatus = "Connecting...";
+      });
+
+      BluetoothConnection connection =
+          await BluetoothConnection.toAddress(targetDevice.address);
+
+      if (!mounted) return;
+      setState(() {
+        _connection = connection;
+        isConnected = true;
+        isConnecting = false;
+        connectionStatus = "Connected";
+      });
+
+      // Listen to incoming data
+      _connection!.input!.listen((Uint8List data) {
+        _handleIncomingData(data);
+      }).onDone(() {
+        if (mounted) {
+          setState(() {
+            isConnected = false;
+            connectionStatus = "Disconnected";
+          });
         }
       });
-      
-      // Stop scanning after timeout
-      await Future.delayed(const Duration(seconds: 10));
-      await FlutterBluePlus.stopScan();
-      
-      if (!isConnected) {
-        setState(() {
-          connectionStatus = "Device not found";
-          isScanning = false;
-        });
-      }
     } catch (e) {
-      setState(() {
-        connectionStatus = "Scan error: $e";
-        isScanning = false;
-      });
-    }
-  }
-  
-  // Connect to the ESP32 device
-  Future<void> _connectToDevice(BluetoothDevice device) async {
-    setState(() {
-      connectionStatus = "Connecting...";
-    });
-    
-    try {
-      await device.connect(timeout: const Duration(seconds: 15));
-      
-      setState(() {
-        connectedDevice = device;
-        isConnected = true;
-        connectionStatus = "Connected";
-        isScanning = false;
-      });
-      
-      // Discover services
-      await _discoverServices();
-      
-    } catch (e) {
+      if (!mounted) return;
       setState(() {
         connectionStatus = "Connection failed: $e";
         isConnected = false;
-        isScanning = false;
+        isConnecting = false;
       });
     }
   }
-  
-  // Discover services and characteristics
-  Future<void> _discoverServices() async {
-    if (connectedDevice == null) return;
-    
-    try {
-      List<BluetoothService> services = await connectedDevice!.discoverServices();
-      
-      for (BluetoothService service in services) {
-        if (service.uuid.toString().toLowerCase() == serviceUUID.toLowerCase()) {
-          for (BluetoothCharacteristic characteristic in service.characteristics) {
-            if (characteristic.uuid.toString().toLowerCase() == characteristicUUID.toLowerCase()) {
-              imuCharacteristic = characteristic;
-              await _subscribeToIMUData();
-              return;
-            }
-          }
-        }
+
+  // Handle incoming Bluetooth data
+  void _handleIncomingData(Uint8List data) {
+    // Add new data to buffer
+    _dataBuffer += utf8.decode(data);
+
+    // Process complete JSON messages (ending with newline)
+    while (_dataBuffer.contains('\n')) {
+      int newlineIndex = _dataBuffer.indexOf('\n');
+      String jsonString = _dataBuffer.substring(0, newlineIndex).trim();
+      _dataBuffer = _dataBuffer.substring(newlineIndex + 1);
+
+      if (jsonString.isNotEmpty) {
+        _parseIMUData(jsonString);
       }
-      
-      setState(() {
-        connectionStatus = "IMU service not found";
-      });
-    } catch (e) {
-      setState(() {
-        connectionStatus = "Service discovery error: $e";
-      });
     }
   }
-  
-  // Subscribe to IMU data notifications
-  Future<void> _subscribeToIMUData() async {
-    if (imuCharacteristic == null) return;
-    
+
+  // Parse incoming JSON data
+  void _parseIMUData(String jsonString) {
     try {
-      // Enable notifications
-      await imuCharacteristic!.setNotifyValue(true);
-      
-      // Listen to characteristic updates
-      _characteristicSubscription = imuCharacteristic!.lastValueStream.listen((value) {
-        _parseIMUData(value);
-      });
-      
-      setState(() {
-        connectionStatus = "Receiving data";
-      });
-    } catch (e) {
-      setState(() {
-        connectionStatus = "Subscription error: $e";
-      });
-    }
-  }
-  
-  // Parse incoming BLE data
-  void _parseIMUData(List<int> value) {
-    try {
-      // Convert bytes to string and parse JSON
-      String jsonString = utf8.decode(value);
       Map<String, dynamic> data = json.decode(jsonString);
-      
-      // Process the data
+
       _processIMUData({
         'gyroX': (data['gyroX'] ?? 0.0).toDouble(),
         'gyroY': (data['gyroY'] ?? 0.0).toDouble(),
@@ -223,23 +170,25 @@ class _Member3PageState extends State<Member3Page> {
       print('Error parsing IMU data: $e');
     }
   }
-  
+
   // Disconnect from device
   Future<void> _disconnect() async {
-    if (connectedDevice != null) {
-      await _characteristicSubscription?.cancel();
-      await connectedDevice!.disconnect();
-      
-      setState(() {
-        connectedDevice = null;
-        imuCharacteristic = null;
-        isConnected = false;
-        connectionStatus = "Disconnected";
-      });
+    try {
+      await _connection?.finish();
+    } catch (e) {
+      print('Disconnect error: $e');
     }
+
+    if (!mounted) return;
+    setState(() {
+      _connection = null;
+      isConnected = false;
+      connectionStatus = "Disconnected";
+    });
   }
-  
+
   void _processIMUData(Map<String, double> data) {
+    if (!mounted) return;
     setState(() {
       gyroX = data['gyroX']!;
       gyroY = data['gyroY']!;
@@ -247,16 +196,16 @@ class _Member3PageState extends State<Member3Page> {
       accelX = data['accelX']!;
       accelY = data['accelY']!;
       accelZ = data['accelZ']!;
-      
+
       // Add to history
       gyroZHistory.add(gyroZ.abs());
       if (gyroZHistory.length > maxHistoryLength) {
         gyroZHistory.removeAt(0);
       }
-      
+
       // Detect turn severity
       double turnRate = gyroZ.abs();
-      
+
       if (turnRate > riskyTurnThreshold) {
         currentTurnStatus = "RISKY TURN!";
         statusColor = Colors.red;
@@ -271,7 +220,7 @@ class _Member3PageState extends State<Member3Page> {
       }
     });
   }
-  
+
   @override
   Widget build(BuildContext context) {
     return Scaffold(
@@ -280,7 +229,9 @@ class _Member3PageState extends State<Member3Page> {
         backgroundColor: Colors.blue[700],
         actions: [
           IconButton(
-            icon: Icon(isConnected ? Icons.bluetooth_connected : Icons.bluetooth),
+            icon: Icon(
+              isConnected ? Icons.bluetooth_connected : Icons.bluetooth,
+            ),
             onPressed: isConnected ? _disconnect : _scanAndConnect,
             tooltip: isConnected ? 'Disconnect' : 'Connect',
           ),
@@ -294,27 +245,27 @@ class _Member3PageState extends State<Member3Page> {
             // Connection Status Card
             _buildConnectionCard(),
             const SizedBox(height: 16),
-            
+
             // Status Card
             _buildStatusCard(),
             const SizedBox(height: 16),
-            
+
             // Statistics
             _buildStatisticsRow(),
             const SizedBox(height: 16),
-            
+
             // Live Gyroscope Data
             _buildGyroscopeCard(),
             const SizedBox(height: 16),
-            
+
             // Accelerometer Data
             _buildAccelerometerCard(),
             const SizedBox(height: 16),
-            
+
             // Turn Rate Graph
             _buildTurnRateGraph(),
             const SizedBox(height: 16),
-            
+
             // Reset Button
             ElevatedButton.icon(
               onPressed: _resetCounters,
@@ -329,7 +280,7 @@ class _Member3PageState extends State<Member3Page> {
       ),
     );
   }
-  
+
   Widget _buildConnectionCard() {
     return Card(
       color: isConnected ? Colors.green[50] : Colors.grey[100],
@@ -341,33 +292,45 @@ class _Member3PageState extends State<Member3Page> {
             Row(
               mainAxisAlignment: MainAxisAlignment.spaceBetween,
               children: [
-                Row(
-                  children: [
-                    Icon(
-                      isConnected ? Icons.bluetooth_connected : Icons.bluetooth_disabled,
-                      color: isConnected ? Colors.green : Colors.grey,
-                      size: 28,
-                    ),
-                    const SizedBox(width: 12),
-                    Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        const Text(
-                          'ESP32 Connection',
-                          style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold),
+                Flexible(
+                  child: Row(
+                    children: [
+                      Icon(
+                        isConnected
+                            ? Icons.bluetooth_connected
+                            : Icons.bluetooth_disabled,
+                        color: isConnected ? Colors.green : Colors.grey,
+                        size: 28,
+                      ),
+                      const SizedBox(width: 12),
+                      Flexible(
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            const Text(
+                              'ESP32 Connection',
+                              style: TextStyle(
+                                fontSize: 16,
+                                fontWeight: FontWeight.bold,
+                              ),
+                            ),
+                            Text(
+                              connectionStatus,
+                              style: TextStyle(
+                                fontSize: 14,
+                                color: isConnected
+                                    ? Colors.green
+                                    : Colors.grey[700],
+                              ),
+                              overflow: TextOverflow.ellipsis,
+                            ),
+                          ],
                         ),
-                        Text(
-                          connectionStatus,
-                          style: TextStyle(
-                            fontSize: 14,
-                            color: isConnected ? Colors.green : Colors.grey[700],
-                          ),
-                        ),
-                      ],
-                    ),
-                  ],
+                      ),
+                    ],
+                  ),
                 ),
-                if (!isConnected && !isScanning)
+                if (!isConnected && !isConnecting)
                   ElevatedButton.icon(
                     onPressed: _scanAndConnect,
                     icon: const Icon(Icons.search, size: 18),
@@ -377,7 +340,7 @@ class _Member3PageState extends State<Member3Page> {
                       foregroundColor: Colors.white,
                     ),
                   ),
-                if (isScanning)
+                if (isConnecting)
                   const SizedBox(
                     width: 20,
                     height: 20,
@@ -385,12 +348,13 @@ class _Member3PageState extends State<Member3Page> {
                   ),
               ],
             ),
-            if (!isConnected && !isScanning)
+            if (!isConnected && !isConnecting)
               Padding(
                 padding: const EdgeInsets.only(top: 12),
                 child: Text(
-                  'Device name: $targetDeviceName',
+                  'Device name: $targetDeviceName\n(Pair in Bluetooth settings first)',
                   style: TextStyle(fontSize: 12, color: Colors.grey[600]),
+                  textAlign: TextAlign.center,
                 ),
               ),
           ],
@@ -398,7 +362,7 @@ class _Member3PageState extends State<Member3Page> {
       ),
     );
   }
-  
+
   Widget _buildStatusCard() {
     return Card(
       color: statusColor.withOpacity(0.2),
@@ -407,11 +371,7 @@ class _Member3PageState extends State<Member3Page> {
         padding: const EdgeInsets.all(20),
         child: Column(
           children: [
-            Icon(
-              _getStatusIcon(),
-              size: 48,
-              color: statusColor,
-            ),
+            Icon(_getStatusIcon(), size: 48, color: statusColor),
             const SizedBox(height: 12),
             Text(
               currentTurnStatus,
@@ -431,13 +391,13 @@ class _Member3PageState extends State<Member3Page> {
       ),
     );
   }
-  
+
   IconData _getStatusIcon() {
     if (currentTurnStatus == "RISKY TURN!") return Icons.warning_amber;
     if (currentTurnStatus == "Sharp Turn") return Icons.turn_sharp_right;
     return Icons.check_circle;
   }
-  
+
   Widget _buildStatisticsRow() {
     return Row(
       children: [
@@ -461,8 +421,13 @@ class _Member3PageState extends State<Member3Page> {
       ],
     );
   }
-  
-  Widget _buildStatCard(String label, String value, IconData icon, Color color) {
+
+  Widget _buildStatCard(
+    String label,
+    String value,
+    IconData icon,
+    Color color,
+  ) {
     return Card(
       elevation: 3,
       child: Padding(
@@ -489,7 +454,7 @@ class _Member3PageState extends State<Member3Page> {
       ),
     );
   }
-  
+
   Widget _buildGyroscopeCard() {
     return Card(
       elevation: 3,
@@ -511,7 +476,7 @@ class _Member3PageState extends State<Member3Page> {
       ),
     );
   }
-  
+
   Widget _buildAccelerometerCard() {
     return Card(
       elevation: 3,
@@ -533,7 +498,7 @@ class _Member3PageState extends State<Member3Page> {
       ),
     );
   }
-  
+
   Widget _buildDataRow(String label, double value, Color color) {
     return Padding(
       padding: const EdgeInsets.symmetric(vertical: 4),
@@ -580,7 +545,7 @@ class _Member3PageState extends State<Member3Page> {
       ),
     );
   }
-  
+
   Widget _buildTurnRateGraph() {
     return Card(
       elevation: 3,
@@ -621,21 +586,17 @@ class _Member3PageState extends State<Member3Page> {
       ),
     );
   }
-  
+
   Widget _buildLegend(String label, Color color) {
     return Row(
       children: [
-        Container(
-          width: 16,
-          height: 3,
-          color: color,
-        ),
+        Container(width: 16, height: 3, color: color),
         const SizedBox(width: 4),
         Text(label, style: const TextStyle(fontSize: 12)),
       ],
     );
   }
-  
+
   void _resetCounters() {
     setState(() {
       sharpTurnCount = 0;
@@ -650,56 +611,56 @@ class GraphPainter extends CustomPainter {
   final List<double> data;
   final double sharpThreshold;
   final double riskyThreshold;
-  
+
   GraphPainter({
     required this.data,
     required this.sharpThreshold,
     required this.riskyThreshold,
   });
-  
+
   @override
   void paint(Canvas canvas, Size size) {
     if (data.isEmpty) return;
-    
+
     // Draw threshold lines
     final sharpPaint = Paint()
       ..color = Colors.orange.withOpacity(0.3)
       ..strokeWidth = 2
       ..style = PaintingStyle.stroke;
-    
+
     final riskyPaint = Paint()
       ..color = Colors.red.withOpacity(0.3)
       ..strokeWidth = 2
       ..style = PaintingStyle.stroke;
-    
+
     double sharpY = size.height - (sharpThreshold / 200 * size.height);
     double riskyY = size.height - (riskyThreshold / 200 * size.height);
-    
+
     canvas.drawLine(Offset(0, sharpY), Offset(size.width, sharpY), sharpPaint);
     canvas.drawLine(Offset(0, riskyY), Offset(size.width, riskyY), riskyPaint);
-    
+
     // Draw data line
     final paint = Paint()
       ..color = Colors.blue
       ..strokeWidth = 2
       ..style = PaintingStyle.stroke;
-    
+
     final path = Path();
-    
+
     for (int i = 0; i < data.length; i++) {
       double x = (i / (data.length - 1)) * size.width;
       double y = size.height - (data[i].clamp(0, 200) / 200 * size.height);
-      
+
       if (i == 0) {
         path.moveTo(x, y);
       } else {
         path.lineTo(x, y);
       }
     }
-    
+
     canvas.drawPath(path, paint);
   }
-  
+
   @override
   bool shouldRepaint(GraphPainter oldDelegate) => true;
 }
