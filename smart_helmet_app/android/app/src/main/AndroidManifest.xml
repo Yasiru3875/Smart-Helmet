@@ -14,12 +14,18 @@
 
     <!-- Required for device discovery on older Android -->
     <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION" />
+    <uses-permission android:name="android.permission.INTERNET"/>
+
 
     <!-- ========================================================== -->
     <application
         android:label="smart_helmet_app"
         android:name="${applicationName}"
         android:icon="@mipmap/ic_launcher">
+         <!-- ✅ GOOGLE MAPS API KEY -->
+        <meta-data
+            android:name="com.google.android.geo.API_KEY"
+            android:value="AIzaSyBbZVI_sO637CROKwc3hjMOB4ZmsL12ikw"/>
         <activity
             android:name=".MainActivity"
             android:exported="true"

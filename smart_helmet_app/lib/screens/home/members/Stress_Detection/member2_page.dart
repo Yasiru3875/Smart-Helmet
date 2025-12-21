@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:tflite_flutter/tflite_flutter.dart';
+import 'dart:math' as math;
 import 'package:provider/provider.dart';
 
 import 'thinkgear.dart';
@@ -14,21 +15,39 @@ class Member2Page extends StatefulWidget {
 }
 
 class _Member2PageState extends State<Member2Page> {
-  static const String deviceName = "HR-S0C1913"; // EEG device
+  static const String deviceName = "HR-S0C1913";
 
   String status = "Waiting...";
   String errorMessage = "";
 
   Interpreter? interpreter;
 
-  // Stress detection state
-  double stressScore = 0.0; // 0.0 to 1.0
+  // Current values from model and bands
+  double stressScore = 0.0;
   double relaxedScore = 0.0;
-  String currentMood = "Neutral";
-  String moodEmoji = "😐";
+  String currentMood = "No Signal";
+  String moodEmoji = "📡";
 
-  // For stable mood display (only change if confidence > threshold)
-  static const double moodChangeThreshold = 0.7;
+  // Signal quality
+  int poorSignalLevel = 200;
+
+  // Additional parsed metrics
+  int attention = 0;
+  int meditation = 0;
+  List<double> powerBands = List.filled(
+    8,
+    0.0,
+  ); // [delta, theta, lowA, highA, lowB, highB, lowG, midG]
+
+  // For stable mood
+  String _previousMood = "No Signal";
+  static const double moodThresholdHigh = 0.75;
+  static const double moodThresholdLow = 0.60;
+
+  // For persistent stress detection (for safety alerts)
+  Timer? _stressTimer;
+  bool showRestAlert = false;
+  static const Duration stressPersistenceThreshold = Duration(seconds: 30);
 
   final ThinkGearParser tg = ThinkGearParser();
   StreamSubscription? _dataSubscription;
@@ -48,20 +67,48 @@ class _Member2PageState extends State<Member2Page> {
     await _loadModel();
 
     tg.onRaw = (raw) {
-      _processRawEEG(raw);
+      if (poorSignalLevel <= 50) {
+        _processRawEEG(raw);
+      }
     };
 
     tg.onPoorSignal = (signalQuality) {
-      if (mounted) {
+      if (!mounted) return;
+      setState(() {
+        poorSignalLevel = signalQuality;
+
+        if (signalQuality > 100) {
+          errorMessage = "No contact – place headset properly on forehead";
+          _resetToNoSignal();
+        } else if (signalQuality > 50) {
+          errorMessage = "Weak signal – adjust headset for better contact";
+          _resetToNoSignal();
+        } else {
+          errorMessage = "";
+        }
+      });
+    };
+
+    tg.onAttention = (att) {
+      if (mounted && poorSignalLevel <= 50) {
+        setState(() => attention = att);
+        _updateStressAndMood();
+      }
+    };
+
+    tg.onMeditation = (med) {
+      if (mounted && poorSignalLevel <= 50) {
+        setState(() => meditation = med);
+        _updateStressAndMood();
+      }
+    };
+
+    tg.onPowerBands = (bands) {
+      if (mounted && poorSignalLevel <= 50) {
         setState(() {
-          if (signalQuality > 100) {
-            errorMessage = "Poor headset contact – adjust position";
-          } else if (signalQuality > 50) {
-            errorMessage = "Weak signal – ensure good skin contact";
-          } else {
-            errorMessage = "";
-          }
+          powerBands = bands.map((e) => e.toDouble()).toList();
         });
+        _updateStressAndMood();
       }
     };
 
@@ -69,6 +116,21 @@ class _Member2PageState extends State<Member2Page> {
       _subscribeToData();
       setState(() => status = "Connected");
     }
+  }
+
+  void _resetToNoSignal() {
+    setState(() {
+      currentMood = "No Signal";
+      moodEmoji = "📡";
+      stressScore = 0.0;
+      relaxedScore = 0.0;
+      attention = 0;
+      meditation = 0;
+      powerBands = List.filled(8, 0.0);
+      showRestAlert = false;
+    });
+    modelWindow.clear();
+    _stressTimer?.cancel();
   }
 
   void _subscribeToData() {
@@ -96,57 +158,118 @@ class _Member2PageState extends State<Member2Page> {
   }
 
   void _runModel(List<double> inputWindow) {
-    if (interpreter == null || !mounted) return;
+    if (interpreter == null || !mounted || poorSignalLevel > 50) return;
 
     try {
-      final input = [inputWindow];
-      final output = List.generate(2, (_) => List.filled(1, 0.0));
+      // Correct input shape: [1, 1, 32]
+      var input = [inputWindow]; // → [1, 32]
+      var shapedInput = [input]; // → [1, 1, 32]
 
-      interpreter!.run(input, output);
+      // Output: [[relax_logit, stress_logit]]
+      var output = List.generate(1, (_) => List.filled(2, 0.0));
 
-      final newStress = output[0][0];
-      final newRelaxed = output[1][0];
+      interpreter!.run(shapedInput, output);
+
+      final relaxLogit = output[0][0];
+      final stressLogit = output[0][1];
+
+      // Softmax to get probabilities
+      final expRelax = math.exp(relaxLogit);
+      final expStress = math.exp(stressLogit);
+      final sum = expRelax + expStress;
+
+      final newStress = expStress / sum;
+      final newRelaxed = expRelax / sum;
 
       setState(() {
         stressScore = newStress;
         relaxedScore = newRelaxed;
-
-        // Only update mood if one class dominates clearly
-        if (newStress > moodChangeThreshold) {
-          currentMood = "Stressed";
-          moodEmoji = "😰";
-        } else if (newRelaxed > moodChangeThreshold) {
-          currentMood = "Relaxed";
-          moodEmoji = "🧘‍♂️";
-        } else {
-          currentMood = "Neutral";
-          moodEmoji = "😐";
-        }
       });
+
+      _updateStressAndMood();
     } catch (e) {
-      debugPrint("Inference error: $e");
+      debugPrint("TFLite inference error: $e");
     }
   }
 
-  // Feed raw EEG values into model window
   void _processRawEEG(int raw) {
-    final normalized = raw / 2048.0; // Normalize to ~[-1, 1]
-
+    final normalized = raw / 2048.0;
     modelWindow.add(normalized);
-    if (modelWindow.length == modelWindowSize) {
+
+    if (modelWindow.length >= modelWindowSize) {
       _runModel(List.from(modelWindow));
       modelWindow.clear();
     }
   }
 
-  @override
-  void didChangeDependencies() {
-    super.didChangeDependencies();
-    // Re-subscribe if connection status changes
-    final btManager = context.watch<BluetoothManager>();
-    if (btManager.isConnected(deviceName) && _dataSubscription == null) {
-      _subscribeToData();
-      setState(() => status = "Connected");
+  /// Compute hybrid stress score using model, meditation, and band ratios for accuracy
+  void _updateStressAndMood() {
+    if (poorSignalLevel > 50 || powerBands.every((e) => e == 0)) return;
+
+    // Improved band-based stress with better normalization
+    double alpha = powerBands[2] + powerBands[3] + 1e-6; // low + high alpha
+    double beta = powerBands[4] + powerBands[5];
+    double gamma = powerBands[6] + powerBands[7];
+
+    double rawRatio = (beta + gamma) / alpha;
+
+    // Use logarithmic scaling or soft clamp for better range (typical ratios 0.1 to 20+)
+    double bandStress =
+        rawRatio / (rawRatio + 2.0); // Sigmoid-like: approaches 0-1 naturally
+
+    bandStress =
+        bandStress.clamp(0.0, 5.0) /
+        5.0; // Normalize to 0-1 based on typical ranges
+
+    // Meditation-based stress (inverted, as low meditation = high stress)
+    double medStress = 1.0 - (meditation / 100.0).clamp(0.0, 1.0);
+
+    // Hybrid stress: average model, bands, and meditation for better accuracy
+    double hybridStress = (stressScore + bandStress + medStress) / 3.0;
+    double hybridRelaxed = 1.0 - hybridStress;
+
+    setState(() {
+      stressScore = hybridStress;
+      relaxedScore = hybridRelaxed;
+    });
+
+    // Update mood with hysteresis
+    String candidateMood;
+    String candidateEmoji;
+
+    if (hybridStress > moodThresholdHigh ||
+        (_previousMood == "Stressed" && hybridStress > moodThresholdLow)) {
+      candidateMood = "Stressed";
+      candidateEmoji = "😰";
+    } else if (hybridRelaxed > moodThresholdHigh ||
+        (_previousMood == "Relaxed" && hybridRelaxed > moodThresholdLow)) {
+      candidateMood = "Relaxed";
+      candidateEmoji = "🧘‍♂️";
+    } else {
+      candidateMood = "Neutral";
+      candidateEmoji = "😐";
+    }
+
+    if (candidateMood != currentMood) {
+      setState(() {
+        currentMood = candidateMood;
+        moodEmoji = candidateEmoji;
+        _previousMood = candidateMood;
+      });
+    }
+
+    // Safety alert for persistent stress (for riders)
+    if (hybridStress > 0.7) {
+      if (_stressTimer == null || !_stressTimer!.isActive) {
+        _stressTimer = Timer(stressPersistenceThreshold, () {
+          if (mounted) {
+            setState(() => showRestAlert = true);
+          }
+        });
+      }
+    } else {
+      _stressTimer?.cancel();
+      setState(() => showRestAlert = false);
     }
   }
 
@@ -154,10 +277,9 @@ class _Member2PageState extends State<Member2Page> {
     if (mounted) {
       setState(() {
         status = "Disconnected";
-        currentMood = "Neutral";
-        moodEmoji = "😐";
-        stressScore = 0.0;
-        relaxedScore = 0.0;
+        _resetToNoSignal();
+        _previousMood = "No Signal";
+        poorSignalLevel = 200;
       });
     }
   }
@@ -186,9 +308,9 @@ class _Member2PageState extends State<Member2Page> {
 
     setState(() {
       status = "Disconnected";
-      currentMood = "Neutral";
-      moodEmoji = "😐";
-      stressScore = 0.0;
+      _resetToNoSignal();
+      _previousMood = "No Signal";
+      poorSignalLevel = 200;
       modelWindow.clear();
     });
   }
@@ -196,11 +318,13 @@ class _Member2PageState extends State<Member2Page> {
   @override
   void dispose() {
     _dataSubscription?.cancel();
+    _stressTimer?.cancel();
     interpreter?.close();
     super.dispose();
   }
 
   Color _getStressColor() {
+    if (poorSignalLevel > 50) return Colors.grey;
     if (stressScore > 0.7) return Colors.red;
     if (stressScore > 0.4) return Colors.orange;
     return Colors.green;
@@ -210,6 +334,8 @@ class _Member2PageState extends State<Member2Page> {
   Widget build(BuildContext context) {
     final btManager = context.watch<BluetoothManager>();
     final isConnected = btManager.isConnected(deviceName);
+
+    final bool hasGoodSignal = poorSignalLevel <= 50;
 
     return Scaffold(
       appBar: AppBar(
@@ -283,33 +409,36 @@ class _Member2PageState extends State<Member2Page> {
                         ),
                       ],
                     ),
-                    if (errorMessage.isNotEmpty)
-                      Padding(
-                        padding: const EdgeInsets.only(top: 12),
-                        child: Container(
-                          padding: const EdgeInsets.all(12),
-                          decoration: BoxDecoration(
-                            color: Colors.orange.shade50,
-                            borderRadius: BorderRadius.circular(12),
-                            border: Border.all(color: Colors.orange.shade300),
-                          ),
-                          child: Row(
-                            children: [
-                              const Icon(
-                                Icons.warning_amber,
-                                color: Colors.orange,
-                              ),
-                              const SizedBox(width: 10),
-                              Expanded(
-                                child: Text(
-                                  errorMessage,
-                                  style: const TextStyle(color: Colors.orange),
+                    if (errorMessage.isNotEmpty) ...[
+                      const SizedBox(height: 12),
+                      Container(
+                        padding: const EdgeInsets.all(14),
+                        decoration: BoxDecoration(
+                          color: Colors.orange.shade50,
+                          borderRadius: BorderRadius.circular(12),
+                          border: Border.all(color: Colors.orange.shade300),
+                        ),
+                        child: Row(
+                          children: [
+                            const Icon(
+                              Icons.warning_amber,
+                              color: Colors.orange,
+                            ),
+                            const SizedBox(width: 10),
+                            Expanded(
+                              child: Text(
+                                errorMessage,
+                                style: TextStyle(
+                                  color: Colors.orange.shade800,
+                                  fontSize: 14,
                                 ),
+                                textAlign: TextAlign.center,
                               ),
-                            ],
-                          ),
+                            ),
+                          ],
                         ),
                       ),
+                    ],
                   ],
                 ),
               ),
@@ -317,7 +446,7 @@ class _Member2PageState extends State<Member2Page> {
 
             const SizedBox(height: 30),
 
-            // Current Mood Display
+            // Mood Display
             Card(
               elevation: 10,
               shape: RoundedRectangleBorder(
@@ -332,7 +461,7 @@ class _Member2PageState extends State<Member2Page> {
                   borderRadius: BorderRadius.circular(24),
                   gradient: LinearGradient(
                     colors: [
-                      _getStressColor().withOpacity(0.2),
+                      _getStressColor().withOpacity(0.25),
                       _getStressColor().withOpacity(0.05),
                     ],
                     begin: Alignment.topLeft,
@@ -341,22 +470,27 @@ class _Member2PageState extends State<Member2Page> {
                 ),
                 child: Column(
                   children: [
-                    Text(moodEmoji, style: const TextStyle(fontSize: 80)),
+                    Text(moodEmoji, style: const TextStyle(fontSize: 90)),
                     const SizedBox(height: 20),
                     Text(
                       currentMood,
                       style: TextStyle(
-                        fontSize: 32,
+                        fontSize: 34,
                         fontWeight: FontWeight.w900,
                         color: _getStressColor(),
-                        letterSpacing: 1.1,
+                        letterSpacing: 1.2,
                       ),
                     ),
-                    const SizedBox(height: 12),
+                    const SizedBox(height: 16),
                     Text(
-                      _getMoodMessage(),
+                      hasGoodSignal
+                          ? _getMoodMessage()
+                          : "Waiting for stable brain signal...",
                       textAlign: TextAlign.center,
-                      style: const TextStyle(fontSize: 16, color: Colors.black),
+                      style: const TextStyle(
+                        fontSize: 16,
+                        color: Colors.black87,
+                      ),
                     ),
                   ],
                 ),
@@ -365,7 +499,7 @@ class _Member2PageState extends State<Member2Page> {
 
             const SizedBox(height: 30),
 
-            // Stress Level Ring
+            // Stress Level
             Card(
               elevation: 6,
               shape: RoundedRectangleBorder(
@@ -375,12 +509,15 @@ class _Member2PageState extends State<Member2Page> {
                 padding: const EdgeInsets.all(24),
                 child: Column(
                   children: [
-                    const Text(
-                      "Current Stress Level",
-                      style: TextStyle(
+                    Text(
+                      hasGoodSignal
+                          ? "Current Stress Level"
+                          : "Signal Quality Required",
+                      style: const TextStyle(
                         fontSize: 18,
                         fontWeight: FontWeight.bold,
                       ),
+                      textAlign: TextAlign.center,
                     ),
                     const SizedBox(height: 20),
                     Stack(
@@ -390,7 +527,7 @@ class _Member2PageState extends State<Member2Page> {
                           width: 180,
                           height: 180,
                           child: CircularProgressIndicator(
-                            value: stressScore,
+                            value: hasGoodSignal ? stressScore : 0.0,
                             strokeWidth: 16,
                             backgroundColor: Colors.grey.shade300,
                             valueColor: AlwaysStoppedAnimation(
@@ -401,18 +538,22 @@ class _Member2PageState extends State<Member2Page> {
                         Column(
                           children: [
                             Text(
-                              "${(stressScore * 100).toStringAsFixed(0)}%",
+                              hasGoodSignal
+                                  ? "${(stressScore * 100).toStringAsFixed(0)}%"
+                                  : "—",
                               style: TextStyle(
                                 fontSize: 42,
                                 fontWeight: FontWeight.bold,
                                 color: _getStressColor(),
                               ),
                             ),
-                            const Text(
-                              "Stress",
+                            Text(
+                              hasGoodSignal ? "Stress" : "No Signal",
                               style: TextStyle(
                                 fontSize: 16,
-                                color: Colors.black54,
+                                color: hasGoodSignal
+                                    ? Colors.black54
+                                    : Colors.grey,
                               ),
                             ),
                           ],
@@ -424,6 +565,36 @@ class _Member2PageState extends State<Member2Page> {
               ),
             ),
 
+            if (showRestAlert) ...[
+              const SizedBox(height: 20),
+              Card(
+                elevation: 8,
+                color: Colors.red.shade50,
+                shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(16),
+                ),
+                child: Padding(
+                  padding: const EdgeInsets.all(16),
+                  child: Row(
+                    children: [
+                      Icon(Icons.warning, color: Colors.red, size: 32),
+                      const SizedBox(width: 12),
+                      const Expanded(
+                        child: Text(
+                          "High stress detected for too long!\nFor safety, pull over and rest before continuing your ride.",
+                          style: TextStyle(
+                            color: Colors.red,
+                            fontSize: 16,
+                            fontWeight: FontWeight.bold,
+                          ),
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              ),
+            ],
+
             const SizedBox(height: 40),
           ],
         ),
@@ -434,11 +605,13 @@ class _Member2PageState extends State<Member2Page> {
   String _getMoodMessage() {
     switch (currentMood) {
       case "Stressed":
-        return "High mental load detected.\nTake a break, breathe deeply, or try meditation.";
+        return "High mental load detected.\nTake a deep breath, step away, or try a quick meditation.";
       case "Relaxed":
-        return "You're in a calm and focused state.\nGreat for productivity or recovery.";
+        return "You're in a calm and focused state.\nPerfect for learning, creativity, or rest.";
+      case "Neutral":
+        return "Your mind is balanced.\nNormal cognitive activity detected.";
       default:
-        return "Monitoring your brain activity...\nAdjust headset for better signal.";
+        return "Establishing connection with brain signals...";
     }
   }
 }
