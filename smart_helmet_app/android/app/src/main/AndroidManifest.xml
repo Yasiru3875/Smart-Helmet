@@ -1,4 +1,7 @@
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
+
+<!-- Add these permissions before <application> -->
+    <uses-permission android:name="android.permission.ACCESS_COARSE_LOCATION" />
  <!-- ================= BLUETOOTH PERMISSIONS ================= -->
 
     <!-- Android 12+ -->
@@ -18,6 +21,7 @@
 
 
     <!-- ========================================================== -->
+
     <application
         android:label="smart_helmet_app"
         android:name="${applicationName}"
