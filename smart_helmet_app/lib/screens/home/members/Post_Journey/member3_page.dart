@@ -679,7 +679,9 @@ import 'package:smart_helmet_app/providers/journey_provider.dart';
 import 'package:smart_helmet_app/services/journey_service.dart';
 
 class Member3Page extends StatefulWidget {
-  const Member3Page({super.key});
+  final JourneyData? completedJourney; // Optional: passed when ride just ended
+  
+  const Member3Page({super.key, this.completedJourney});
 
   @override
   State<Member3Page> createState() => _Member3PageState();
@@ -694,6 +696,10 @@ class _Member3PageState extends State<Member3Page> with SingleTickerProviderStat
   List<JourneyData> _journeyHistory = [];
   JourneyData? _selectedJourney;
   bool _isLoadingHistory = false;
+  
+  // Show ride summary view
+  bool _showRideSummary = false;
+  JourneyData? _completedRide;
   
   // IMU Data from MPU6050 (Live Monitoring)
   double gyroX = 0.0;
@@ -731,6 +737,12 @@ class _Member3PageState extends State<Member3Page> with SingleTickerProviderStat
     _tabController = TabController(length: 2, vsync: this);
     _requestPermissions();
     _loadJourneyHistory();
+    
+    // Check if a completed journey was passed (ride just ended)
+    if (widget.completedJourney != null) {
+      _showRideSummary = true;
+      _completedRide = widget.completedJourney;
+    }
   }
 
   @override
@@ -950,11 +962,305 @@ class _Member3PageState extends State<Member3Page> with SingleTickerProviderStat
             ),
         ],
       ),
-      body: TabBarView(
-        controller: _tabController,
+      body: _showRideSummary && _completedRide != null
+          ? _buildRideSummaryView(_completedRide!)
+          : TabBarView(
+              controller: _tabController,
+              children: [
+                _buildJourneyHistoryTab(),
+                _buildLiveMonitoringTab(),
+              ],
+            ),
+    );
+  }
+
+  // Ride Summary View - shown after ride ends
+  Widget _buildRideSummaryView(JourneyData journey) {
+    final duration = journey.endTime != null
+        ? journey.endTime!.difference(journey.startTime)
+        : Duration.zero;
+    
+    final totalTurns = journey.sharpTurns + journey.riskyTurns;
+    final riskLevel = journey.riskyTurns > 5 || totalTurns > 15
+        ? 'High Risk'
+        : journey.riskyTurns > 2 || totalTurns > 8
+            ? 'Moderate'
+            : 'Low Risk';
+    final riskColor = journey.riskyTurns > 5 || totalTurns > 15
+        ? Colors.red
+        : journey.riskyTurns > 2 || totalTurns > 8
+            ? Colors.orange
+            : Colors.green;
+
+    return SingleChildScrollView(
+      padding: const EdgeInsets.all(16),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
-          _buildJourneyHistoryTab(),
-          _buildLiveMonitoringTab(),
+          // Success Header
+          Container(
+            padding: const EdgeInsets.all(24),
+            decoration: BoxDecoration(
+              gradient: LinearGradient(
+                colors: [Colors.green[400]!, Colors.green[600]!],
+                begin: Alignment.topLeft,
+                end: Alignment.bottomRight,
+              ),
+              borderRadius: BorderRadius.circular(16),
+            ),
+            child: Column(
+              children: [
+                const Icon(Icons.check_circle, size: 64, color: Colors.white),
+                const SizedBox(height: 12),
+                const Text(
+                  'Ride Completed!',
+                  style: TextStyle(
+                    fontSize: 24,
+                    fontWeight: FontWeight.bold,
+                    color: Colors.white,
+                  ),
+                ),
+                const SizedBox(height: 8),
+                Text(
+                  DateFormat('EEEE, MMM dd, yyyy • HH:mm').format(journey.startTime),
+                  style: const TextStyle(fontSize: 14, color: Colors.white70),
+                ),
+              ],
+            ),
+          ),
+          const SizedBox(height: 20),
+
+          // Route Info Card
+          Card(
+            elevation: 4,
+            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+            child: Padding(
+              padding: const EdgeInsets.all(16),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Row(
+                    children: [
+                      Icon(Icons.route, color: Colors.blue[700], size: 28),
+                      const SizedBox(width: 12),
+                      const Text(
+                        'Route',
+                        style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
+                      ),
+                    ],
+                  ),
+                  const Divider(height: 24),
+                  _buildRouteRow(Icons.trip_origin, 'Start', journey.startLocation ?? 'Unknown', Colors.green),
+                  const SizedBox(height: 12),
+                  _buildRouteRow(Icons.place, 'Destination', journey.destination ?? 'Unknown', Colors.red),
+                ],
+              ),
+            ),
+          ),
+          const SizedBox(height: 16),
+
+          // Stats Grid
+          Row(
+            children: [
+              Expanded(child: _buildSummaryStatCard('Duration', '${duration.inMinutes} min', Icons.timer, Colors.blue)),
+              const SizedBox(width: 12),
+              Expanded(child: _buildSummaryStatCard('Distance', '${journey.totalDistance.toStringAsFixed(1)} km', Icons.straighten, Colors.purple)),
+            ],
+          ),
+          const SizedBox(height: 12),
+          Row(
+            children: [
+              Expanded(child: _buildSummaryStatCard('Avg Speed', '${journey.averageSpeed.toStringAsFixed(1)} km/h', Icons.speed, Colors.teal)),
+              const SizedBox(width: 12),
+              Expanded(child: _buildSummaryStatCard('Risk Level', riskLevel, Icons.shield, riskColor)),
+            ],
+          ),
+          const SizedBox(height: 16),
+
+          // Turn Events Card
+          Card(
+            elevation: 4,
+            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+            child: Padding(
+              padding: const EdgeInsets.all(16),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Row(
+                    children: [
+                      Icon(Icons.analytics, color: Colors.orange[700], size: 28),
+                      const SizedBox(width: 12),
+                      const Text(
+                        'Turn Analysis',
+                        style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
+                      ),
+                    ],
+                  ),
+                  const Divider(height: 24),
+                  Row(
+                    children: [
+                      Expanded(
+                        child: _buildTurnStat('Sharp Turns', journey.sharpTurns, Colors.orange),
+                      ),
+                      Container(width: 1, height: 60, color: Colors.grey[300]),
+                      Expanded(
+                        child: _buildTurnStat('Risky Turns', journey.riskyTurns, Colors.red),
+                      ),
+                    ],
+                  ),
+                  if (journey.turnEvents.isNotEmpty) ...[
+                    const Divider(height: 24),
+                    const Text(
+                      'Turn Events Timeline',
+                      style: TextStyle(fontSize: 14, fontWeight: FontWeight.w600),
+                    ),
+                    const SizedBox(height: 12),
+                    ...journey.turnEvents.take(5).map((event) => _buildTurnEventItem(event)),
+                    if (journey.turnEvents.length > 5)
+                      Padding(
+                        padding: const EdgeInsets.only(top: 8),
+                        child: Text(
+                          '+ ${journey.turnEvents.length - 5} more events',
+                          style: TextStyle(color: Colors.grey[600], fontSize: 12),
+                        ),
+                      ),
+                  ],
+                ],
+              ),
+            ),
+          ),
+          const SizedBox(height: 24),
+
+          // Action Buttons
+          Row(
+            children: [
+              Expanded(
+                child: OutlinedButton.icon(
+                  onPressed: () {
+                    setState(() {
+                      _showRideSummary = false;
+                      _completedRide = null;
+                    });
+                  },
+                  icon: const Icon(Icons.history),
+                  label: const Text('View All Journeys'),
+                  style: OutlinedButton.styleFrom(
+                    padding: const EdgeInsets.symmetric(vertical: 14),
+                  ),
+                ),
+              ),
+              const SizedBox(width: 12),
+              Expanded(
+                child: ElevatedButton.icon(
+                  onPressed: () => Navigator.of(context).pop(),
+                  icon: const Icon(Icons.home),
+                  label: const Text('Back to Home'),
+                  style: ElevatedButton.styleFrom(
+                    backgroundColor: Colors.blue[700],
+                    foregroundColor: Colors.white,
+                    padding: const EdgeInsets.symmetric(vertical: 14),
+                  ),
+                ),
+              ),
+            ],
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildRouteRow(IconData icon, String label, String value, Color color) {
+    return Row(
+      children: [
+        Icon(icon, color: color, size: 20),
+        const SizedBox(width: 12),
+        Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text(label, style: TextStyle(fontSize: 12, color: Colors.grey[600])),
+            Text(value, style: const TextStyle(fontSize: 16, fontWeight: FontWeight.w500)),
+          ],
+        ),
+      ],
+    );
+  }
+
+  Widget _buildSummaryStatCard(String label, String value, IconData icon, Color color) {
+    return Card(
+      elevation: 2,
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+      child: Padding(
+        padding: const EdgeInsets.all(16),
+        child: Column(
+          children: [
+            Icon(icon, color: color, size: 32),
+            const SizedBox(height: 8),
+            Text(
+              value,
+              style: TextStyle(
+                fontSize: 20,
+                fontWeight: FontWeight.bold,
+                color: color,
+              ),
+            ),
+            Text(
+              label,
+              style: TextStyle(fontSize: 12, color: Colors.grey[600]),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _buildTurnStat(String label, int count, Color color) {
+    return Column(
+      children: [
+        Text(
+          count.toString(),
+          style: TextStyle(
+            fontSize: 32,
+            fontWeight: FontWeight.bold,
+            color: color,
+          ),
+        ),
+        Text(
+          label,
+          style: TextStyle(fontSize: 14, color: Colors.grey[700]),
+        ),
+      ],
+    );
+  }
+
+  Widget _buildTurnEventItem(TurnEvent event) {
+    final isRisky = event.severity == 'risky';
+    return Padding(
+      padding: const EdgeInsets.symmetric(vertical: 4),
+      child: Row(
+        children: [
+          Container(
+            width: 8,
+            height: 8,
+            decoration: BoxDecoration(
+              color: isRisky ? Colors.red : Colors.orange,
+              shape: BoxShape.circle,
+            ),
+          ),
+          const SizedBox(width: 12),
+          Expanded(
+            child: Text(
+              '${isRisky ? "Risky" : "Sharp"} turn at ${DateFormat('HH:mm:ss').format(event.timestamp)}',
+              style: const TextStyle(fontSize: 13),
+            ),
+          ),
+          Text(
+            '${event.turnRate.toStringAsFixed(1)}°/s',
+            style: TextStyle(
+              fontSize: 12,
+              color: isRisky ? Colors.red : Colors.orange,
+              fontWeight: FontWeight.w600,
+            ),
+          ),
         ],
       ),
     );

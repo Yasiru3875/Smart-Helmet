@@ -7,6 +7,11 @@ import 'package:geolocator/geolocator.dart';
 import 'package:google_maps_flutter/google_maps_flutter.dart';
 import 'package:http/http.dart' as http;
 import 'dart:convert';
+import 'package:provider/provider.dart';
+import 'package:smart_helmet_app/models/journey_model.dart';
+import 'package:smart_helmet_app/providers/journey_provider.dart';
+import 'package:smart_helmet_app/services/journey_service.dart';
+import 'package:smart_helmet_app/screens/home/members/Post_Journey/member3_page.dart';
 
 const String apiKey =
     'AIzaSyBbZVI_sO637CROKwc3hjMOB4ZmsL12ikw'; // Replace with your real Google Maps API key
@@ -40,6 +45,13 @@ class _HomeDashboardState extends State<HomeDashboard> {
   double temperature = 36.8;
   int stressLevel = 32;
   bool dangerAlert = false;
+
+  // Journey tracking
+  final JourneyService _journeyService = JourneyService();
+  DateTime? _journeyStartTime;
+  double _totalDistance = 0.0;
+  Position? _lastPosition;
+  List<double> _speedReadings = [];
 
   @override
   void initState() {
@@ -176,6 +188,18 @@ class _HomeDashboardState extends State<HomeDashboard> {
       return;
     }
 
+    // Initialize journey tracking
+    final journeyProvider = Provider.of<JourneyProvider>(context, listen: false);
+    String? startLocation = _currentPosition != null 
+        ? '${_currentPosition!.latitude.toStringAsFixed(4)}, ${_currentPosition!.longitude.toStringAsFixed(4)}'
+        : null;
+    journeyProvider.startJourney(startLocation, _destinationController.text.trim());
+    
+    _journeyStartTime = DateTime.now();
+    _totalDistance = 0.0;
+    _lastPosition = _currentPosition;
+    _speedReadings = [];
+
     setState(() => _isJourneyStarted = true);
 
     _locationTimer = Timer.periodic(const Duration(seconds: 2), (_) async {
@@ -184,6 +208,20 @@ class _HomeDashboardState extends State<HomeDashboard> {
         final pos = await Geolocator.getCurrentPosition(
           desiredAccuracy: LocationAccuracy.high,
         );
+        
+        // Calculate distance traveled
+        if (_lastPosition != null) {
+          double distanceInMeters = Geolocator.distanceBetween(
+            _lastPosition!.latitude,
+            _lastPosition!.longitude,
+            pos.latitude,
+            pos.longitude,
+          );
+          _totalDistance += distanceInMeters / 1000; // Convert to km
+          _speedReadings.add(pos.speed * 3.6); // Convert m/s to km/h
+        }
+        _lastPosition = pos;
+        
         setState(() => _currentPosition = pos);
         _addCurrentLocationMarker(pos);
 
@@ -214,7 +252,47 @@ class _HomeDashboardState extends State<HomeDashboard> {
     });
   }
 
-  void _endJourney() {
+  Future<void> _endJourney() async {
+    // Get the journey provider and end the journey
+    final journeyProvider = Provider.of<JourneyProvider>(context, listen: false);
+    final completedJourney = journeyProvider.endJourney();
+    
+    JourneyData? savedJourney;
+    
+    // Save to Firebase
+    if (completedJourney != null) {
+      try {
+        // Create final journey with distance and speed data
+        savedJourney = JourneyData(
+          id: completedJourney.id,
+          startTime: completedJourney.startTime,
+          endTime: completedJourney.endTime,
+          startLocation: completedJourney.startLocation,
+          destination: completedJourney.destination,
+          sharpTurns: completedJourney.sharpTurns,
+          riskyTurns: completedJourney.riskyTurns,
+          averageSpeed: _speedReadings.isNotEmpty 
+              ? _speedReadings.reduce((a, b) => a + b) / _speedReadings.length 
+              : 0.0,
+          totalDistance: _totalDistance,
+          turnEvents: completedJourney.turnEvents,
+          sensorReadings: completedJourney.sensorReadings,
+        );
+        
+        await _journeyService.saveJourney(savedJourney);
+        
+      } catch (e) {
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(
+              content: Text('Failed to save journey: $e'),
+              backgroundColor: Colors.red,
+            ),
+          );
+        }
+      }
+    }
+    
     setState(() {
       _isJourneyStarted = false;
       _isRoutePlanned = false;
@@ -223,6 +301,21 @@ class _HomeDashboardState extends State<HomeDashboard> {
     _sensorTimer?.cancel();
     _polylines.clear();
     _markers.removeWhere((m) => m.markerId.value == 'destination');
+    
+    // Reset journey tracking variables
+    _journeyStartTime = null;
+    _totalDistance = 0.0;
+    _lastPosition = null;
+    _speedReadings = [];
+    
+    // Navigate to Member3Page with the completed journey
+    if (mounted && savedJourney != null) {
+      Navigator.of(context).push(
+        MaterialPageRoute(
+          builder: (context) => Member3Page(completedJourney: savedJourney),
+        ),
+      );
+    }
   }
 
   List<LatLng> _decodePolyline(String encoded) {
