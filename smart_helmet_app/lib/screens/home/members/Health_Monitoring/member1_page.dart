@@ -2,6 +2,7 @@ import 'dart:async';
 import 'dart:convert';
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
+import 'package:http/http.dart' as http;
 import '../../../../services/bluetooth_manager.dart';
 
 class Member1Page extends StatefulWidget {
@@ -25,6 +26,10 @@ class _Member1PageState extends State<Member1Page> {
   double bodyTemperature = 0.0;
   String riskLevel = "Unknown";
   Color riskColor = Colors.grey;
+
+  String apiUrl = "http://192.168.0.253:5000/predict";  // Replace with your Flask server IP:port/predict
+  // For Android emulator: "http://10.0.2.2:5000/predict"
+  // For physical device: Use the IP from Flask log or ngrok URL
 
   @override
   void initState() {
@@ -91,28 +96,74 @@ class _Member1PageState extends State<Member1Page> {
       final double hr = (json['hr'] as num?)?.toDouble() ?? 0.0;
       final double temp = (json['temp'] as num?)?.toDouble() ?? 0.0;
 
-      String newRisk = "Low";
-      Color newRiskColor = Colors.green;
-
-      // Simple risk assessment logic (customize as needed)
-      if (hr > 100 || temp > 38.0) {
-        newRisk = "High";
-        newRiskColor = Colors.red;
-      } else if (hr > 90 || temp > 37.5) {
-        newRisk = "Medium";
-        newRiskColor = Colors.orange;
-      }
-
       if (mounted) {
         setState(() {
           heartRate = hr;
           bodyTemperature = temp;
-          riskLevel = newRisk;
-          riskColor = newRiskColor;
         });
       }
+
+      // Call API for advanced prediction
+      _fetchRiskPrediction(hr, temp);
     } catch (e) {
       debugPrint("JSON parse error: $e | Raw: $jsonString");
+    }
+  }
+
+  Future<void> _fetchRiskPrediction(double hr, double temp) async {
+    if (hr == 0 || temp == 0) return;
+
+    try {
+      final response = await http.post(
+        Uri.parse(apiUrl),
+        headers: {'Content-Type': 'application/json'},
+        body: jsonEncode({'hr': hr, 'temp': temp}),
+      );
+
+      if (response.statusCode == 200) {
+        final data = jsonDecode(response.body);
+        String newRisk = data['risk_level'] ?? "Unknown";
+        int prob = data['risk_probability'] ?? 0;
+
+        Color newRiskColor = Colors.green;
+        if (newRisk == "High") newRiskColor = Colors.red;
+        else if (newRisk == "Medium") newRiskColor = Colors.orange;
+
+        if (mounted) {
+          setState(() {
+            riskLevel = "$newRisk ($prob%)";
+            riskColor = newRiskColor;
+          });
+        }
+      } else {
+        debugPrint("API error: ${response.statusCode}");
+        // Fallback to local logic
+        _fallbackLocalRisk(hr, temp);
+      }
+    } catch (e) {
+      debugPrint("Prediction API error: $e");
+      // Fallback to local logic
+      _fallbackLocalRisk(hr, temp);
+    }
+  }
+
+  void _fallbackLocalRisk(double hr, double temp) {
+    String newRisk = "Low";
+    Color newRiskColor = Colors.green;
+
+    if (hr > 100 || temp > 38.0) {
+      newRisk = "High";
+      newRiskColor = Colors.red;
+    } else if (hr > 90 || temp > 37.5) {
+      newRisk = "Medium";
+      newRiskColor = Colors.orange;
+    }
+
+    if (mounted) {
+      setState(() {
+        riskLevel = newRisk;
+        riskColor = newRiskColor;
+      });
     }
   }
 
@@ -440,15 +491,14 @@ class _Member1PageState extends State<Member1Page> {
   }
 
   String _getRiskMessage() {
-    switch (riskLevel) {
-      case "High":
-        return "Immediate attention recommended.\nHigh heart rate or elevated temperature detected.";
-      case "Medium":
-        return "Monitor closely.\nSlightly elevated vitals – rest and hydrate.";
-      case "Low":
-        return "Vitals appear normal.\nContinue regular monitoring.";
-      default:
-        return "Waiting for data...";
+    if (riskLevel.contains("High")) {
+      return "Immediate attention recommended.\nHigh heart rate or elevated temperature detected.";
+    } else if (riskLevel.contains("Medium")) {
+      return "Monitor closely.\nSlightly elevated vitals – rest and hydrate.";
+    } else if (riskLevel.contains("Low")) {
+      return "Vitals appear normal.\nContinue regular monitoring.";
+    } else {
+      return "Waiting for data...";
     }
   }
 }
