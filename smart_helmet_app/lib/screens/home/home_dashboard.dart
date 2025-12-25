@@ -9,7 +9,7 @@ import 'package:http/http.dart' as http;
 import 'dart:convert';
 
 const String apiKey =
-    'AIzaSyBbZVI_sO637CROKwc3hjMOB4ZmsL12ikw'; // Replace with your real Google Maps API key
+    'AIzaSyBbZVI_sO637CROKwc3hjMOB4ZmsL12ikw'; // Replace with your actual API key
 
 class HomeDashboard extends StatefulWidget {
   const HomeDashboard({super.key});
@@ -27,6 +27,8 @@ class _HomeDashboardState extends State<HomeDashboard> {
   Set<Polyline> _polylines = {};
   Set<Marker> _markers = {};
 
+  BitmapDescriptor? _motorcycleIcon;
+
   bool _isRoutePlanned = false;
   bool _isJourneyStarted = false;
 
@@ -35,24 +37,45 @@ class _HomeDashboardState extends State<HomeDashboard> {
   Timer? _sensorTimer;
   Timer? _locationTimer;
 
-  // Dummy live sensor values
+  // Dummy sensor data
   int heartRate = 78;
   double temperature = 36.8;
   int stressLevel = 32;
   bool dangerAlert = false;
 
+  // For place suggestions
+  List<dynamic> _placeSuggestions = [];
+  Timer? _debounceTimer;
+
+  // For multiple routes
+  List<Map<String, dynamic>> _routes = [];
+  int _selectedRouteIndex = 0;
+
   @override
   void initState() {
     super.initState();
+    _loadMotorcycleIcon();
     _getCurrentLocationAndSetup();
+    _destinationController.addListener(_onDestinationChanged);
+  }
+
+  Future<void> _loadMotorcycleIcon() async {
+    try {
+      _motorcycleIcon = await BitmapDescriptor.fromAssetImage(
+        const ImageConfiguration(size: Size(60, 60)),
+        'assets/icons/motorcycle.png',
+      );
+    } catch (_) {
+      _motorcycleIcon =
+          BitmapDescriptor.defaultMarkerWithHue(BitmapDescriptor.hueAzure);
+    }
+    setState(() {});
   }
 
   Future<void> _getCurrentLocationAndSetup() async {
     bool serviceEnabled = await Geolocator.isLocationServiceEnabled();
     if (!serviceEnabled) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Please enable location services')),
-      );
+      _showSnackBar('Please enable location services');
       return;
     }
 
@@ -60,6 +83,10 @@ class _HomeDashboardState extends State<HomeDashboard> {
     if (permission == LocationPermission.denied) {
       permission = await Geolocator.requestPermission();
       if (permission == LocationPermission.denied) return;
+    }
+    if (permission == LocationPermission.deniedForever) {
+      _showSnackBar('Location permissions are permanently denied');
+      return;
     }
 
     Position pos = await Geolocator.getCurrentPosition(
@@ -71,13 +98,12 @@ class _HomeDashboardState extends State<HomeDashboard> {
     });
 
     _addCurrentLocationMarker(pos);
+  }
 
-    if (_mapController != null) {
-      _mapController!.animateCamera(
-        CameraUpdate.newCameraPosition(
-          CameraPosition(target: LatLng(pos.latitude, pos.longitude), zoom: 16),
-        ),
-      );
+  void _showSnackBar(String message) {
+    if (mounted) {
+      ScaffoldMessenger.of(context)
+          .showSnackBar(SnackBar(content: Text(message)));
     }
   }
 
@@ -88,23 +114,50 @@ class _HomeDashboardState extends State<HomeDashboard> {
         Marker(
           markerId: const MarkerId('current_location'),
           position: LatLng(pos.latitude, pos.longitude),
-          icon: BitmapDescriptor.defaultMarkerWithHue(
-            BitmapDescriptor.hueAzure,
-          ), // Safe blue marker
+          icon: _isJourneyStarted
+              ? _motorcycleIcon!
+              : BitmapDescriptor.defaultMarkerWithHue(
+                  BitmapDescriptor.hueAzure),
           rotation: pos.heading ?? 0.0,
           anchor: const Offset(0.5, 0.5),
-          zIndex: 999,
+          zIndex: 1000,
         ),
       );
     });
   }
 
+  void _onDestinationChanged() {
+    _debounceTimer?.cancel();
+    _debounceTimer =
+        Timer(const Duration(milliseconds: 300), _fetchPlaceSuggestions);
+  }
+
+  Future<void> _fetchPlaceSuggestions() async {
+    final input = _destinationController.text.trim();
+    if (input.isEmpty) {
+      setState(() => _placeSuggestions = []);
+      return;
+    }
+
+    final url =
+        'https://maps.googleapis.com/maps/api/place/autocomplete/json?input=$input&key=$apiKey';
+
+    final response = await http.get(Uri.parse(url));
+    final data = jsonDecode(response.body);
+
+    if (response.statusCode == 200 && data['status'] == 'OK') {
+      setState(() {
+        _placeSuggestions = data['predictions'];
+      });
+    } else {
+      setState(() => _placeSuggestions = []);
+    }
+  }
+
   Future<void> _planRoute() async {
     if (_currentPosition == null ||
         _destinationController.text.trim().isEmpty) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Please enter a destination')),
-      );
+      _showSnackBar('Please enter a destination');
       return;
     }
 
@@ -113,73 +166,97 @@ class _HomeDashboardState extends State<HomeDashboard> {
     final destination = Uri.encodeComponent(_destinationController.text.trim());
 
     final url =
-        'https://maps.googleapis.com/maps/api/directions/json?'
-        'origin=$origin&destination=$destination&key=$apiKey';
+        'https://maps.googleapis.com/maps/api/directions/json?origin=$origin&destination=$destination&alternatives=true&key=$apiKey';
 
     final response = await http.get(Uri.parse(url));
     final data = jsonDecode(response.body);
 
     if (response.statusCode != 200 || data['status'] != 'OK') {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
-          content: Text('Could not find route. Check destination or API key.'),
-        ),
-      );
+      _showSnackBar('Route not found. Check destination or internet.');
       return;
     }
 
-    final String points = data['routes'][0]['overview_polyline']['points'];
-    _routePoints = _decodePolyline(points);
-    final LatLng destinationLatLng = _routePoints.last;
-
     setState(() {
+      _routes = List.from(data['routes']);
       _isRoutePlanned = true;
-      _polylines.clear();
-      _polylines.add(
-        Polyline(
-          polylineId: const PolylineId('route'),
-          color: Colors.blue[800]!,
-          width: 8,
-          points: _routePoints,
-        ),
-      );
-
-      _markers.add(
-        Marker(
-          markerId: const MarkerId('destination'),
-          position: destinationLatLng,
-          icon: BitmapDescriptor.defaultMarkerWithHue(BitmapDescriptor.hueRed),
-          infoWindow: InfoWindow(title: _destinationController.text.trim()),
-        ),
-      );
+      _selectedRouteIndex = 0; // Default to first (shortest) route
+      _placeSuggestions = []; // Clear suggestions
     });
 
-    final bounds = LatLngBounds(
-      southwest: LatLng(
-        min(_currentPosition!.latitude, destinationLatLng.latitude),
-        min(_currentPosition!.longitude, destinationLatLng.longitude),
-      ),
-      northeast: LatLng(
-        max(_currentPosition!.latitude, destinationLatLng.latitude),
-        max(_currentPosition!.longitude, destinationLatLng.longitude),
-      ),
-    );
+    _displayRoutes();
+  }
 
-    _mapController?.animateCamera(CameraUpdate.newLatLngBounds(bounds, 100));
+  void _displayRoutes() {
+    setState(() {
+      _polylines.clear();
+      for (int i = 0; i < _routes.length; i++) {
+        final route = _routes[i];
+        final String points = route['overview_polyline']['points'];
+        final List<LatLng> routePoints = _decodePolyline(points);
+        final Color color =
+            i == _selectedRouteIndex ? Colors.blue[700]! : Colors.grey;
+        final int width = i == _selectedRouteIndex ? 8 : 4;
+
+        _polylines.add(
+          Polyline(
+            polylineId: PolylineId('route_$i'),
+            color: color,
+            width: width,
+            jointType: JointType.round,
+            points: routePoints,
+          ),
+        );
+
+        if (i == _selectedRouteIndex) {
+          _routePoints = routePoints;
+          final LatLng destinationLatLng = routePoints.last;
+          _markers.add(
+            Marker(
+              markerId: const MarkerId('destination'),
+              position: destinationLatLng,
+              icon: BitmapDescriptor.defaultMarkerWithHue(
+                  BitmapDescriptor.hueRed),
+              infoWindow: InfoWindow(title: _destinationController.text.trim()),
+            ),
+          );
+
+          final bounds = LatLngBounds(
+            southwest: LatLng(
+              min(_currentPosition!.latitude, destinationLatLng.latitude),
+              min(_currentPosition!.longitude, destinationLatLng.longitude),
+            ),
+            northeast: LatLng(
+              max(_currentPosition!.latitude, destinationLatLng.latitude),
+              max(_currentPosition!.longitude, destinationLatLng.longitude),
+            ),
+          );
+
+          _mapController
+              ?.animateCamera(CameraUpdate.newLatLngBounds(bounds, 100));
+        }
+      }
+    });
+  }
+
+  void _selectRoute(int index) {
+    setState(() {
+      _selectedRouteIndex = index;
+      _markers.removeWhere((m) => m.markerId.value == 'destination');
+    });
+    _displayRoutes();
   }
 
   void _startJourney() {
     if (!_isRoutePlanned) {
-      ScaffoldMessenger.of(
-        context,
-      ).showSnackBar(const SnackBar(content: Text('Please set a route first')));
+      _showSnackBar(
+          'Please set a route first by searching and tapping the directions icon');
       return;
     }
 
     setState(() => _isJourneyStarted = true);
 
     _locationTimer = Timer.periodic(const Duration(seconds: 2), (_) async {
-      if (!_isJourneyStarted) return;
+      if (!_isJourneyStarted || !mounted) return;
       try {
         final pos = await Geolocator.getCurrentPosition(
           desiredAccuracy: LocationAccuracy.high,
@@ -193,17 +270,15 @@ class _HomeDashboardState extends State<HomeDashboard> {
               target: LatLng(pos.latitude, pos.longitude),
               zoom: 18.5,
               bearing: pos.heading ?? 0.0,
-              tilt: 65,
+              tilt: 60,
             ),
           ),
         );
-      } catch (e) {
-        // Ignore occasional location errors
-      }
+      } catch (_) {}
     });
 
     _sensorTimer = Timer.periodic(const Duration(seconds: 3), (_) {
-      if (!_isJourneyStarted) return;
+      if (!_isJourneyStarted || !mounted) return;
       final r = Random();
       setState(() {
         heartRate = 72 + r.nextInt(38);
@@ -257,238 +332,318 @@ class _HomeDashboardState extends State<HomeDashboard> {
 
   @override
   void dispose() {
+    _debounceTimer?.cancel();
+    _destinationController.removeListener(_onDestinationChanged);
     _locationTimer?.cancel();
     _sensorTimer?.cancel();
     _destinationController.dispose();
     super.dispose();
   }
 
+  Widget _buildSensorItem(IconData icon, String value, Color color) {
+    return Column(
+      children: [
+        Icon(icon, size: 26, color: color),
+        const SizedBox(height: 4),
+        Text(
+          value,
+          style: const TextStyle(
+            color: Colors.white,
+            fontSize: 11,
+            fontWeight: FontWeight.bold,
+          ),
+          textAlign: TextAlign.center,
+        ),
+      ],
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
+    final screenWidth = MediaQuery.of(context).size.width;
+    final buttonPadding = screenWidth < 400 ? 24.0 : 40.0; // Responsive padding
+    final buttonFontSize = screenWidth < 400 ? 16.0 : 18.0;
+
     return Scaffold(
       body: _currentPosition == null
-          ? const Center(child: CircularProgressIndicator())
-          : Row(
-              children: [
-                // Compact sensor sidebar
-                Container(
-                  width: 70,
-                  color: Colors.black87,
-                  child: Column(
-                    mainAxisAlignment: MainAxisAlignment.center,
-                    children: [
-                      Icon(
-                        Icons.favorite,
-                        size: 34,
-                        color: heartRate > 100 ? Colors.red : Colors.pinkAccent,
-                      ),
-                      Text(
-                        '$heartRate',
-                        style: const TextStyle(
-                          color: Colors.white,
-                          fontSize: 13,
-                          fontWeight: FontWeight.bold,
-                        ),
-                      ),
-                      const SizedBox(height: 32),
-                      Icon(
-                        Icons.thermostat,
-                        size: 34,
-                        color: temperature > 37.5 ? Colors.orange : Colors.cyan,
-                      ),
-                      Text(
-                        '${temperature.toStringAsFixed(1)}°',
-                        style: const TextStyle(
-                          color: Colors.white,
-                          fontSize: 13,
-                        ),
-                      ),
-                      const SizedBox(height: 32),
-                      Icon(
-                        Icons.psychology,
-                        size: 34,
-                        color: stressLevel > 65
-                            ? Colors.deepOrange
-                            : Colors.amber,
-                      ),
-                      Text(
-                        '$stressLevel%',
-                        style: const TextStyle(
-                          color: Colors.white,
-                          fontSize: 13,
-                        ),
-                      ),
-                      const SizedBox(height: 32),
-                      Icon(
-                        dangerAlert ? Icons.warning_amber : Icons.shield,
-                        size: 34,
-                        color: dangerAlert ? Colors.red : Colors.green,
-                      ),
-                    ],
+          ? const Center(
+              child: CircularProgressIndicator(
+                color: Colors.indigo,
+                strokeWidth: 3,
+              ),
+            )
+          : SafeArea(
+              child: Stack(
+                children: [
+                  // Full-screen Google Map
+                  GoogleMap(
+                    initialCameraPosition: CameraPosition(
+                      target: LatLng(_currentPosition!.latitude,
+                          _currentPosition!.longitude),
+                      zoom: 16,
+                    ),
+                    onMapCreated: (controller) {
+                      _mapController = controller;
+                    },
+                    myLocationEnabled: false,
+                    myLocationButtonEnabled: false,
+                    zoomControlsEnabled: false,
+                    compassEnabled: false,
+                    mapToolbarEnabled: false,
+                    tiltGesturesEnabled: true,
+                    rotateGesturesEnabled: true,
+                    polylines: _polylines,
+                    markers: _markers,
+                    padding: const EdgeInsets.only(
+                        top: 120, bottom: 90), // Adjusted for no overflow
                   ),
-                ),
 
-                // Map + Controls
-                Expanded(
-                  child: Stack(
-                    children: [
-                      GoogleMap(
-                        initialCameraPosition: CameraPosition(
-                          target: LatLng(
-                            _currentPosition!.latitude,
-                            _currentPosition!.longitude,
-                          ),
-                          zoom: 16,
-                        ),
-                        onMapCreated: (controller) {
-                          _mapController = controller;
-                          // Re-center after map is ready
-                          _mapController?.animateCamera(
-                            CameraUpdate.newCameraPosition(
-                              CameraPosition(
-                                target: LatLng(
-                                  _currentPosition!.latitude,
-                                  _currentPosition!.longitude,
-                                ),
-                                zoom: 16,
-                              ),
-                            ),
-                          );
-                        },
-                        myLocationEnabled: false,
-                        myLocationButtonEnabled: false,
-                        zoomControlsEnabled: false,
-                        mapToolbarEnabled: false,
-                        polylines: _polylines,
-                        markers: _markers,
-                        tiltGesturesEnabled: true,
-                        rotateGesturesEnabled: true,
+                  // Top Control Panel - Compact & Responsive
+                  Positioned(
+                    top: 0,
+                    left: 0,
+                    right: 0,
+                    child: Container(
+                      padding: EdgeInsets.only(
+                        top: MediaQuery.of(context).padding.top + 8,
+                        left: 12,
+                        right: 12,
+                        bottom: 8,
                       ),
-
-                      // Top control card
-                      Positioned(
-                        top: MediaQuery.of(context).padding.top + 10,
-                        left: 16,
-                        right: 16,
-                        child: Card(
-                          elevation: 10,
-                          shape: RoundedRectangleBorder(
+                      child: Material(
+                        elevation: 10,
+                        borderRadius: BorderRadius.circular(16),
+                        shadowColor: Colors.black45,
+                        child: Container(
+                          padding: const EdgeInsets.all(12),
+                          decoration: BoxDecoration(
+                            color: Colors.white,
                             borderRadius: BorderRadius.circular(16),
                           ),
-                          child: Padding(
-                            padding: const EdgeInsets.all(16),
-                            child: Column(
-                              children: [
-                                TextField(
-                                  controller: _destinationController,
-                                  decoration: InputDecoration(
-                                    hintText: 'Where are you going?',
-                                    prefixIcon: const Icon(Icons.search),
-                                    suffixIcon: IconButton(
-                                      icon: const Icon(Icons.directions),
-                                      onPressed: _planRoute,
+                          child: Column(
+                            mainAxisSize: MainAxisSize.min,
+                            children: [
+                              // Search + Directions Icon
+                              TextField(
+                                controller: _destinationController,
+                                textInputAction: TextInputAction.go,
+                                onSubmitted: (_) => _planRoute(),
+                                decoration: InputDecoration(
+                                  hintText: 'Search destination',
+                                  prefixIcon: const Icon(Icons.search,
+                                      color: Colors.indigo),
+                                  suffixIcon: IconButton(
+                                    icon: const Icon(Icons.directions,
+                                        color: Colors.indigo, size: 26),
+                                    onPressed: _planRoute,
+                                    tooltip: 'Plan Route',
+                                  ),
+                                  filled: true,
+                                  fillColor: Colors.grey[50],
+                                  border: OutlineInputBorder(
+                                    borderRadius: BorderRadius.circular(12),
+                                    borderSide: BorderSide.none,
+                                  ),
+                                  contentPadding: const EdgeInsets.symmetric(
+                                      horizontal: 12),
+                                ),
+                              ),
+                              if (_placeSuggestions.isNotEmpty)
+                                Container(
+                                  height: 200,
+                                  color: Colors.white,
+                                  child: ListView.builder(
+                                    itemCount: _placeSuggestions.length,
+                                    itemBuilder: (context, index) {
+                                      final suggestion =
+                                          _placeSuggestions[index];
+                                      return ListTile(
+                                        title: Text(suggestion['description']),
+                                        onTap: () {
+                                          _destinationController.text =
+                                              suggestion['description'];
+                                          _placeSuggestions = [];
+                                          _planRoute();
+                                        },
+                                      );
+                                    },
+                                  ),
+                                ),
+                              const SizedBox(height: 12),
+
+                              // Responsive START and END buttons
+                              Row(
+                                mainAxisAlignment: MainAxisAlignment.center,
+                                children: [
+                                  ElevatedButton.icon(
+                                    onPressed: _isJourneyStarted
+                                        ? null
+                                        : _startJourney,
+                                    icon: const Icon(Icons.directions_bike,
+                                        size: 26),
+                                    label: Text(
+                                      'START',
+                                      style: TextStyle(
+                                          fontSize: buttonFontSize,
+                                          fontWeight: FontWeight.bold),
                                     ),
-                                    filled: true,
-                                    fillColor: Colors.white,
-                                    border: OutlineInputBorder(
-                                      borderRadius: BorderRadius.circular(12),
+                                    style: ElevatedButton.styleFrom(
+                                      backgroundColor: Colors.green[600],
+                                      foregroundColor: Colors.white,
+                                      elevation: 8,
+                                      padding: EdgeInsets.symmetric(
+                                          horizontal: buttonPadding,
+                                          vertical: 14),
+                                      shape: RoundedRectangleBorder(
+                                          borderRadius:
+                                              BorderRadius.circular(30)),
                                     ),
                                   ),
-                                  onSubmitted: (_) => _planRoute(),
-                                ),
-                                const SizedBox(height: 16),
-                                Row(
-                                  mainAxisAlignment:
-                                      MainAxisAlignment.spaceEvenly,
-                                  children: [
-                                    ElevatedButton.icon(
-                                      onPressed: _isJourneyStarted
-                                          ? null
-                                          : _planRoute,
-                                      icon: const Icon(Icons.route),
-                                      label: const Text('SET ROUTE'),
-                                      style: ElevatedButton.styleFrom(
-                                        backgroundColor: const Color.fromARGB(
-                                          255,
-                                          0,
-                                          12,
-                                          78,
-                                        ),
-                                      ),
+                                  const SizedBox(width: 16),
+                                  ElevatedButton.icon(
+                                    onPressed:
+                                        _isJourneyStarted ? _endJourney : null,
+                                    icon: const Icon(Icons.stop, size: 22),
+                                    label: Text('END',
+                                        style: TextStyle(
+                                            fontSize: buttonFontSize)),
+                                    style: ElevatedButton.styleFrom(
+                                      backgroundColor: Colors.red[600],
+                                      foregroundColor: Colors.white,
+                                      elevation: 6,
+                                      padding: EdgeInsets.symmetric(
+                                          horizontal: buttonPadding,
+                                          vertical: 14),
+                                      shape: RoundedRectangleBorder(
+                                          borderRadius:
+                                              BorderRadius.circular(30)),
                                     ),
-                                    ElevatedButton.icon(
-                                      onPressed: _isJourneyStarted
-                                          ? null
-                                          : _startJourney,
-                                      icon: const Icon(
-                                        Icons.navigation,
-                                        size: 28,
-                                      ),
-                                      label: const Text('START'),
-                                      style: ElevatedButton.styleFrom(
-                                        backgroundColor: Colors.green[600],
+                                  ),
+                                ],
+                              ),
+                              if (_routes.isNotEmpty)
+                                SizedBox(
+                                  height: 50,
+                                  child: ListView.builder(
+                                    scrollDirection: Axis.horizontal,
+                                    itemCount: _routes.length,
+                                    itemBuilder: (context, index) {
+                                      final route = _routes[index];
+                                      final summary = route['legs'][0]
+                                              ['distance']['text'] +
+                                          ' - ' +
+                                          route['legs'][0]['duration']['text'];
+                                      return Padding(
                                         padding: const EdgeInsets.symmetric(
-                                          horizontal: 30,
-                                          vertical: 16,
+                                            horizontal: 8),
+                                        child: ChoiceChip(
+                                          label: Text(summary),
+                                          selected:
+                                              _selectedRouteIndex == index,
+                                          onSelected: (selected) {
+                                            if (selected) _selectRoute(index);
+                                          },
                                         ),
-                                      ),
-                                    ),
-                                    ElevatedButton.icon(
-                                      onPressed: _isJourneyStarted
-                                          ? _endJourney
-                                          : null,
-                                      icon: const Icon(Icons.stop),
-                                      label: const Text('END'),
-                                      style: ElevatedButton.styleFrom(
-                                        backgroundColor: Colors.red,
-                                      ),
-                                    ),
-                                  ],
+                                      );
+                                    },
+                                  ),
                                 ),
-                              ],
-                            ),
+                            ],
                           ),
                         ),
                       ),
+                    ),
+                  ),
 
-                      // Navigation active badge
-                      if (_isJourneyStarted)
-                        Positioned(
-                          top: 190,
-                          left: 20,
-                          child: Container(
-                            padding: const EdgeInsets.symmetric(
-                              horizontal: 20,
-                              vertical: 12,
-                            ),
-                            decoration: BoxDecoration(
-                              color: Colors.blue[900],
-                              borderRadius: BorderRadius.circular(30),
-                            ),
-                            child: const Row(
-                              children: [
-                                Icon(
-                                  Icons.navigation,
-                                  color: Colors.white,
-                                  size: 28,
-                                ),
-                                SizedBox(width: 10),
-                                Text(
-                                  'NAVIGATION ON',
-                                  style: TextStyle(
+                  // Navigation Active Badge
+                  if (_isJourneyStarted)
+                    Positioned(
+                      top: MediaQuery.of(context).padding.top + 140,
+                      left: 16,
+                      right: 16,
+                      child: Center(
+                        child: Container(
+                          padding: const EdgeInsets.symmetric(
+                              horizontal: 20, vertical: 12),
+                          decoration: BoxDecoration(
+                            color: Colors.blue[900],
+                            borderRadius: BorderRadius.circular(30),
+                            boxShadow: const [
+                              BoxShadow(color: Colors.black38, blurRadius: 8)
+                            ],
+                          ),
+                          child: const Row(
+                            mainAxisSize: MainAxisSize.min,
+                            children: [
+                              Icon(Icons.directions_bike,
+                                  color: Colors.white, size: 28),
+                              SizedBox(width: 10),
+                              Text(
+                                'JOURNEY ACTIVE',
+                                style: TextStyle(
                                     color: Colors.white,
                                     fontWeight: FontWeight.bold,
-                                    fontSize: 16,
-                                  ),
-                                ),
-                              ],
-                            ),
+                                    fontSize: 16),
+                              ),
+                            ],
                           ),
                         ),
-                    ],
+                      ),
+                    ),
+
+                  // Bottom Sensor Bar
+                  Positioned(
+                    bottom: 0,
+                    left: 0,
+                    right: 0,
+                    child: Container(
+                      padding: const EdgeInsets.symmetric(vertical: 10),
+                      decoration: BoxDecoration(
+                        color: Colors.black87,
+                        borderRadius: const BorderRadius.vertical(
+                            top: Radius.circular(20)),
+                        boxShadow: const [
+                          BoxShadow(
+                              color: Colors.black38,
+                              blurRadius: 8,
+                              offset: Offset(0, -2))
+                        ],
+                      ),
+                      child: SafeArea(
+                        top: false,
+                        child: Row(
+                          mainAxisAlignment: MainAxisAlignment.spaceEvenly,
+                          children: [
+                            _buildSensorItem(
+                                Icons.favorite,
+                                '$heartRate bpm',
+                                heartRate > 100
+                                    ? Colors.red
+                                    : Colors.pinkAccent),
+                            _buildSensorItem(
+                                Icons.thermostat,
+                                '${temperature.toStringAsFixed(1)}°C',
+                                temperature > 37.5
+                                    ? Colors.orange
+                                    : Colors.cyan),
+                            _buildSensorItem(
+                                Icons.psychology,
+                                '$stressLevel%',
+                                stressLevel > 65
+                                    ? Colors.deepOrange
+                                    : Colors.amber),
+                            _buildSensorItem(
+                              dangerAlert ? Icons.warning_amber : Icons.shield,
+                              dangerAlert ? 'ALERT' : 'SAFE',
+                              dangerAlert ? Colors.red : Colors.green,
+                            ),
+                          ],
+                        ),
+                      ),
+                    ),
                   ),
-                ),
-              ],
+                ],
+              ),
             ),
     );
   }

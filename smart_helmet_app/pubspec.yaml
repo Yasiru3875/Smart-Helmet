@@ -40,6 +40,6 @@ dev_dependencies:
 flutter:
   uses-material-design: true
 
-
   assets:
     - assets/eeg_stress_model_final.tflite
+    - assets/icons/motorcycle.png
