@@ -135,6 +135,7 @@ class _Member3PageState extends State<Member3Page> with SingleTickerProviderStat
     });
 
     try {
+      // First check bonded devices
       List<BluetoothDevice> bondedDevices =
           await FlutterBluetoothSerial.instance.getBondedDevices();
 
@@ -146,13 +147,24 @@ class _Member3PageState extends State<Member3Page> with SingleTickerProviderStat
         }
       }
 
+      // If not found in bonded devices, show device selection dialog
       if (targetDevice == null) {
         if (!mounted) return;
         setState(() {
-          connectionStatus = "Device not paired";
-          isConnecting = false;
+          connectionStatus = "Device not paired. Opening selector...";
         });
-        return;
+        
+        // Show dialog to select device
+        targetDevice = await _showDeviceSelectionDialog(bondedDevices);
+        
+        if (targetDevice == null) {
+          if (!mounted) return;
+          setState(() {
+            connectionStatus = "No device selected";
+            isConnecting = false;
+          });
+          return;
+        }
       }
 
       if (!mounted) return;
@@ -187,6 +199,76 @@ class _Member3PageState extends State<Member3Page> with SingleTickerProviderStat
         isConnecting = false;
       });
     }
+  }
+
+  // Show dialog to select a Bluetooth device
+  Future<BluetoothDevice?> _showDeviceSelectionDialog(List<BluetoothDevice> bondedDevices) async {
+    return showDialog<BluetoothDevice>(
+      context: context,
+      builder: (BuildContext context) {
+        return AlertDialog(
+          title: const Text('Select Bluetooth Device'),
+          content: SizedBox(
+            width: double.maxFinite,
+            height: 300,
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                const Text(
+                  'Paired Devices:',
+                  style: TextStyle(fontWeight: FontWeight.bold),
+                ),
+                const SizedBox(height: 8),
+                if (bondedDevices.isEmpty)
+                  const Padding(
+                    padding: EdgeInsets.all(16.0),
+                    child: Text(
+                      'No paired devices found.\n\n'
+                      'Please pair your ESP32 first:\n'
+                      '1. Go to Android Settings → Bluetooth\n'
+                      '2. Find "SmartHelmet_ESP32"\n'
+                      '3. Tap to pair',
+                      style: TextStyle(color: Colors.grey),
+                    ),
+                  )
+                else
+                  Expanded(
+                    child: ListView.builder(
+                      shrinkWrap: true,
+                      itemCount: bondedDevices.length,
+                      itemBuilder: (context, index) {
+                        BluetoothDevice device = bondedDevices[index];
+                        return ListTile(
+                          leading: const Icon(Icons.bluetooth),
+                          title: Text(device.name ?? 'Unknown Device'),
+                          subtitle: Text(device.address),
+                          trailing: device.name == targetDeviceName
+                              ? const Icon(Icons.star, color: Colors.amber)
+                              : null,
+                          onTap: () => Navigator.of(context).pop(device),
+                        );
+                      },
+                    ),
+                  ),
+              ],
+            ),
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.of(context).pop(null),
+              child: const Text('Cancel'),
+            ),
+            TextButton(
+              onPressed: () async {
+                // Open system Bluetooth settings
+                await FlutterBluetoothSerial.instance.openSettings();
+              },
+              child: const Text('Open Bluetooth Settings'),
+            ),
+          ],
+        );
+      },
+    );
   }
 
   void _handleIncomingData(Uint8List data) {
