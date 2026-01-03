@@ -2,7 +2,7 @@ import 'dart:async';
 import 'dart:convert';
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
-import 'package:http/http.dart' as http;
+import 'package:tflite_flutter/tflite_flutter.dart';
 import '../../../../services/bluetooth_manager.dart';
 
 class Member1Page extends StatefulWidget {
@@ -13,7 +13,7 @@ class Member1Page extends StatefulWidget {
 }
 
 class _Member1PageState extends State<Member1Page> {
-  static const String deviceName = "SmartHelmet_ESP32";
+  static const String deviceName = "SmartWatch_ESP32";
 
   String status = "Waiting...";
   String errorMessage = "";
@@ -27,14 +27,27 @@ class _Member1PageState extends State<Member1Page> {
   String riskLevel = "Unknown";
   Color riskColor = Colors.grey;
 
-  String apiUrl = "http://192.168.0.253:5000/predict";  // Replace with your Flask server IP:port/predict
-  // For Android emulator: "http://10.0.2.2:5000/predict"
-  // For physical device: Use the IP from Flask log or ngrok URL
+  Interpreter? _interpreter;
 
   @override
   void initState() {
     super.initState();
+    _loadModel();
     _init();
+  }
+
+  Future<void> _loadModel() async {
+    try {
+      _interpreter = await Interpreter.fromAsset('assets/model.tflite');
+      debugPrint("TFLite model loaded successfully");
+    } catch (e) {
+      debugPrint("Error loading TFLite model: $e");
+      if (mounted) {
+        setState(() {
+          errorMessage = "Failed to load prediction model";
+        });
+      }
+    }
   }
 
   Future<void> _init() async {
@@ -103,46 +116,43 @@ class _Member1PageState extends State<Member1Page> {
         });
       }
 
-      // Call API for advanced prediction
-      _fetchRiskPrediction(hr, temp);
+      // Predict using TFLite
+      _predictWithTFLite(hr, temp);
     } catch (e) {
       debugPrint("JSON parse error: $e | Raw: $jsonString");
     }
   }
 
-  Future<void> _fetchRiskPrediction(double hr, double temp) async {
-    if (hr == 0 || temp == 0) return;
+  void _predictWithTFLite(double hr, double temp) {
+    if (hr == 0 || temp == 0 || _interpreter == null) {
+      _fallbackLocalRisk(hr, temp);
+      return;
+    }
 
     try {
-      final response = await http.post(
-        Uri.parse(apiUrl),
-        headers: {'Content-Type': 'application/json'},
-        body: jsonEncode({'hr': hr, 'temp': temp}),
-      );
+      // Input: [heart_rate, body_temperature]
+      // Assuming model expects float32 input shape [1, 2]
+      var input = [[hr, temp]];
+      var output = List.filled(1, [0.0]); // Output shape [1, 1] for probability
 
-      if (response.statusCode == 200) {
-        final data = jsonDecode(response.body);
-        String newRisk = data['risk_level'] ?? "Unknown";
-        int prob = data['risk_probability'] ?? 0;
+      _interpreter!.run(input, output);
 
-        Color newRiskColor = Colors.green;
-        if (newRisk == "High") newRiskColor = Colors.red;
-        else if (newRisk == "Medium") newRiskColor = Colors.orange;
+      double prob = output[0][0] * 100; // Assuming sigmoid output (0-1)
+      String newRisk = (output[0][0] > 0.5) ? "High" : "Low";
+      int probInt = prob.round();
 
-        if (mounted) {
-          setState(() {
-            riskLevel = "$newRisk ($prob%)";
-            riskColor = newRiskColor;
-          });
-        }
-      } else {
-        debugPrint("API error: ${response.statusCode}");
-        // Fallback to local logic
-        _fallbackLocalRisk(hr, temp);
+      Color newRiskColor = Colors.green;
+      if (newRisk == "High") newRiskColor = Colors.red;
+      else if (newRisk == "Medium") newRiskColor = Colors.orange; // If model outputs medium, but binary here
+
+      if (mounted) {
+        setState(() {
+          riskLevel = "$newRisk ($probInt%)";
+          riskColor = newRiskColor;
+        });
       }
     } catch (e) {
-      debugPrint("Prediction API error: $e");
-      // Fallback to local logic
+      debugPrint("TFLite prediction error: $e");
       _fallbackLocalRisk(hr, temp);
     }
   }
@@ -243,6 +253,7 @@ class _Member1PageState extends State<Member1Page> {
   @override
   void dispose() {
     _dataSubscription?.cancel();
+    _interpreter?.close();
     super.dispose();
   }
 
