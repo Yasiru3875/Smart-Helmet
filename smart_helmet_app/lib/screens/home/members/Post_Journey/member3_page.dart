@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'dart:async';
 import 'dart:convert';
+import 'dart:math';
 import 'dart:typed_data';
 import 'package:flutter_bluetooth_serial/flutter_bluetooth_serial.dart';
 import 'package:permission_handler/permission_handler.dart';
@@ -69,6 +70,11 @@ class _Member3PageState extends State<Member3Page> with SingleTickerProviderStat
   double currentSpeed = 0.0;
   double currentLat = 0.0;
   double currentLng = 0.0;
+
+  // Distance tracking
+  double totalDistanceKm = 0.0;
+  double? lastLat;
+  double? lastLng;
 
   @override
   void initState() {
@@ -239,20 +245,16 @@ class _Member3PageState extends State<Member3Page> with SingleTickerProviderStat
 
   void _processIMUData({
     required Map<String, double> imuData,
-    double speed = 0.0,
-    double lat = 0.0,
-    double lng = 0.0,
+    required double speed,
+    required double lat,
+    required double lng,
   }) {
     if (!mounted) return;
     
     final journeyProvider = Provider.of<JourneyProvider>(context, listen: false);
     
     setState(() {
-      // Update GPS state
-      currentSpeed = speed;
-      currentLat = lat;
-      currentLng = lng;
-
+      // 1. Update IMU UI variables
       gyroX = imuData['gyroX']!;
       gyroY = imuData['gyroY']!;
       gyroZ = imuData['gyroZ']!;
@@ -260,11 +262,34 @@ class _Member3PageState extends State<Member3Page> with SingleTickerProviderStat
       accelY = imuData['accelY']!;
       accelZ = imuData['accelZ']!;
 
+      // 2. Update Graph History
       gyroZHistory.add(gyroZ.abs());
       if (gyroZHistory.length > maxHistoryLength) {
         gyroZHistory.removeAt(0);
       }
 
+      // 3. Process GPS Data (If valid)
+      if (lat != 0.0 && lng != 0.0) {
+        currentLat = lat;
+        currentLng = lng;
+        currentSpeed = speed;
+
+        // Calculate Distance using Haversine formula approximation
+        if (lastLat != null && lastLng != null) {
+          double dist = _calculateDistance(lastLat!, lastLng!, lat, lng);
+          totalDistanceKm += dist;
+        }
+        
+        lastLat = lat;
+        lastLng = lng;
+
+        // Send to Provider
+        if (journeyProvider.isJourneyActive) {
+          journeyProvider.updateDistanceAndSpeed(totalDistanceKm, currentSpeed);
+        }
+      }
+
+      // 4. Turn Detection Logic
       double turnRate = gyroZ.abs();
 
       if (turnRate > riskyTurnThreshold) {
@@ -272,7 +297,6 @@ class _Member3PageState extends State<Member3Page> with SingleTickerProviderStat
         statusColor = Colors.red;
         riskyTurnCount++;
         
-        // Add to journey if active
         if (journeyProvider.isJourneyActive) {
           journeyProvider.addTurnEvent(
             severity: 'risky',
@@ -299,6 +323,22 @@ class _Member3PageState extends State<Member3Page> with SingleTickerProviderStat
         statusColor = Colors.green;
       }
     });
+  }
+
+  // Haversine formula to calculate distance between two GPS points in km
+  double _calculateDistance(double lat1, double lon1, double lat2, double lon2) {
+    const double earthRadius = 6371.0; // km
+    double dLat = _toRadians(lat2 - lat1);
+    double dLon = _toRadians(lon2 - lon1);
+    double a = (sin(dLat / 2) * sin(dLat / 2)) +
+        cos(_toRadians(lat1)) * cos(_toRadians(lat2)) *
+        (sin(dLon / 2) * sin(dLon / 2));
+    double c = 2 * atan2(sqrt(a), sqrt(1 - a));
+    return earthRadius * c;
+  }
+
+  double _toRadians(double degree) {
+    return degree * (pi / 180);
   }
 
   @override
