@@ -29,6 +29,11 @@
         <meta-data
             android:name="com.google.android.geo.API_KEY"
             android:value="AIzaSyBbZVI_sO637CROKwc3hjMOB4ZmsL12ikw"/>
+
+        <!-- ✅ REQUIRED FOR GOOGLE SIGN-IN -->
+        <meta-data
+            android:name="com.google.android.gms.client_id"
+            android:value="@string/default_web_client_id" />
         <activity
             android:name=".MainActivity"
             android:exported="true"
