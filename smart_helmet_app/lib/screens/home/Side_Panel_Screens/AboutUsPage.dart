@@ -26,9 +26,9 @@ class AboutUsPage extends StatelessWidget {
                 children: [
                   Image.asset(
                     'assets/icons/app_icon.png', // Make sure the path matches your pubspec.yaml
-                    height: 200,
+                    height: 100,
                     width: double.infinity,
-                    fit: BoxFit.cover,
+                    
                   ),
                   Padding(
                     padding: const EdgeInsets.all(16.0),
