@@ -52,6 +52,7 @@ flutter:
     - assets/icons/app_icon.png
     - assets/icons/g-logo.png
     - assets/model.tflite
+    - assets/icons/dev_team.png
 
 flutter_icons:
   android: true

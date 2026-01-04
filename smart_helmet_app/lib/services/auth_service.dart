@@ -5,7 +5,9 @@ import 'package:google_sign_in/google_sign_in.dart';
 
 class AuthService with ChangeNotifier {
   final FirebaseAuth _auth = FirebaseAuth.instance;
-  final GoogleSignIn _googleSignIn = GoogleSignIn();
+  final GoogleSignIn _googleSignIn = GoogleSignIn(
+  scopes: ['email'],
+);
 
   Stream<User?> get authStateChanges => _auth.authStateChanges();
 

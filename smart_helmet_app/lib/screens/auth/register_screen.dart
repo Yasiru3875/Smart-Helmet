@@ -279,15 +279,35 @@ class _RegisterScreenState extends State<RegisterScreen> {
                                     SizedBox(height: isSmallScreen ? 20 : 24),
 
                                     // Back to Sign In
-                                    TextButton(
+                                TextButton(
                                       onPressed: _isLoading
                                           ? null
                                           : () => Navigator.of(context).pop(),
-                                      child: const Text(
-                                        'Already have an account? Sign in',
-                                        style: TextStyle(
-                                          color: Color(0xFF1976D2),
-                                          fontWeight: FontWeight.w600,
+                                      style: TextButton.styleFrom(
+                                        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                                        minimumSize: Size.zero,
+                                        tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                                      ),
+                                      child: RichText(
+                                        text: const TextSpan(
+                                          children: [
+                                            TextSpan(
+                                              text: 'Already have an account? ',
+                                              style: TextStyle(
+                                                color: Colors.grey,
+                                                fontSize: 14,
+                                                fontWeight: FontWeight.w500,
+                                              ),
+                                            ),
+                                            TextSpan(
+                                              text: 'Sign in',
+                                              style: TextStyle(
+                                                color: Color(0xFF1976D2), // Nice professional blue
+                                                fontSize: 14,
+                                                fontWeight: FontWeight.w600,
+                                              ),
+                                            ),
+                                          ],
                                         ),
                                       ),
                                     ),

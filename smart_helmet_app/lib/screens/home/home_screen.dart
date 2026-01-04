@@ -1,12 +1,10 @@
-// home_screen.dart (FINAL UPDATED VERSION)
-
+// home_screen.dart (FINAL FIXED & OPTIMIZED VERSION)
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import 'package:google_maps_flutter/google_maps_flutter.dart';
 import 'package:url_launcher/url_launcher.dart';
 
 import '../../services/auth_service.dart';
-
 import 'members/Health_Monitoring/member1_page.dart';
 import 'members/Stress_Detection/member2_page.dart';
 import 'members/Post_Journey/member3_page.dart';
@@ -41,6 +39,10 @@ class _HomeScreenState extends State<HomeScreen> {
   @override
   void initState() {
     super.initState();
+    _initializePages();
+  }
+
+  void _initializePages() {
     _pages = [
       HomeDashboard(
         onStartJourney: _handleStartJourney,
@@ -60,6 +62,31 @@ class _HomeScreenState extends State<HomeScreen> {
     ];
   }
 
+  @override
+  void didUpdateWidget(covariant HomeScreen oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    // Rebuild pages when journey state changes
+    _updateJourneyDependentPages();
+  }
+
+  void _updateJourneyDependentPages() {
+    setState(() {
+      _pages[0] = HomeDashboard(
+        onStartJourney: _handleStartJourney,
+        onEndJourney: _handleEndJourney,
+        isJourneyActive: _isJourneyActive,
+      );
+
+      _pages[4] = Member4Page(
+        predefinedStart: _routeStart,
+        predefinedEnd: _routeEnd,
+        predefinedRoute: _routePoints,
+        destinationName: _destinationName,
+        startJourney: _isJourneyActive,
+      );
+    });
+  }
+
   void _handleStartJourney({
     required LatLng start,
     required LatLng end,
@@ -72,8 +99,9 @@ class _HomeScreenState extends State<HomeScreen> {
       _routePoints = route;
       _destinationName = destinationName;
       _isJourneyActive = true;
-      _index = 4; // Switch to Danger Zone tab
+      _index = 4; // Auto-switch to Danger Zone tab
     });
+    _updateJourneyDependentPages();
   }
 
   void _handleEndJourney() {
@@ -84,40 +112,23 @@ class _HomeScreenState extends State<HomeScreen> {
       _routePoints = null;
       _destinationName = null;
     });
+    _updateJourneyDependentPages();
   }
 
-  // Helper to launch external URLs
   Future<void> _launchURL(String url) async {
     final uri = Uri.parse(url);
     if (await canLaunchUrl(uri)) {
       await launchUrl(uri, mode: LaunchMode.externalApplication);
     } else {
+      if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(content: Text('Could not launch $url')),
       );
     }
   }
 
-  @override
-  Widget build(BuildContext context) {
-    final auth = Provider.of<AuthService>(context, listen: false);
-
-    // Always keep pages in sync with current journey state
-    _pages[0] = HomeDashboard(
-      onStartJourney: _handleStartJourney,
-      onEndJourney: _handleEndJourney,
-      isJourneyActive: _isJourneyActive,
-    );
-
-    _pages[4] = Member4Page(
-      predefinedStart: _routeStart,
-      predefinedEnd: _routeEnd,
-      predefinedRoute: _routePoints,
-      destinationName: _destinationName,
-      startJourney: _isJourneyActive,
-    );
-
-    String title = switch (_index) {
+  String _getTitle(int index) {
+    return switch (index) {
       0 => 'Smart Helmet - Home',
       1 => 'Health Monitoring',
       2 => 'Stress Detection',
@@ -125,10 +136,17 @@ class _HomeScreenState extends State<HomeScreen> {
       4 => 'Danger Zone Detection',
       _ => 'Smart Helmet',
     };
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final auth = Provider.of<AuthService>(context, listen: false);
 
     return Scaffold(
       appBar: AppBar(
-        title: Text(title),
+        title: Text(_getTitle(_index)),
+        backgroundColor: Colors.indigo,
+        foregroundColor: Colors.white,
         actions: [
           IconButton(
             icon: const Icon(Icons.logout),
@@ -141,9 +159,9 @@ class _HomeScreenState extends State<HomeScreen> {
         child: ListView(
           padding: EdgeInsets.zero,
           children: [
-            // Professional Header
-            const DrawerHeader(
-              decoration: BoxDecoration(
+            // Professional Drawer Header
+            DrawerHeader(
+              decoration: const BoxDecoration(
                 gradient: LinearGradient(
                   colors: [Colors.indigo, Colors.deepPurple],
                   begin: Alignment.topLeft,
@@ -156,90 +174,56 @@ class _HomeScreenState extends State<HomeScreen> {
                 children: [
                   CircleAvatar(
                     radius: 30,
-                    backgroundColor: Colors.white,
-                    child: Icon(Icons.security, size: 40, color: Colors.indigo),
+                    backgroundImage: const AssetImage('assets/icons/app_icon.png'),
                   ),
-                  SizedBox(height: 12),
-                  Text(
+
+
+                  const SizedBox(height: 8),
+                  const Text(
                     'Smart Helmet',
-                    style: TextStyle(color: Colors.white, fontSize: 24, fontWeight: FontWeight.bold),
+                    style: TextStyle(
+                      color: Colors.white,
+                      fontSize: 24,
+                      fontWeight: FontWeight.bold,
+                    ),
                   ),
-                  Text(
+                  const Text(
                     'Ride Safe, Ride Smart',
-                    style: TextStyle(color: Colors.white70, fontSize: 14),
+                    style: TextStyle(
+                      color: Colors.white70,
+                      fontSize: 14,
+                    ),
                   ),
                 ],
               ),
             ),
 
-            // Main Navigation Links
-            ListTile(
-              leading: const Icon(Icons.home),
-              title: const Text('Home'),
-              selected: _index == 0,
-              selectedTileColor: Colors.indigo.withOpacity(0.1),
-              onTap: () {
-                setState(() => _index = 0);
-                Navigator.pop(context);
-              },
-            ),
-            ListTile(
-              leading: const Icon(Icons.favorite),
-              title: const Text('Health Monitoring'),
-              selected: _index == 1,
-              selectedTileColor: Colors.indigo.withOpacity(0.1),
-              onTap: () {
-                setState(() => _index = 1);
-                Navigator.pop(context);
-              },
-            ),
-            ListTile(
-              leading: const Icon(Icons.psychology),
-              title: const Text('Stress Detection'),
-              selected: _index == 2,
-              selectedTileColor: Colors.indigo.withOpacity(0.1),
-              onTap: () {
-                setState(() => _index = 2);
-                Navigator.pop(context);
-              },
-            ),
-            ListTile(
-              leading: const Icon(Icons.history),
-              title: const Text('Post Journey'),
-              selected: _index == 3,
-              selectedTileColor: Colors.indigo.withOpacity(0.1),
-              onTap: () {
-                setState(() => _index = 3);
-                Navigator.pop(context);
-              },
-            ),
-            ListTile(
-              leading: const Icon(Icons.warning_amber),
-              title: const Text('Danger Zone Detection'),
-              selected: _index == 4,
-              selectedTileColor: Colors.indigo.withOpacity(0.1),
-              onTap: () {
-                setState(() => _index = 4);
-                Navigator.pop(context);
-              },
-            ),
+            // Main Navigation
+            ...[0, 1, 2, 3, 4].map((i) {
+              final titles = ['Home', 'Health Monitoring', 'Stress Detection', 'Post Journey', 'Danger Zone Detection'];
+              final icons = [Icons.home, Icons.favorite, Icons.psychology, Icons.history, Icons.warning_amber];
 
-            // Separator
-            const Padding(
-              padding: EdgeInsets.symmetric(horizontal: 16, vertical: 8),
-              child: Divider(thickness: 1),
-            ),
+              return ListTile(
+                leading: Icon(icons[i]),
+                title: Text(titles[i]),
+                selected: _index == i,
+                selectedTileColor: Colors.indigo.withOpacity(0.1),
+                onTap: () {
+                  setState(() => _index = i);
+                  Navigator.pop(context);
+                },
+              );
+            }).toList(),
 
-            // Additional App Links
+            const Divider(),
+
+            // Additional Links
             ListTile(
               leading: const Icon(Icons.info_outline),
               title: const Text('About Us'),
               onTap: () {
                 Navigator.pop(context);
-                Navigator.push(
-                  context,
-                  MaterialPageRoute(builder: (context) => AboutUsPage()),
-                );
+                Navigator.push(context, MaterialPageRoute(builder: (_) => AboutUsPage()));
               },
             ),
             ListTile(
@@ -247,10 +231,7 @@ class _HomeScreenState extends State<HomeScreen> {
               title: const Text('Privacy Policy'),
               onTap: () {
                 Navigator.pop(context);
-                Navigator.push(
-                  context,
-                  MaterialPageRoute(builder: (context) => PrivacyPolicyPage()),
-                );
+                Navigator.push(context, MaterialPageRoute(builder: (_) => PrivacyPolicyPage()));
               },
             ),
             ListTile(
@@ -258,10 +239,7 @@ class _HomeScreenState extends State<HomeScreen> {
               title: const Text('Terms of Service'),
               onTap: () {
                 Navigator.pop(context);
-                Navigator.push(
-                  context,
-                  MaterialPageRoute(builder: (context) => TermsOfServicePage()),
-                );
+                Navigator.push(context, MaterialPageRoute(builder: (_) => TermsOfServicePage()));
               },
             ),
             ListTile(
@@ -269,10 +247,7 @@ class _HomeScreenState extends State<HomeScreen> {
               title: const Text('Contact Support'),
               onTap: () {
                 Navigator.pop(context);
-                Navigator.push(
-                  context,
-                  MaterialPageRoute(builder: (context) => ContactSupportPage()),
-                );
+                Navigator.push(context, MaterialPageRoute(builder: (_) => ContactSupportPage()));
               },
             ),
             ListTile(
@@ -280,11 +255,10 @@ class _HomeScreenState extends State<HomeScreen> {
               title: const Text('Rate App'),
               onTap: () {
                 Navigator.pop(context);
-                _launchURL('https://play.google.com/store/apps/details?id=com.yourpackage');
+                _launchURL('https://play.google.com/store/apps/details?id=com.yourpackage'); // Update with real ID
               },
             ),
 
-            // App Version
             const Padding(
               padding: EdgeInsets.all(16),
               child: Center(
@@ -297,10 +271,13 @@ class _HomeScreenState extends State<HomeScreen> {
           ],
         ),
       ),
-      body: _pages[_index],
+      body: IndexedStack(
+        index: _index,
+        children: _pages,
+      ), // Better than direct indexing for preserving state
       bottomNavigationBar: BottomNavigationBar(
         currentIndex: _index,
-        onTap: (v) => setState(() => _index = v),
+        onTap: (value) => setState(() => _index = value),
         type: BottomNavigationBarType.fixed,
         selectedItemColor: Colors.indigo,
         unselectedItemColor: Colors.grey,
