@@ -29,6 +29,12 @@ class _Member1PageState extends State<Member1Page> {
 
   Interpreter? _interpreter;
 
+  // New: For Separate Emotional States (defaults since no EEG data in this page; integrate EEG for dynamic updates)
+  double arousalLevel = 0.0; // High = excited/frustrated, Low = calm/bored
+  double valenceLevel = 0.0; // High = positive/pleasant, Low = negative/unpleasant (e.g., frustration)
+  String frustrationState = "Neutral";
+  String frustrationEmoji = "😐";
+
   @override
   void initState() {
     super.initState();
@@ -460,6 +466,119 @@ class _Member1PageState extends State<Member1Page> {
               ),
             ),
 
+            const SizedBox(height: 30),
+
+            // New: Separate Emotional States from EEG Waves
+            Card(
+              elevation: 8,
+              shape: RoundedRectangleBorder(
+                borderRadius: BorderRadius.circular(20),
+              ),
+              color: Colors.indigo.shade50,
+              child: Padding(
+                padding: const EdgeInsets.all(24),
+                child: Column(
+                  children: [
+                    const Text(
+                      "Detected Emotional State (from EEG Waves)",
+                      style: TextStyle(
+                        fontSize: 20,
+                        fontWeight: FontWeight.bold,
+                        color: Colors.indigo,
+                      ),
+                      textAlign: TextAlign.center,
+                    ),
+                    const SizedBox(height: 16),
+                    Text(
+                      frustrationEmoji,
+                      style: const TextStyle(fontSize: 90),
+                      textAlign: TextAlign.center,
+                    ),
+                    const SizedBox(height: 16),
+                    Text(
+                      frustrationState,
+                      style: const TextStyle(
+                        fontSize: 30,
+                        fontWeight: FontWeight.bold,
+                        color: Colors.indigo,
+                      ),
+                      textAlign: TextAlign.center,
+                    ),
+                    const SizedBox(height: 12),
+                    Text(
+                      isConnected
+                          ? "Based on real-time EEG band ratios (Beta/Alpha for arousal + meditation/stress for valence)"
+                          : "Waiting for good signal...",
+                      style: const TextStyle(
+                        fontSize: 14,
+                        color: Colors.black54,
+                      ),
+                      textAlign: TextAlign.center,
+                    ),
+                    const SizedBox(height: 8),
+                    if (frustrationState == "Frustrated")
+                      const Text(
+                        "High arousal with unpleasant valence detected – possible frustration or anger.",
+                        style: TextStyle(
+                          fontSize: 14,
+                          color: Colors.red,
+                          fontWeight: FontWeight.bold,
+                        ),
+                        textAlign: TextAlign.center,
+                      ),
+                  ],
+                ),
+              ),
+            ),
+
+            const SizedBox(height: 30),
+
+            // Emotional States to Predict Heart Attack (unchanged from previous)
+            Card(
+              elevation: 6,
+              shape: RoundedRectangleBorder(
+                borderRadius: BorderRadius.circular(20),
+              ),
+              child: Padding(
+                padding: const EdgeInsets.all(24),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    const Text(
+                      "Emotional States to Predict Heart Attack",
+                      style: TextStyle(
+                        fontSize: 20,
+                        fontWeight: FontWeight.bold,
+                      ),
+                      textAlign: TextAlign.center,
+                    ),
+                    const SizedBox(height: 16),
+                    const Text(
+                      "Based on research (PMID: 24149648):",
+                      style: TextStyle(fontSize: 16, color: Colors.black87),
+                    ),
+                    const SizedBox(height: 12),
+                    const BulletPoint(
+                      text:
+                          "Unpleasant emotions / Frustration (before the event)",
+                    ),
+                    const BulletPoint(
+                      text: "Rapid increase in anger (during the event)",
+                    ),
+                    const SizedBox(height: 16),
+                    const Text(
+                      "Monitor your stress levels and seek medical advice if experiencing these states persistently.",
+                      style: TextStyle(
+                        fontSize: 14,
+                        color: Colors.black54,
+                        fontStyle: FontStyle.italic,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ),
+
             const SizedBox(height: 40),
           ],
         ),
@@ -511,5 +630,33 @@ class _Member1PageState extends State<Member1Page> {
     } else {
       return "Waiting for data...";
     }
+  }
+}
+
+class BulletPoint extends StatelessWidget {
+  final String text;
+
+  const BulletPoint({super.key, required this.text});
+
+  @override
+  Widget build(BuildContext context) {
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 8.0),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          const Text(
+            "• ",
+            style: TextStyle(fontSize: 16, color: Colors.black87),
+          ),
+          Expanded(
+            child: Text(
+              text,
+              style: const TextStyle(fontSize: 16, color: Colors.black87),
+            ),
+          ),
+        ],
+      ),
+    );
   }
 }

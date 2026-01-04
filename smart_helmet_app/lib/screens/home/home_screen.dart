@@ -12,6 +12,10 @@ import 'members/Stress_Detection/member2_page.dart';
 import 'members/Post_Journey/member3_page.dart';
 import 'members/Danger_Zone/member4_page.dart';
 import 'home_dashboard.dart';
+import 'Side_Panel_Screens/AboutUsPage.dart';
+import 'Side_Panel_Screens/PrivacyPolicyPage.dart';
+import 'Side_Panel_Screens/TermsOfServicePage.dart';
+import 'Side_Panel_Screens/ContactSupportPage.dart';
 
 class HomeScreen extends StatefulWidget {
   const HomeScreen({super.key});
@@ -232,7 +236,10 @@ class _HomeScreenState extends State<HomeScreen> {
               title: const Text('About Us'),
               onTap: () {
                 Navigator.pop(context);
-                _launchURL('https://yourwebsite.com/about');
+                Navigator.push(
+                  context,
+                  MaterialPageRoute(builder: (context) => AboutUsPage()),
+                );
               },
             ),
             ListTile(
@@ -240,7 +247,10 @@ class _HomeScreenState extends State<HomeScreen> {
               title: const Text('Privacy Policy'),
               onTap: () {
                 Navigator.pop(context);
-                _launchURL('https://yourwebsite.com/privacy');
+                Navigator.push(
+                  context,
+                  MaterialPageRoute(builder: (context) => PrivacyPolicyPage()),
+                );
               },
             ),
             ListTile(
@@ -248,7 +258,10 @@ class _HomeScreenState extends State<HomeScreen> {
               title: const Text('Terms of Service'),
               onTap: () {
                 Navigator.pop(context);
-                _launchURL('https://yourwebsite.com/terms');
+                Navigator.push(
+                  context,
+                  MaterialPageRoute(builder: (context) => TermsOfServicePage()),
+                );
               },
             ),
             ListTile(
@@ -256,7 +269,10 @@ class _HomeScreenState extends State<HomeScreen> {
               title: const Text('Contact Support'),
               onTap: () {
                 Navigator.pop(context);
-                _launchURL('mailto:support@smarthelmet.com');
+                Navigator.push(
+                  context,
+                  MaterialPageRoute(builder: (context) => ContactSupportPage()),
+                );
               },
             ),
             ListTile(
