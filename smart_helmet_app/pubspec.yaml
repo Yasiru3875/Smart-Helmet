@@ -37,6 +37,7 @@ dependencies:
   google_sign_in: ^6.2.1
 
   flutter_staggered_animations: ^1.1.1
+  percent_indicator: ^4.2.3
 
 dev_dependencies:
   flutter_test:
