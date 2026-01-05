@@ -9,9 +9,11 @@ class JourneyData {
   final int sharpTurns;
   final int riskyTurns;
   final double averageSpeed;
+  final double maxSpeed;
   final double totalDistance;
   final List<TurnEvent> turnEvents;
   final List<SensorReading> sensorReadings;
+  final List<GpsPoint> gpsTrack;
   
   JourneyData({
     required this.id,
@@ -22,9 +24,11 @@ class JourneyData {
     this.sharpTurns = 0,
     this.riskyTurns = 0,
     this.averageSpeed = 0.0,
+    this.maxSpeed = 0.0,
     this.totalDistance = 0.0,
     this.turnEvents = const [],
     this.sensorReadings = const [],
+    this.gpsTrack = const [],
   });
   
   Map<String, dynamic> toMap() {
@@ -37,9 +41,11 @@ class JourneyData {
       'sharpTurns': sharpTurns,
       'riskyTurns': riskyTurns,
       'averageSpeed': averageSpeed,
+      'maxSpeed': maxSpeed,
       'totalDistance': totalDistance,
       'turnEvents': turnEvents.map((e) => e.toMap()).toList(),
       'sensorReadings': sensorReadings.map((e) => e.toMap()).toList(),
+      'gpsTrack': gpsTrack.map((e) => e.toMap()).toList(),
     };
   }
   
@@ -53,12 +59,16 @@ class JourneyData {
       sharpTurns: map['sharpTurns'] ?? 0,
       riskyTurns: map['riskyTurns'] ?? 0,
       averageSpeed: (map['averageSpeed'] ?? 0.0).toDouble(),
+      maxSpeed: (map['maxSpeed'] ?? 0.0).toDouble(),
       totalDistance: (map['totalDistance'] ?? 0.0).toDouble(),
       turnEvents: (map['turnEvents'] as List?)
           ?.map((e) => TurnEvent.fromMap(e))
           .toList() ?? [],
       sensorReadings: (map['sensorReadings'] as List?)
           ?.map((e) => SensorReading.fromMap(e))
+          .toList() ?? [],
+      gpsTrack: (map['gpsTrack'] as List?)
+          ?.map((e) => GpsPoint.fromMap(e))
           .toList() ?? [],
     );
   }
@@ -128,6 +138,34 @@ class SensorReading {
       heartRate: map['heartRate'] ?? 0,
       temperature: (map['temperature'] ?? 0.0).toDouble(),
       stressLevel: map['stressLevel'] ?? 0,
+    );
+  }
+}
+
+class GpsPoint {
+  final double latitude;
+  final double longitude;
+  final DateTime? timestamp;
+  
+  GpsPoint({
+    required this.latitude,
+    required this.longitude,
+    this.timestamp,
+  });
+  
+  Map<String, dynamic> toMap() {
+    return {
+      'latitude': latitude,
+      'longitude': longitude,
+      'timestamp': timestamp?.toIso8601String(),
+    };
+  }
+  
+  factory GpsPoint.fromMap(Map<String, dynamic> map) {
+    return GpsPoint(
+      latitude: (map['latitude'] ?? 0.0).toDouble(),
+      longitude: (map['longitude'] ?? 0.0).toDouble(),
+      timestamp: map['timestamp'] != null ? DateTime.parse(map['timestamp']) : null,
     );
   }
 }
