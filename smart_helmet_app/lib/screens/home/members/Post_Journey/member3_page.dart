@@ -1,674 +1,7 @@
-// import 'package:flutter/material.dart';
-// import 'dart:async';
-// import 'dart:convert';
-// import 'dart:typed_data';
-// import 'package:flutter_bluetooth_serial/flutter_bluetooth_serial.dart';
-// import 'package:permission_handler/permission_handler.dart';
-
-// class Member3Page extends StatefulWidget {
-//   const Member3Page({super.key});
-
-//   @override
-//   State<Member3Page> createState() => _Member3PageState();
-// }
-
-// class _Member3PageState extends State<Member3Page> {
-//   // IMU Data from MPU6050
-//   double gyroX = 0.0;
-//   double gyroY = 0.0;
-//   double gyroZ = 0.0;
-//   double accelX = 0.0;
-//   double accelY = 0.0;
-//   double accelZ = 0.0;
-
-//   // Turn Detection
-//   int sharpTurnCount = 0;
-//   int riskyTurnCount = 0;
-//   String currentTurnStatus = "Normal";
-//   Color statusColor = Colors.green;
-
-//   // Historical data for graph
-//   List<double> gyroZHistory = [];
-//   final int maxHistoryLength = 50;
-
-//   // Thresholds (adjust based on calibration)
-//   final double sharpTurnThreshold = 100.0; // degrees/sec
-//   final double riskyTurnThreshold = 150.0; // degrees/sec
-
-//   // Bluetooth Classic Connection
-//   BluetoothConnection? _connection;
-//   bool isConnected = false;
-//   bool isConnecting = false;
-//   String connectionStatus = "Disconnected";
-//   String _dataBuffer = "";
-
-//   // ESP32 Configuration
-//   static const String targetDeviceName = "SmartHelmet_ESP32";
-
-//   @override
-//   void initState() {
-//     super.initState();
-//     _requestPermissions();
-//   }
-
-//   @override
-//   void dispose() {
-//     _disconnect();
-//     super.dispose();
-//   }
-
-//   // Request Bluetooth permissions
-//   Future<void> _requestPermissions() async {
-//     await [
-//       Permission.bluetooth,
-//       Permission.bluetoothConnect,
-//       Permission.bluetoothScan,
-//       Permission.location,
-//     ].request();
-//   }
-
-//   // Scan and connect to device
-//   Future<void> _scanAndConnect() async {
-//     if (!mounted) return;
-//     setState(() {
-//       isConnecting = true;
-//       connectionStatus = "Scanning...";
-//     });
-
-//     try {
-//       // Get bonded (paired) devices
-//       List<BluetoothDevice> bondedDevices =
-//           await FlutterBluetoothSerial.instance.getBondedDevices();
-
-//       // Find target device
-//       BluetoothDevice? targetDevice;
-//       for (BluetoothDevice device in bondedDevices) {
-//         if (device.name == targetDeviceName) {
-//           targetDevice = device;
-//           break;
-//         }
-//       }
-
-//       if (targetDevice == null) {
-//         if (!mounted) return;
-//         setState(() {
-//           connectionStatus = "Device not paired. Pair '$targetDeviceName' in Bluetooth settings.";
-//           isConnecting = false;
-//         });
-//         return;
-//       }
-
-//       // Connect to device
-//       if (!mounted) return;
-//       setState(() {
-//         connectionStatus = "Connecting...";
-//       });
-
-//       BluetoothConnection connection =
-//           await BluetoothConnection.toAddress(targetDevice.address);
-
-//       if (!mounted) return;
-//       setState(() {
-//         _connection = connection;
-//         isConnected = true;
-//         isConnecting = false;
-//         connectionStatus = "Connected";
-//       });
-
-//       // Listen to incoming data
-//       _connection!.input!.listen((Uint8List data) {
-//         _handleIncomingData(data);
-//       }).onDone(() {
-//         if (mounted) {
-//           setState(() {
-//             isConnected = false;
-//             connectionStatus = "Disconnected";
-//           });
-//         }
-//       });
-//     } catch (e) {
-//       if (!mounted) return;
-//       setState(() {
-//         connectionStatus = "Connection failed: $e";
-//         isConnected = false;
-//         isConnecting = false;
-//       });
-//     }
-//   }
-
-//   // Handle incoming Bluetooth data
-//   void _handleIncomingData(Uint8List data) {
-//     // Add new data to buffer
-//     _dataBuffer += utf8.decode(data);
-
-//     // Process complete JSON messages (ending with newline)
-//     while (_dataBuffer.contains('\n')) {
-//       int newlineIndex = _dataBuffer.indexOf('\n');
-//       String jsonString = _dataBuffer.substring(0, newlineIndex).trim();
-//       _dataBuffer = _dataBuffer.substring(newlineIndex + 1);
-
-//       if (jsonString.isNotEmpty) {
-//         _parseIMUData(jsonString);
-//       }
-//     }
-//   }
-
-//   // Parse incoming JSON data
-//   void _parseIMUData(String jsonString) {
-//     try {
-//       Map<String, dynamic> data = json.decode(jsonString);
-
-//       _processIMUData({
-//         'gyroX': (data['gyroX'] ?? 0.0).toDouble(),
-//         'gyroY': (data['gyroY'] ?? 0.0).toDouble(),
-//         'gyroZ': (data['gyroZ'] ?? 0.0).toDouble(),
-//         'accelX': (data['accelX'] ?? 0.0).toDouble(),
-//         'accelY': (data['accelY'] ?? 0.0).toDouble(),
-//         'accelZ': (data['accelZ'] ?? 0.0).toDouble(),
-//       });
-//     } catch (e) {
-//       print('Error parsing IMU data: $e');
-//     }
-//   }
-
-//   // Disconnect from device
-//   Future<void> _disconnect() async {
-//     try {
-//       await _connection?.finish();
-//     } catch (e) {
-//       print('Disconnect error: $e');
-//     }
-
-//     if (!mounted) return;
-//     setState(() {
-//       _connection = null;
-//       isConnected = false;
-//       connectionStatus = "Disconnected";
-//     });
-//   }
-
-//   void _processIMUData(Map<String, double> data) {
-//     if (!mounted) return;
-//     setState(() {
-//       gyroX = data['gyroX']!;
-//       gyroY = data['gyroY']!;
-//       gyroZ = data['gyroZ']!;
-//       accelX = data['accelX']!;
-//       accelY = data['accelY']!;
-//       accelZ = data['accelZ']!;
-
-//       // Add to history
-//       gyroZHistory.add(gyroZ.abs());
-//       if (gyroZHistory.length > maxHistoryLength) {
-//         gyroZHistory.removeAt(0);
-//       }
-
-//       // Detect turn severity
-//       double turnRate = gyroZ.abs();
-
-//       if (turnRate > riskyTurnThreshold) {
-//         currentTurnStatus = "RISKY TURN!";
-//         statusColor = Colors.red;
-//         riskyTurnCount++;
-//       } else if (turnRate > sharpTurnThreshold) {
-//         currentTurnStatus = "Sharp Turn";
-//         statusColor = Colors.orange;
-//         sharpTurnCount++;
-//       } else {
-//         currentTurnStatus = "Normal";
-//         statusColor = Colors.green;
-//       }
-//     });
-//   }
-
-//   @override
-//   Widget build(BuildContext context) {
-//     return Scaffold(
-//       appBar: AppBar(
-//         title: const Text('Sharp Turn Detection'),
-//         backgroundColor: Colors.blue[700],
-//         actions: [
-//           IconButton(
-//             icon: Icon(
-//               isConnected ? Icons.bluetooth_connected : Icons.bluetooth,
-//             ),
-//             onPressed: isConnected ? _disconnect : _scanAndConnect,
-//             tooltip: isConnected ? 'Disconnect' : 'Connect',
-//           ),
-//         ],
-//       ),
-//       body: SingleChildScrollView(
-//         padding: const EdgeInsets.all(16),
-//         child: Column(
-//           crossAxisAlignment: CrossAxisAlignment.stretch,
-//           children: [
-//             // Connection Status Card
-//             _buildConnectionCard(),
-//             const SizedBox(height: 16),
-
-//             // Status Card
-//             _buildStatusCard(),
-//             const SizedBox(height: 16),
-
-//             // Statistics
-//             _buildStatisticsRow(),
-//             const SizedBox(height: 16),
-
-//             // Live Gyroscope Data
-//             _buildGyroscopeCard(),
-//             const SizedBox(height: 16),
-
-//             // Accelerometer Data
-//             _buildAccelerometerCard(),
-//             const SizedBox(height: 16),
-
-//             // Turn Rate Graph
-//             _buildTurnRateGraph(),
-//             const SizedBox(height: 16),
-
-//             // Reset Button
-//             ElevatedButton.icon(
-//               onPressed: _resetCounters,
-//               icon: const Icon(Icons.refresh),
-//               label: const Text('Reset Counters'),
-//               style: ElevatedButton.styleFrom(
-//                 padding: const EdgeInsets.all(16),
-//               ),
-//             ),
-//           ],
-//         ),
-//       ),
-//     );
-//   }
-
-//   Widget _buildConnectionCard() {
-//     return Card(
-//       color: isConnected ? Colors.green[50] : Colors.grey[100],
-//       elevation: 4,
-//       child: Padding(
-//         padding: const EdgeInsets.all(16),
-//         child: Column(
-//           children: [
-//             Row(
-//               mainAxisAlignment: MainAxisAlignment.spaceBetween,
-//               children: [
-//                 Flexible(
-//                   child: Row(
-//                     children: [
-//                       Icon(
-//                         isConnected
-//                             ? Icons.bluetooth_connected
-//                             : Icons.bluetooth_disabled,
-//                         color: isConnected ? Colors.green : Colors.grey,
-//                         size: 28,
-//                       ),
-//                       const SizedBox(width: 12),
-//                       Flexible(
-//                         child: Column(
-//                           crossAxisAlignment: CrossAxisAlignment.start,
-//                           children: [
-//                             const Text(
-//                               'ESP32 Connection',
-//                               style: TextStyle(
-//                                 fontSize: 16,
-//                                 fontWeight: FontWeight.bold,
-//                               ),
-//                             ),
-//                             Text(
-//                               connectionStatus,
-//                               style: TextStyle(
-//                                 fontSize: 14,
-//                                 color: isConnected
-//                                     ? Colors.green
-//                                     : Colors.grey[700],
-//                               ),
-//                               overflow: TextOverflow.ellipsis,
-//                             ),
-//                           ],
-//                         ),
-//                       ),
-//                     ],
-//                   ),
-//                 ),
-//                 if (!isConnected && !isConnecting)
-//                   ElevatedButton.icon(
-//                     onPressed: _scanAndConnect,
-//                     icon: const Icon(Icons.search, size: 18),
-//                     label: const Text('Connect'),
-//                     style: ElevatedButton.styleFrom(
-//                       backgroundColor: Colors.blue,
-//                       foregroundColor: Colors.white,
-//                     ),
-//                   ),
-//                 if (isConnecting)
-//                   const SizedBox(
-//                     width: 20,
-//                     height: 20,
-//                     child: CircularProgressIndicator(strokeWidth: 2),
-//                   ),
-//               ],
-//             ),
-//             if (!isConnected && !isConnecting)
-//               Padding(
-//                 padding: const EdgeInsets.only(top: 12),
-//                 child: Text(
-//                   'Device name: $targetDeviceName\n(Pair in Bluetooth settings first)',
-//                   style: TextStyle(fontSize: 12, color: Colors.grey[600]),
-//                   textAlign: TextAlign.center,
-//                 ),
-//               ),
-//           ],
-//         ),
-//       ),
-//     );
-//   }
-
-//   Widget _buildStatusCard() {
-//     return Card(
-//       color: statusColor.withOpacity(0.2),
-//       elevation: 4,
-//       child: Padding(
-//         padding: const EdgeInsets.all(20),
-//         child: Column(
-//           children: [
-//             Icon(_getStatusIcon(), size: 48, color: statusColor),
-//             const SizedBox(height: 12),
-//             Text(
-//               currentTurnStatus,
-//               style: TextStyle(
-//                 fontSize: 24,
-//                 fontWeight: FontWeight.bold,
-//                 color: statusColor,
-//               ),
-//             ),
-//             const SizedBox(height: 8),
-//             Text(
-//               'Turn Rate: ${gyroZ.abs().toStringAsFixed(1)}°/s',
-//               style: const TextStyle(fontSize: 16),
-//             ),
-//           ],
-//         ),
-//       ),
-//     );
-//   }
-
-//   IconData _getStatusIcon() {
-//     if (currentTurnStatus == "RISKY TURN!") return Icons.warning_amber;
-//     if (currentTurnStatus == "Sharp Turn") return Icons.turn_sharp_right;
-//     return Icons.check_circle;
-//   }
-
-//   Widget _buildStatisticsRow() {
-//     return Row(
-//       children: [
-//         Expanded(
-//           child: _buildStatCard(
-//             'Sharp Turns',
-//             sharpTurnCount.toString(),
-//             Icons.turn_right,
-//             Colors.orange,
-//           ),
-//         ),
-//         const SizedBox(width: 16),
-//         Expanded(
-//           child: _buildStatCard(
-//             'Risky Turns',
-//             riskyTurnCount.toString(),
-//             Icons.warning,
-//             Colors.red,
-//           ),
-//         ),
-//       ],
-//     );
-//   }
-
-//   Widget _buildStatCard(
-//     String label,
-//     String value,
-//     IconData icon,
-//     Color color,
-//   ) {
-//     return Card(
-//       elevation: 3,
-//       child: Padding(
-//         padding: const EdgeInsets.all(16),
-//         child: Column(
-//           children: [
-//             Icon(icon, size: 32, color: color),
-//             const SizedBox(height: 8),
-//             Text(
-//               value,
-//               style: TextStyle(
-//                 fontSize: 28,
-//                 fontWeight: FontWeight.bold,
-//                 color: color,
-//               ),
-//             ),
-//             Text(
-//               label,
-//               style: const TextStyle(fontSize: 14),
-//               textAlign: TextAlign.center,
-//             ),
-//           ],
-//         ),
-//       ),
-//     );
-//   }
-
-//   Widget _buildGyroscopeCard() {
-//     return Card(
-//       elevation: 3,
-//       child: Padding(
-//         padding: const EdgeInsets.all(16),
-//         child: Column(
-//           crossAxisAlignment: CrossAxisAlignment.start,
-//           children: [
-//             const Text(
-//               'Gyroscope (°/s)',
-//               style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
-//             ),
-//             const SizedBox(height: 12),
-//             _buildDataRow('X-axis (Roll)', gyroX, Colors.red),
-//             _buildDataRow('Y-axis (Pitch)', gyroY, Colors.green),
-//             _buildDataRow('Z-axis (Yaw)', gyroZ, Colors.blue),
-//           ],
-//         ),
-//       ),
-//     );
-//   }
-
-//   Widget _buildAccelerometerCard() {
-//     return Card(
-//       elevation: 3,
-//       child: Padding(
-//         padding: const EdgeInsets.all(16),
-//         child: Column(
-//           crossAxisAlignment: CrossAxisAlignment.start,
-//           children: [
-//             const Text(
-//               'Accelerometer (m/s²)',
-//               style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
-//             ),
-//             const SizedBox(height: 12),
-//             _buildDataRow('X-axis', accelX, Colors.red),
-//             _buildDataRow('Y-axis', accelY, Colors.green),
-//             _buildDataRow('Z-axis', accelZ, Colors.blue),
-//           ],
-//         ),
-//       ),
-//     );
-//   }
-
-//   Widget _buildDataRow(String label, double value, Color color) {
-//     return Padding(
-//       padding: const EdgeInsets.symmetric(vertical: 4),
-//       child: Row(
-//         mainAxisAlignment: MainAxisAlignment.spaceBetween,
-//         children: [
-//           Text(label, style: const TextStyle(fontSize: 16)),
-//           Row(
-//             children: [
-//               Container(
-//                 width: 100,
-//                 height: 20,
-//                 decoration: BoxDecoration(
-//                   color: color.withOpacity(0.2),
-//                   borderRadius: BorderRadius.circular(4),
-//                 ),
-//                 child: FractionallySizedBox(
-//                   widthFactor: (value.abs() / 200).clamp(0.0, 1.0),
-//                   alignment: Alignment.centerLeft,
-//                   child: Container(
-//                     decoration: BoxDecoration(
-//                       color: color,
-//                       borderRadius: BorderRadius.circular(4),
-//                     ),
-//                   ),
-//                 ),
-//               ),
-//               const SizedBox(width: 8),
-//               SizedBox(
-//                 width: 70,
-//                 child: Text(
-//                   value.toStringAsFixed(2),
-//                   style: TextStyle(
-//                     fontSize: 16,
-//                     fontWeight: FontWeight.bold,
-//                     color: color,
-//                   ),
-//                   textAlign: TextAlign.right,
-//                 ),
-//               ),
-//             ],
-//           ),
-//         ],
-//       ),
-//     );
-//   }
-
-//   Widget _buildTurnRateGraph() {
-//     return Card(
-//       elevation: 3,
-//       child: Padding(
-//         padding: const EdgeInsets.all(16),
-//         child: Column(
-//           crossAxisAlignment: CrossAxisAlignment.start,
-//           children: [
-//             const Text(
-//               'Turn Rate History',
-//               style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
-//             ),
-//             const SizedBox(height: 12),
-//             SizedBox(
-//               height: 150,
-//               child: CustomPaint(
-//                 size: Size.infinite,
-//                 painter: GraphPainter(
-//                   data: gyroZHistory,
-//                   sharpThreshold: sharpTurnThreshold,
-//                   riskyThreshold: riskyTurnThreshold,
-//                 ),
-//               ),
-//             ),
-//             const SizedBox(height: 8),
-//             Row(
-//               mainAxisAlignment: MainAxisAlignment.center,
-//               children: [
-//                 _buildLegend('Normal', Colors.green),
-//                 const SizedBox(width: 12),
-//                 _buildLegend('Sharp', Colors.orange),
-//                 const SizedBox(width: 12),
-//                 _buildLegend('Risky', Colors.red),
-//               ],
-//             ),
-//           ],
-//         ),
-//       ),
-//     );
-//   }
-
-//   Widget _buildLegend(String label, Color color) {
-//     return Row(
-//       children: [
-//         Container(width: 16, height: 3, color: color),
-//         const SizedBox(width: 4),
-//         Text(label, style: const TextStyle(fontSize: 12)),
-//       ],
-//     );
-//   }
-
-//   void _resetCounters() {
-//     setState(() {
-//       sharpTurnCount = 0;
-//       riskyTurnCount = 0;
-//       gyroZHistory.clear();
-//     });
-//   }
-// }
-
-// // Custom painter for the turn rate graph
-// class GraphPainter extends CustomPainter {
-//   final List<double> data;
-//   final double sharpThreshold;
-//   final double riskyThreshold;
-
-//   GraphPainter({
-//     required this.data,
-//     required this.sharpThreshold,
-//     required this.riskyThreshold,
-//   });
-
-//   @override
-//   void paint(Canvas canvas, Size size) {
-//     if (data.isEmpty) return;
-
-//     // Draw threshold lines
-//     final sharpPaint = Paint()
-//       ..color = Colors.orange.withOpacity(0.3)
-//       ..strokeWidth = 2
-//       ..style = PaintingStyle.stroke;
-
-//     final riskyPaint = Paint()
-//       ..color = Colors.red.withOpacity(0.3)
-//       ..strokeWidth = 2
-//       ..style = PaintingStyle.stroke;
-
-//     double sharpY = size.height - (sharpThreshold / 200 * size.height);
-//     double riskyY = size.height - (riskyThreshold / 200 * size.height);
-
-//     canvas.drawLine(Offset(0, sharpY), Offset(size.width, sharpY), sharpPaint);
-//     canvas.drawLine(Offset(0, riskyY), Offset(size.width, riskyY), riskyPaint);
-
-//     // Draw data line
-//     final paint = Paint()
-//       ..color = Colors.blue
-//       ..strokeWidth = 2
-//       ..style = PaintingStyle.stroke;
-
-//     final path = Path();
-
-//     for (int i = 0; i < data.length; i++) {
-//       double x = (i / (data.length - 1)) * size.width;
-//       double y = size.height - (data[i].clamp(0, 200) / 200 * size.height);
-
-//       if (i == 0) {
-//         path.moveTo(x, y);
-//       } else {
-//         path.lineTo(x, y);
-//       }
-//     }
-
-//     canvas.drawPath(path, paint);
-//   }
-
-//   @override
-//   bool shouldRepaint(GraphPainter oldDelegate) => true;
-// }
-
-
 import 'package:flutter/material.dart';
 import 'dart:async';
 import 'dart:convert';
+import 'dart:math';
 import 'dart:typed_data';
 import 'package:flutter_bluetooth_serial/flutter_bluetooth_serial.dart';
 import 'package:permission_handler/permission_handler.dart';
@@ -677,30 +10,33 @@ import 'package:intl/intl.dart';
 import 'package:smart_helmet_app/models/journey_model.dart';
 import 'package:smart_helmet_app/providers/journey_provider.dart';
 import 'package:smart_helmet_app/services/journey_service.dart';
+import 'JourneyReportScreen.dart';
+import 'dummy_journey_data.dart';
 
 class Member3Page extends StatefulWidget {
   final JourneyData? completedJourney; // Optional: passed when ride just ended
-  
+
   const Member3Page({super.key, this.completedJourney});
 
   @override
   State<Member3Page> createState() => _Member3PageState();
 }
 
-class _Member3PageState extends State<Member3Page> with SingleTickerProviderStateMixin {
+class _Member3PageState extends State<Member3Page>
+    with SingleTickerProviderStateMixin {
   // Tab controller
   late TabController _tabController;
-  
+
   // Journey Service
   final JourneyService _journeyService = JourneyService();
   List<JourneyData> _journeyHistory = [];
   JourneyData? _selectedJourney;
   bool _isLoadingHistory = false;
-  
+
   // Show ride summary view
   bool _showRideSummary = false;
   JourneyData? _completedRide;
-  
+
   // IMU Data from MPU6050 (Live Monitoring)
   double gyroX = 0.0;
   double gyroY = 0.0;
@@ -731,13 +67,23 @@ class _Member3PageState extends State<Member3Page> with SingleTickerProviderStat
   String _dataBuffer = "";
   static const String targetDeviceName = "SmartHelmet_ESP32";
 
+  // Current GPS state
+  double currentSpeed = 0.0;
+  double currentLat = 0.0;
+  double currentLng = 0.0;
+
+  // Distance tracking
+  double totalDistanceKm = 0.0;
+  double? lastLat;
+  double? lastLng;
+
   @override
   void initState() {
     super.initState();
     _tabController = TabController(length: 2, vsync: this);
     _requestPermissions();
     _loadJourneyHistory();
-    
+
     // Check if a completed journey was passed (ride just ended)
     if (widget.completedJourney != null) {
       _showRideSummary = true;
@@ -782,66 +128,233 @@ class _Member3PageState extends State<Member3Page> with SingleTickerProviderStat
   }
 
   // Scan and connect to device
+  // ⚠️ UPDATED: Scan and connect with better error handling
   Future<void> _scanAndConnect() async {
     if (!mounted) return;
+
     setState(() {
       isConnecting = true;
-      connectionStatus = "Scanning...";
+      connectionStatus = "Checking Bluetooth...";
     });
 
     try {
-      List<BluetoothDevice> bondedDevices =
-          await FlutterBluetoothSerial.instance.getBondedDevices();
+      // Check if Bluetooth is enabled
+      bool? isEnabled = await FlutterBluetoothSerial.instance.isEnabled;
 
+      if (isEnabled == null || !isEnabled) {
+        if (!mounted) return;
+        setState(() {
+          connectionStatus = "Bluetooth is OFF. Please enable it.";
+          isConnecting = false;
+        });
+
+        // Show dialog to enable Bluetooth
+        bool? turnOn = await showDialog<bool>(
+          context: context,
+          builder: (context) => AlertDialog(
+            title: const Text('Bluetooth Disabled'),
+            content: const Text(
+                'Bluetooth is turned off. Would you like to enable it?'),
+            actions: [
+              TextButton(
+                onPressed: () => Navigator.pop(context, false),
+                child: const Text('Cancel'),
+              ),
+              ElevatedButton(
+                onPressed: () => Navigator.pop(context, true),
+                child: const Text('Enable'),
+              ),
+            ],
+          ),
+        );
+
+        if (turnOn == true) {
+          await FlutterBluetoothSerial.instance.requestEnable();
+          await Future.delayed(const Duration(seconds: 2));
+        } else {
+          return;
+        }
+      }
+
+      setState(() => connectionStatus = "Scanning for devices...");
+
+      // Get bonded devices
+      List<BluetoothDevice> bondedDevices = [];
+      try {
+        bondedDevices =
+            await FlutterBluetoothSerial.instance.getBondedDevices();
+        print('Found ${bondedDevices.length} paired devices'); // Debug
+      } catch (e) {
+        print('Error getting bonded devices: $e');
+        if (!mounted) return;
+        setState(() {
+          connectionStatus = "Error accessing Bluetooth: $e";
+          isConnecting = false;
+        });
+        return;
+      }
+
+      // Find target device
       BluetoothDevice? targetDevice;
       for (BluetoothDevice device in bondedDevices) {
+        print('Found device: ${device.name} - ${device.address}'); // Debug
         if (device.name == targetDeviceName) {
           targetDevice = device;
           break;
         }
       }
 
+      // If not found, show device selection
       if (targetDevice == null) {
         if (!mounted) return;
+        targetDevice = await _showDeviceSelectionDialog(bondedDevices);
+
+        if (targetDevice == null) {
+          if (!mounted) return;
+          setState(() {
+            connectionStatus = "No device selected";
+            isConnecting = false;
+          });
+          return;
+        }
+      }
+
+      if (!mounted) return;
+      setState(
+          () => connectionStatus = "Connecting to ${targetDevice!.name}...");
+
+      print('Attempting to connect to: ${targetDevice.address}'); // Debug
+
+      // Connect with timeout
+      BluetoothConnection connection;
+      try {
+        connection = await BluetoothConnection.toAddress(targetDevice.address)
+            .timeout(const Duration(seconds: 10));
+      } catch (e) {
+        print('Connection timeout or error: $e'); // Debug
+        if (!mounted) return;
         setState(() {
-          connectionStatus = "Device not paired";
+          connectionStatus = "Connection timeout. Try again.";
+          isConnected = false;
           isConnecting = false;
         });
         return;
       }
 
       if (!mounted) return;
-      setState(() => connectionStatus = "Connecting...");
-
-      BluetoothConnection connection =
-          await BluetoothConnection.toAddress(targetDevice.address);
-
-      if (!mounted) return;
       setState(() {
         _connection = connection;
         isConnected = true;
         isConnecting = false;
-        connectionStatus = "Connected";
+        connectionStatus = "Connected ✓";
       });
 
-      _connection!.input!.listen((Uint8List data) {
-        _handleIncomingData(data);
-      }).onDone(() {
-        if (mounted) {
-          setState(() {
-            isConnected = false;
-            connectionStatus = "Disconnected";
-          });
-        }
-      });
+      print('Successfully connected!'); // Debug
+
+      // Listen to incoming data
+      _connection!.input!.listen(
+        (Uint8List data) {
+          _handleIncomingData(data);
+        },
+        onDone: () {
+          print('Connection closed'); // Debug
+          if (mounted) {
+            setState(() {
+              isConnected = false;
+              connectionStatus = "Disconnected";
+            });
+          }
+        },
+        onError: (error) {
+          print('Connection error: $error'); // Debug
+          if (mounted) {
+            setState(() {
+              isConnected = false;
+              connectionStatus = "Connection error";
+            });
+          }
+        },
+      );
     } catch (e) {
+      print('General connection error: $e'); // Debug
       if (!mounted) return;
       setState(() {
-        connectionStatus = "Connection failed: $e";
+        connectionStatus = "Failed: ${e.toString().substring(0, 50)}...";
         isConnected = false;
         isConnecting = false;
       });
     }
+  }
+
+  // Show dialog to select a Bluetooth device
+  Future<BluetoothDevice?> _showDeviceSelectionDialog(
+      List<BluetoothDevice> bondedDevices) async {
+    return showDialog<BluetoothDevice>(
+      context: context,
+      builder: (BuildContext context) {
+        return AlertDialog(
+          title: const Text('Select Bluetooth Device'),
+          content: SizedBox(
+            width: double.maxFinite,
+            height: 300,
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                const Text(
+                  'Paired Devices:',
+                  style: TextStyle(fontWeight: FontWeight.bold),
+                ),
+                const SizedBox(height: 8),
+                if (bondedDevices.isEmpty)
+                  const Padding(
+                    padding: EdgeInsets.all(16.0),
+                    child: Text(
+                      'No paired devices found.\n\n'
+                      'Please pair your ESP32 first:\n'
+                      '1. Go to Android Settings → Bluetooth\n'
+                      '2. Find "SmartHelmet_ESP32"\n'
+                      '3. Tap to pair',
+                      style: TextStyle(color: Colors.grey),
+                    ),
+                  )
+                else
+                  Expanded(
+                    child: ListView.builder(
+                      shrinkWrap: true,
+                      itemCount: bondedDevices.length,
+                      itemBuilder: (context, index) {
+                        BluetoothDevice device = bondedDevices[index];
+                        return ListTile(
+                          leading: const Icon(Icons.bluetooth),
+                          title: Text(device.name ?? 'Unknown Device'),
+                          subtitle: Text(device.address),
+                          trailing: device.name == targetDeviceName
+                              ? const Icon(Icons.star, color: Colors.amber)
+                              : null,
+                          onTap: () => Navigator.of(context).pop(device),
+                        );
+                      },
+                    ),
+                  ),
+              ],
+            ),
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.of(context).pop(null),
+              child: const Text('Cancel'),
+            ),
+            TextButton(
+              onPressed: () async {
+                // Open system Bluetooth settings
+                await FlutterBluetoothSerial.instance.openSettings();
+              },
+              child: const Text('Open Bluetooth Settings'),
+            ),
+          ],
+        );
+      },
+    );
   }
 
   void _handleIncomingData(Uint8List data) {
@@ -859,16 +372,29 @@ class _Member3PageState extends State<Member3Page> with SingleTickerProviderStat
   void _parseIMUData(String jsonString) {
     try {
       Map<String, dynamic> data = json.decode(jsonString);
-      _processIMUData({
-        'gyroX': (data['gyroX'] ?? 0.0).toDouble(),
-        'gyroY': (data['gyroY'] ?? 0.0).toDouble(),
-        'gyroZ': (data['gyroZ'] ?? 0.0).toDouble(),
-        'accelX': (data['accelX'] ?? 0.0).toDouble(),
-        'accelY': (data['accelY'] ?? 0.0).toDouble(),
-        'accelZ': (data['accelZ'] ?? 0.0).toDouble(),
-      });
+
+      // Update GPS variables if they exist in the JSON
+      // Note: Ensure your ESP32 sends 'spd', 'lat', 'lng' keys!
+      double newSpeed = (data['spd'] ?? 0.0).toDouble();
+      double newLat = (data['lat'] ?? 0.0).toDouble();
+      double newLng = (data['lng'] ?? 0.0).toDouble();
+
+      _processIMUData(
+        imuData: {
+          'gyroX': (data['gyroX'] ?? 0.0).toDouble(),
+          'gyroY': (data['gyroY'] ?? 0.0).toDouble(),
+          'gyroZ': (data['gyroZ'] ?? 0.0).toDouble(),
+          'accelX': (data['accelX'] ?? 0.0).toDouble(),
+          'accelY': (data['accelY'] ?? 0.0).toDouble(),
+          'accelZ': (data['accelZ'] ?? 0.0).toDouble(),
+        },
+        speed: newSpeed,
+        lat: newLat,
+        lng: newLng,
+      );
     } catch (e) {
-      print('Error parsing IMU data: $e');
+      print('Error parsing Data: $e');
+      print('Raw data: $jsonString');
     }
   }
 
@@ -886,51 +412,80 @@ class _Member3PageState extends State<Member3Page> with SingleTickerProviderStat
     });
   }
 
-  void _processIMUData(Map<String, double> data) {
+  void _processIMUData({
+    required Map<String, double> imuData,
+    required double speed,
+    required double lat,
+    required double lng,
+  }) {
     if (!mounted) return;
-    
-    final journeyProvider = Provider.of<JourneyProvider>(context, listen: false);
-    
-    setState(() {
-      gyroX = data['gyroX']!;
-      gyroY = data['gyroY']!;
-      gyroZ = data['gyroZ']!;
-      accelX = data['accelX']!;
-      accelY = data['accelY']!;
-      accelZ = data['accelZ']!;
 
+    final journeyProvider =
+        Provider.of<JourneyProvider>(context, listen: false);
+
+    setState(() {
+      // 1. Update IMU UI variables
+      gyroX = imuData['gyroX']!;
+      gyroY = imuData['gyroY']!;
+      gyroZ = imuData['gyroZ']!;
+      accelX = imuData['accelX']!;
+      accelY = imuData['accelY']!;
+      accelZ = imuData['accelZ']!;
+
+      // 2. Update Graph History
       gyroZHistory.add(gyroZ.abs());
       if (gyroZHistory.length > maxHistoryLength) {
         gyroZHistory.removeAt(0);
       }
 
+      // 3. Process GPS Data (If valid)
+      if (lat != 0.0 && lng != 0.0) {
+        currentLat = lat;
+        currentLng = lng;
+        currentSpeed = speed;
+
+        // Calculate Distance using Haversine formula approximation
+        if (lastLat != null && lastLng != null) {
+          double dist = _calculateDistance(lastLat!, lastLng!, lat, lng);
+          totalDistanceKm += dist;
+        }
+
+        lastLat = lat;
+        lastLng = lng;
+
+        // Send to Provider
+        if (journeyProvider.isJourneyActive) {
+          journeyProvider.updateDistanceAndSpeed(totalDistanceKm, currentSpeed);
+        }
+      }
+
+      // 4. Turn Detection Logic
       double turnRate = gyroZ.abs();
 
       if (turnRate > riskyTurnThreshold) {
         currentTurnStatus = "RISKY TURN!";
         statusColor = Colors.red;
         riskyTurnCount++;
-        
-        // Add to journey if active
+
         if (journeyProvider.isJourneyActive) {
           journeyProvider.addTurnEvent(
             severity: 'risky',
             turnRate: turnRate,
-            latitude: 0.0, // Get from GPS
-            longitude: 0.0,
+            latitude: currentLat,
+            longitude: currentLng,
           );
         }
       } else if (turnRate > sharpTurnThreshold) {
         currentTurnStatus = "Sharp Turn";
         statusColor = Colors.orange;
         sharpTurnCount++;
-        
+
         if (journeyProvider.isJourneyActive) {
           journeyProvider.addTurnEvent(
             severity: 'sharp',
             turnRate: turnRate,
-            latitude: 0.0,
-            longitude: 0.0,
+            latitude: currentLat,
+            longitude: currentLng,
           );
         }
       } else {
@@ -938,6 +493,24 @@ class _Member3PageState extends State<Member3Page> with SingleTickerProviderStat
         statusColor = Colors.green;
       }
     });
+  }
+
+  // Haversine formula to calculate distance between two GPS points in km
+  double _calculateDistance(
+      double lat1, double lon1, double lat2, double lon2) {
+    const double earthRadius = 6371.0; // km
+    double dLat = _toRadians(lat2 - lat1);
+    double dLon = _toRadians(lon2 - lon1);
+    double a = (sin(dLat / 2) * sin(dLat / 2)) +
+        cos(_toRadians(lat1)) *
+            cos(_toRadians(lat2)) *
+            (sin(dLon / 2) * sin(dLon / 2));
+    double c = 2 * atan2(sqrt(a), sqrt(1 - a));
+    return earthRadius * c;
+  }
+
+  double _toRadians(double degree) {
+    return degree * (pi / 180);
   }
 
   @override
@@ -956,7 +529,8 @@ class _Member3PageState extends State<Member3Page> with SingleTickerProviderStat
         actions: [
           if (_tabController.index == 1)
             IconButton(
-              icon: Icon(isConnected ? Icons.bluetooth_connected : Icons.bluetooth),
+              icon: Icon(
+                  isConnected ? Icons.bluetooth_connected : Icons.bluetooth),
               onPressed: isConnected ? _disconnect : _scanAndConnect,
               tooltip: isConnected ? 'Disconnect' : 'Connect',
             ),
@@ -979,7 +553,7 @@ class _Member3PageState extends State<Member3Page> with SingleTickerProviderStat
     final duration = journey.endTime != null
         ? journey.endTime!.difference(journey.startTime)
         : Duration.zero;
-    
+
     final totalTurns = journey.sharpTurns + journey.riskyTurns;
     final riskLevel = journey.riskyTurns > 5 || totalTurns > 15
         ? 'High Risk'
@@ -1022,7 +596,8 @@ class _Member3PageState extends State<Member3Page> with SingleTickerProviderStat
                 ),
                 const SizedBox(height: 8),
                 Text(
-                  DateFormat('EEEE, MMM dd, yyyy • HH:mm').format(journey.startTime),
+                  DateFormat('EEEE, MMM dd, yyyy • HH:mm')
+                      .format(journey.startTime),
                   style: const TextStyle(fontSize: 14, color: Colors.white70),
                 ),
               ],
@@ -1033,7 +608,8 @@ class _Member3PageState extends State<Member3Page> with SingleTickerProviderStat
           // Route Info Card
           Card(
             elevation: 4,
-            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+            shape:
+                RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
             child: Padding(
               padding: const EdgeInsets.all(16),
               child: Column(
@@ -1045,14 +621,17 @@ class _Member3PageState extends State<Member3Page> with SingleTickerProviderStat
                       const SizedBox(width: 12),
                       const Text(
                         'Route',
-                        style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
+                        style: TextStyle(
+                            fontSize: 18, fontWeight: FontWeight.bold),
                       ),
                     ],
                   ),
                   const Divider(height: 24),
-                  _buildRouteRow(Icons.trip_origin, 'Start', journey.startLocation ?? 'Unknown', Colors.green),
+                  _buildRouteRow(Icons.trip_origin, 'Start',
+                      journey.startLocation ?? 'Unknown', Colors.green),
                   const SizedBox(height: 12),
-                  _buildRouteRow(Icons.place, 'Destination', journey.destination ?? 'Unknown', Colors.red),
+                  _buildRouteRow(Icons.place, 'Destination',
+                      journey.destination ?? 'Unknown', Colors.red),
                 ],
               ),
             ),
@@ -1062,17 +641,31 @@ class _Member3PageState extends State<Member3Page> with SingleTickerProviderStat
           // Stats Grid
           Row(
             children: [
-              Expanded(child: _buildSummaryStatCard('Duration', '${duration.inMinutes} min', Icons.timer, Colors.blue)),
+              Expanded(
+                  child: _buildSummaryStatCard('Duration',
+                      '${duration.inMinutes} min', Icons.timer, Colors.blue)),
               const SizedBox(width: 12),
-              Expanded(child: _buildSummaryStatCard('Distance', '${journey.totalDistance.toStringAsFixed(1)} km', Icons.straighten, Colors.purple)),
+              Expanded(
+                  child: _buildSummaryStatCard(
+                      'Distance',
+                      '${journey.totalDistance.toStringAsFixed(1)} km',
+                      Icons.straighten,
+                      Colors.purple)),
             ],
           ),
           const SizedBox(height: 12),
           Row(
             children: [
-              Expanded(child: _buildSummaryStatCard('Avg Speed', '${journey.averageSpeed.toStringAsFixed(1)} km/h', Icons.speed, Colors.teal)),
+              Expanded(
+                  child: _buildSummaryStatCard(
+                      'Avg Speed',
+                      '${journey.averageSpeed.toStringAsFixed(1)} km/h',
+                      Icons.speed,
+                      Colors.teal)),
               const SizedBox(width: 12),
-              Expanded(child: _buildSummaryStatCard('Risk Level', riskLevel, Icons.shield, riskColor)),
+              Expanded(
+                  child: _buildSummaryStatCard(
+                      'Risk Level', riskLevel, Icons.shield, riskColor)),
             ],
           ),
           const SizedBox(height: 16),
@@ -1080,7 +673,8 @@ class _Member3PageState extends State<Member3Page> with SingleTickerProviderStat
           // Turn Events Card
           Card(
             elevation: 4,
-            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+            shape:
+                RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
             child: Padding(
               padding: const EdgeInsets.all(16),
               child: Column(
@@ -1088,11 +682,13 @@ class _Member3PageState extends State<Member3Page> with SingleTickerProviderStat
                 children: [
                   Row(
                     children: [
-                      Icon(Icons.analytics, color: Colors.orange[700], size: 28),
+                      Icon(Icons.analytics,
+                          color: Colors.orange[700], size: 28),
                       const SizedBox(width: 12),
                       const Text(
                         'Turn Analysis',
-                        style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
+                        style: TextStyle(
+                            fontSize: 18, fontWeight: FontWeight.bold),
                       ),
                     ],
                   ),
@@ -1100,11 +696,13 @@ class _Member3PageState extends State<Member3Page> with SingleTickerProviderStat
                   Row(
                     children: [
                       Expanded(
-                        child: _buildTurnStat('Sharp Turns', journey.sharpTurns, Colors.orange),
+                        child: _buildTurnStat(
+                            'Sharp Turns', journey.sharpTurns, Colors.orange),
                       ),
                       Container(width: 1, height: 60, color: Colors.grey[300]),
                       Expanded(
-                        child: _buildTurnStat('Risky Turns', journey.riskyTurns, Colors.red),
+                        child: _buildTurnStat(
+                            'Risky Turns', journey.riskyTurns, Colors.red),
                       ),
                     ],
                   ),
@@ -1112,16 +710,20 @@ class _Member3PageState extends State<Member3Page> with SingleTickerProviderStat
                     const Divider(height: 24),
                     const Text(
                       'Turn Events Timeline',
-                      style: TextStyle(fontSize: 14, fontWeight: FontWeight.w600),
+                      style:
+                          TextStyle(fontSize: 14, fontWeight: FontWeight.w600),
                     ),
                     const SizedBox(height: 12),
-                    ...journey.turnEvents.take(5).map((event) => _buildTurnEventItem(event)),
+                    ...journey.turnEvents
+                        .take(5)
+                        .map((event) => _buildTurnEventItem(event)),
                     if (journey.turnEvents.length > 5)
                       Padding(
                         padding: const EdgeInsets.only(top: 8),
                         child: Text(
                           '+ ${journey.turnEvents.length - 5} more events',
-                          style: TextStyle(color: Colors.grey[600], fontSize: 12),
+                          style:
+                              TextStyle(color: Colors.grey[600], fontSize: 12),
                         ),
                       ),
                   ],
@@ -1169,7 +771,8 @@ class _Member3PageState extends State<Member3Page> with SingleTickerProviderStat
     );
   }
 
-  Widget _buildRouteRow(IconData icon, String label, String value, Color color) {
+  Widget _buildRouteRow(
+      IconData icon, String label, String value, Color color) {
     return Row(
       children: [
         Icon(icon, color: color, size: 20),
@@ -1177,15 +780,19 @@ class _Member3PageState extends State<Member3Page> with SingleTickerProviderStat
         Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            Text(label, style: TextStyle(fontSize: 12, color: Colors.grey[600])),
-            Text(value, style: const TextStyle(fontSize: 16, fontWeight: FontWeight.w500)),
+            Text(label,
+                style: TextStyle(fontSize: 12, color: Colors.grey[600])),
+            Text(value,
+                style:
+                    const TextStyle(fontSize: 16, fontWeight: FontWeight.w500)),
           ],
         ),
       ],
     );
   }
 
-  Widget _buildSummaryStatCard(String label, String value, IconData icon, Color color) {
+  Widget _buildSummaryStatCard(
+      String label, String value, IconData icon, Color color) {
     return Card(
       elevation: 2,
       shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
@@ -1267,6 +874,7 @@ class _Member3PageState extends State<Member3Page> with SingleTickerProviderStat
   }
 
   // Journey History Tab
+
   Widget _buildJourneyHistoryTab() {
     return RefreshIndicator(
       onRefresh: _loadJourneyHistory,
@@ -1277,7 +885,8 @@ class _Member3PageState extends State<Member3Page> with SingleTickerProviderStat
                   child: Column(
                     mainAxisAlignment: MainAxisAlignment.center,
                     children: [
-                      Icon(Icons.route_outlined, size: 80, color: Colors.grey[400]),
+                      Icon(Icons.route_outlined,
+                          size: 80, color: Colors.grey[400]),
                       const SizedBox(height: 16),
                       Text(
                         'No journeys recorded yet',
@@ -1288,11 +897,39 @@ class _Member3PageState extends State<Member3Page> with SingleTickerProviderStat
                         'Start a journey from Home Dashboard',
                         style: TextStyle(fontSize: 14, color: Colors.grey[500]),
                       ),
+                      const SizedBox(height: 24),
+                      // ADD THIS: Test with dummy data button
+                      ElevatedButton.icon(
+                        onPressed: _showDummyReport,
+                        icon: const Icon(Icons.science),
+                        label: const Text('View Sample Report'),
+                        style: ElevatedButton.styleFrom(
+                          backgroundColor: Colors.blue[700],
+                          foregroundColor: Colors.white,
+                          padding: const EdgeInsets.symmetric(
+                            horizontal: 24,
+                            vertical: 12,
+                          ),
+                        ),
+                      ),
                     ],
                   ),
                 )
               : Column(
                   children: [
+                    // ADD THIS: Test button at top of list
+                    Padding(
+                      padding: const EdgeInsets.all(16),
+                      child: ElevatedButton.icon(
+                        onPressed: _showDummyReport,
+                        icon: const Icon(Icons.science),
+                        label: const Text('View Sample Report'),
+                        style: ElevatedButton.styleFrom(
+                          backgroundColor: Colors.orange[600],
+                          foregroundColor: Colors.white,
+                        ),
+                      ),
+                    ),
                     Expanded(
                       child: ListView.builder(
                         padding: const EdgeInsets.all(16),
@@ -1312,7 +949,7 @@ class _Member3PageState extends State<Member3Page> with SingleTickerProviderStat
     final duration = journey.endTime != null
         ? journey.endTime!.difference(journey.startTime)
         : Duration.zero;
-    
+
     return Card(
       margin: const EdgeInsets.only(bottom: 16),
       elevation: 3,
@@ -1340,8 +977,10 @@ class _Member3PageState extends State<Member3Page> with SingleTickerProviderStat
                           ),
                         ),
                         Text(
-                          DateFormat('MMM dd, yyyy • HH:mm').format(journey.startTime),
-                          style: TextStyle(color: Colors.grey[600], fontSize: 13),
+                          DateFormat('MMM dd, yyyy • HH:mm')
+                              .format(journey.startTime),
+                          style:
+                              TextStyle(color: Colors.grey[600], fontSize: 13),
                         ),
                       ],
                     ),
@@ -1388,7 +1027,7 @@ class _Member3PageState extends State<Member3Page> with SingleTickerProviderStat
     final totalTurns = journey.sharpTurns + journey.riskyTurns;
     Color color;
     String label;
-    
+
     if (journey.riskyTurns > 5 || totalTurns > 15) {
       color = Colors.red;
       label = 'HIGH RISK';
@@ -1399,7 +1038,7 @@ class _Member3PageState extends State<Member3Page> with SingleTickerProviderStat
       color = Colors.green;
       label = 'LOW RISK';
     }
-    
+
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
       decoration: BoxDecoration(
@@ -1418,7 +1057,8 @@ class _Member3PageState extends State<Member3Page> with SingleTickerProviderStat
     );
   }
 
-  Widget _buildStatColumn(IconData icon, String value, String label, [Color? color]) {
+  Widget _buildStatColumn(IconData icon, String value, String label,
+      [Color? color]) {
     return Column(
       children: [
         Icon(icon, size: 24, color: color ?? Colors.grey[700]),
@@ -1440,12 +1080,32 @@ class _Member3PageState extends State<Member3Page> with SingleTickerProviderStat
   }
 
   void _showJourneyDetails(JourneyData journey) {
-    showModalBottomSheet(
-      context: context,
-      isScrollControlled: true,
-      backgroundColor: Colors.transparent,
-      builder: (context) => JourneyDetailsSheet(journey: journey),
+    // Navigate to full report screen
+    Navigator.push(
+      context,
+      MaterialPageRoute(
+        builder: (context) => JourneyReportScreen(journey: journey),
+      ),
     );
+  }
+
+  // Method to show dummy report directly for testing
+  void _showDummyReport() {
+    final dummyJourney = DummyJourneyData.getSampleJourney();
+    Navigator.push(
+      context,
+      MaterialPageRoute(
+        builder: (context) => JourneyReportScreen(journey: dummyJourney),
+      ),
+    );
+  }
+
+  // Method to load dummy history for testing
+  void _loadDummyHistory() {
+    setState(() {
+      _journeyHistory = DummyJourneyData.getSampleJourneyHistory();
+      _isLoadingHistory = false;
+    });
   }
 
   // Live Monitoring Tab
@@ -1458,6 +1118,8 @@ class _Member3PageState extends State<Member3Page> with SingleTickerProviderStat
           _buildConnectionCard(),
           const SizedBox(height: 16),
           _buildStatusCard(),
+          const SizedBox(height: 16),
+          _buildGPSCard(),
           const SizedBox(height: 16),
           _buildStatisticsRow(),
           const SizedBox(height: 16),
@@ -1494,7 +1156,9 @@ class _Member3PageState extends State<Member3Page> with SingleTickerProviderStat
                   child: Row(
                     children: [
                       Icon(
-                        isConnected ? Icons.bluetooth_connected : Icons.bluetooth_disabled,
+                        isConnected
+                            ? Icons.bluetooth_connected
+                            : Icons.bluetooth_disabled,
                         color: isConnected ? Colors.green : Colors.grey,
                         size: 28,
                       ),
@@ -1503,10 +1167,16 @@ class _Member3PageState extends State<Member3Page> with SingleTickerProviderStat
                         child: Column(
                           crossAxisAlignment: CrossAxisAlignment.start,
                           children: [
-                            const Text('ESP32 Connection', style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold)),
+                            const Text('ESP32 Connection',
+                                style: TextStyle(
+                                    fontSize: 16, fontWeight: FontWeight.bold)),
                             Text(
                               connectionStatus,
-                              style: TextStyle(fontSize: 14, color: isConnected ? Colors.green : Colors.grey[700]),
+                              style: TextStyle(
+                                  fontSize: 14,
+                                  color: isConnected
+                                      ? Colors.green
+                                      : Colors.grey[700]),
                               overflow: TextOverflow.ellipsis,
                             ),
                           ],
@@ -1526,7 +1196,10 @@ class _Member3PageState extends State<Member3Page> with SingleTickerProviderStat
                     ),
                   ),
                 if (isConnecting)
-                  const SizedBox(width: 20, height: 20, child: CircularProgressIndicator(strokeWidth: 2)),
+                  const SizedBox(
+                      width: 20,
+                      height: 20,
+                      child: CircularProgressIndicator(strokeWidth: 2)),
               ],
             ),
           ],
@@ -1545,9 +1218,14 @@ class _Member3PageState extends State<Member3Page> with SingleTickerProviderStat
           children: [
             Icon(_getStatusIcon(), size: 48, color: statusColor),
             const SizedBox(height: 12),
-            Text(currentTurnStatus, style: TextStyle(fontSize: 24, fontWeight: FontWeight.bold, color: statusColor)),
+            Text(currentTurnStatus,
+                style: TextStyle(
+                    fontSize: 24,
+                    fontWeight: FontWeight.bold,
+                    color: statusColor)),
             const SizedBox(height: 8),
-            Text('Turn Rate: ${gyroZ.abs().toStringAsFixed(1)}°/s', style: const TextStyle(fontSize: 16)),
+            Text('Turn Rate: ${gyroZ.abs().toStringAsFixed(1)}°/s',
+                style: const TextStyle(fontSize: 16)),
           ],
         ),
       ),
@@ -1563,14 +1241,19 @@ class _Member3PageState extends State<Member3Page> with SingleTickerProviderStat
   Widget _buildStatisticsRow() {
     return Row(
       children: [
-        Expanded(child: _buildStatCard('Sharp Turns', sharpTurnCount.toString(), Icons.turn_right, Colors.orange)),
+        Expanded(
+            child: _buildStatCard('Sharp Turns', sharpTurnCount.toString(),
+                Icons.turn_right, Colors.orange)),
         const SizedBox(width: 16),
-        Expanded(child: _buildStatCard('Risky Turns', riskyTurnCount.toString(), Icons.warning, Colors.red)),
+        Expanded(
+            child: _buildStatCard('Risky Turns', riskyTurnCount.toString(),
+                Icons.warning, Colors.red)),
       ],
     );
   }
 
-  Widget _buildStatCard(String label, String value, IconData icon, Color color) {
+  Widget _buildStatCard(
+      String label, String value, IconData icon, Color color) {
     return Card(
       elevation: 3,
       child: Padding(
@@ -1579,8 +1262,12 @@ class _Member3PageState extends State<Member3Page> with SingleTickerProviderStat
           children: [
             Icon(icon, size: 32, color: color),
             const SizedBox(height: 8),
-            Text(value, style: TextStyle(fontSize: 28, fontWeight: FontWeight.bold, color: color)),
-            Text(label, style: const TextStyle(fontSize: 14), textAlign: TextAlign.center),
+            Text(value,
+                style: TextStyle(
+                    fontSize: 28, fontWeight: FontWeight.bold, color: color)),
+            Text(label,
+                style: const TextStyle(fontSize: 14),
+                textAlign: TextAlign.center),
           ],
         ),
       ),
@@ -1595,7 +1282,8 @@ class _Member3PageState extends State<Member3Page> with SingleTickerProviderStat
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            const Text('Gyroscope (°/s)', style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
+            const Text('Gyroscope (°/s)',
+                style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
             const SizedBox(height: 12),
             _buildDataRow('X-axis (Roll)', gyroX, Colors.red),
             _buildDataRow('Y-axis (Pitch)', gyroY, Colors.green),
@@ -1614,7 +1302,8 @@ class _Member3PageState extends State<Member3Page> with SingleTickerProviderStat
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            const Text('Accelerometer (m/s²)', style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
+            const Text('Accelerometer (m/s²)',
+                style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
             const SizedBox(height: 12),
             _buildDataRow('X-axis', accelX, Colors.red),
             _buildDataRow('Y-axis', accelY, Colors.green),
@@ -1645,7 +1334,8 @@ class _Member3PageState extends State<Member3Page> with SingleTickerProviderStat
                   widthFactor: (value.abs() / 200).clamp(0.0, 1.0),
                   alignment: Alignment.centerLeft,
                   child: Container(
-                    decoration: BoxDecoration(color: color, borderRadius: BorderRadius.circular(4)),
+                    decoration: BoxDecoration(
+                        color: color, borderRadius: BorderRadius.circular(4)),
                   ),
                 ),
               ),
@@ -1654,7 +1344,8 @@ class _Member3PageState extends State<Member3Page> with SingleTickerProviderStat
                 width: 70,
                 child: Text(
                   value.toStringAsFixed(2),
-                  style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold, color: color),
+                  style: TextStyle(
+                      fontSize: 16, fontWeight: FontWeight.bold, color: color),
                   textAlign: TextAlign.right,
                 ),
               ),
@@ -1673,13 +1364,17 @@ class _Member3PageState extends State<Member3Page> with SingleTickerProviderStat
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            const Text('Turn Rate History', style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
+            const Text('Turn Rate History',
+                style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
             const SizedBox(height: 12),
             SizedBox(
               height: 150,
               child: CustomPaint(
                 size: Size.infinite,
-                painter: GraphPainter(data: gyroZHistory, sharpThreshold: sharpTurnThreshold, riskyThreshold: riskyTurnThreshold),
+                painter: GraphPainter(
+                    data: gyroZHistory,
+                    sharpThreshold: sharpTurnThreshold,
+                    riskyThreshold: riskyTurnThreshold),
               ),
             ),
             const SizedBox(height: 8),
@@ -1715,6 +1410,70 @@ class _Member3PageState extends State<Member3Page> with SingleTickerProviderStat
       riskyTurnCount = 0;
       gyroZHistory.clear();
     });
+  }
+
+  // ⚠️ NEW: GPS Data Card
+  Widget _buildGPSCard() {
+    final hasFix = currentLat != 0.0 && currentLng != 0.0;
+
+    return Card(
+      elevation: 3,
+      child: Padding(
+        padding: const EdgeInsets.all(16),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Row(
+              children: [
+                Icon(
+                  hasFix ? Icons.gps_fixed : Icons.gps_not_fixed,
+                  color: hasFix ? Colors.green : Colors.grey,
+                  size: 24,
+                ),
+                const SizedBox(width: 12),
+                const Text(
+                  'GPS Data',
+                  style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
+                ),
+              ],
+            ),
+            const SizedBox(height: 12),
+            _buildGPSRow('Latitude',
+                currentLat != 0.0 ? currentLat.toStringAsFixed(6) : 'No Fix'),
+            _buildGPSRow('Longitude',
+                currentLng != 0.0 ? currentLng.toStringAsFixed(6) : 'No Fix'),
+            _buildGPSRow(
+                'Speed',
+                currentSpeed != 0.0
+                    ? '${currentSpeed.toStringAsFixed(1)} km/h'
+                    : '0.0 km/h'),
+            _buildGPSRow(
+                'Distance', '${totalDistanceKm.toStringAsFixed(2)} km'),
+            _buildGPSRow('Status', hasFix ? '✓ GPS Fix' : '✗ Searching...'),
+          ],
+        ),
+      ),
+    );
+  }
+
+// ⚠️ NEW: GPS Row Builder
+  Widget _buildGPSRow(String label, String value) {
+    return Padding(
+      padding: const EdgeInsets.symmetric(vertical: 4),
+      child: Row(
+        mainAxisAlignment: MainAxisAlignment.spaceBetween,
+        children: [
+          Text(label, style: const TextStyle(fontSize: 14, color: Colors.grey)),
+          Text(
+            value,
+            style: const TextStyle(
+              fontSize: 14,
+              fontWeight: FontWeight.w600,
+            ),
+          ),
+        ],
+      ),
+    );
   }
 }
 
@@ -1758,29 +1517,37 @@ class JourneyDetailsSheet extends StatelessWidget {
                   children: [
                     Text(
                       journey.destination ?? 'Journey Details',
-                      style: const TextStyle(fontSize: 24, fontWeight: FontWeight.bold),
+                      style: const TextStyle(
+                          fontSize: 24, fontWeight: FontWeight.bold),
                     ),
                     const SizedBox(height: 8),
                     Text(
-                      DateFormat('EEEE, MMM dd, yyyy • HH:mm').format(journey.startTime),
+                      DateFormat('EEEE, MMM dd, yyyy • HH:mm')
+                          .format(journey.startTime),
                       style: TextStyle(fontSize: 16, color: Colors.grey[600]),
                     ),
                     const SizedBox(height: 24),
                     _buildDetailCard(
                       'Journey Summary',
                       [
-                        _buildDetailRow(Icons.route, 'Distance', '${journey.totalDistance.toStringAsFixed(2)} km'),
-                        _buildDetailRow(Icons.timer, 'Duration', '${duration.inMinutes} minutes'),
-                        _buildDetailRow(Icons.speed, 'Avg Speed', '${journey.averageSpeed.toStringAsFixed(1)} km/h'),
+                        _buildDetailRow(Icons.route, 'Distance',
+                            '${journey.totalDistance.toStringAsFixed(2)} km'),
+                        _buildDetailRow(Icons.timer, 'Duration',
+                            '${duration.inMinutes} minutes'),
+                        _buildDetailRow(Icons.speed, 'Avg Speed',
+                            '${journey.averageSpeed.toStringAsFixed(1)} km/h'),
                       ],
                     ),
                     const SizedBox(height: 16),
                     _buildDetailCard(
                       'Risk Assessment',
                       [
-                        _buildDetailRow(Icons.turn_sharp_right, 'Sharp Turns', '${journey.sharpTurns}', Colors.orange),
-                        _buildDetailRow(Icons.warning, 'Risky Turns', '${journey.riskyTurns}', Colors.red),
-                        _buildDetailRow(Icons.assessment, 'Total Events', '${journey.turnEvents.length}'),
+                        _buildDetailRow(Icons.turn_sharp_right, 'Sharp Turns',
+                            '${journey.sharpTurns}', Colors.orange),
+                        _buildDetailRow(Icons.warning, 'Risky Turns',
+                            '${journey.riskyTurns}', Colors.red),
+                        _buildDetailRow(Icons.assessment, 'Total Events',
+                            '${journey.turnEvents.length}'),
                       ],
                     ),
                     const SizedBox(height: 24),
@@ -1788,7 +1555,9 @@ class JourneyDetailsSheet extends StatelessWidget {
                       onPressed: () {
                         // TODO: Generate PDF report
                         ScaffoldMessenger.of(context).showSnackBar(
-                          const SnackBar(content: Text('Generate Report feature coming soon!')),
+                          const SnackBar(
+                              content:
+                                  Text('Generate Report feature coming soon!')),
                         );
                       },
                       icon: const Icon(Icons.picture_as_pdf),
@@ -1816,7 +1585,9 @@ class JourneyDetailsSheet extends StatelessWidget {
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            Text(title, style: const TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
+            Text(title,
+                style:
+                    const TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
             const Divider(height: 24),
             ...children,
           ],
@@ -1825,7 +1596,8 @@ class JourneyDetailsSheet extends StatelessWidget {
     );
   }
 
-  Widget _buildDetailRow(IconData icon, String label, String value, [Color? color]) {
+  Widget _buildDetailRow(IconData icon, String label, String value,
+      [Color? color]) {
     return Padding(
       padding: const EdgeInsets.symmetric(vertical: 8),
       child: Row(
@@ -1904,7 +1676,7 @@ class GraphPainter extends CustomPainter {
   @override
   bool shouldRepaint(covariant GraphPainter oldDelegate) {
     return oldDelegate.data != data ||
-           oldDelegate.sharpThreshold != sharpThreshold ||
-           oldDelegate.riskyThreshold != riskyThreshold;
+        oldDelegate.sharpThreshold != sharpThreshold ||
+        oldDelegate.riskyThreshold != riskyThreshold;
   }
 }
