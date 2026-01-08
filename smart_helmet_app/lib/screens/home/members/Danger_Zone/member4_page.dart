@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:convert';
 import 'dart:math';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
@@ -7,6 +8,7 @@ import 'package:google_maps_flutter/google_maps_flutter.dart';
 import 'package:google_maps_flutter_android/google_maps_flutter_android.dart';
 import 'package:google_maps_flutter_platform_interface/google_maps_flutter_platform_interface.dart';
 import 'package:flutter_tts/flutter_tts.dart';
+import 'package:http/http.dart' as http;
 import 'package:tflite_flutter/tflite_flutter.dart';
 import 'dummy_data.dart';
 
@@ -67,6 +69,10 @@ class _Member4PageState extends State<Member4Page> {
   // TFLite
   Interpreter? _interpreter;
   double? _predictedRisk;
+
+  // API keys
+  static const String weatherApiKey = '1eb3f1d65286d7b8c7fee767600fb7bf';
+  static const String googleApiKey = 'AIzaSyBbZVI_sO637CROKwc3hjMOB4ZmsL12ikw';
 
   // Model preprocessing constants
   static const List<String> numericalCols = [
@@ -173,7 +179,6 @@ class _Member4PageState extends State<Member4Page> {
       _addStartEndMarkers();
     }
 
-    // Load model first, then analyze route if needed
     _loadModel().then((_) {
       if (isPredefined && widget.predefinedRoute != null) {
         analyzeRoute(widget.predefinedRoute!);
@@ -271,7 +276,7 @@ class _Member4PageState extends State<Member4Page> {
       final r = Random();
       setState(() {
         heartRate = 72 + r.nextInt(38);
-        temperature = 36.6 + r.nextDouble() * 0.9;
+        temperature = 36.8 + r.nextDouble() * 0.9;
         stressLevel = r.nextInt(85);
         dangerAlert = r.nextDouble() > 0.88;
       });
@@ -294,8 +299,124 @@ class _Member4PageState extends State<Member4Page> {
     if (mounted) setState(() {});
   }
 
-  // Temporary hardcoded high-risk route for testing
-  Map<String, dynamic> generateRandomRouteDict(List<LatLng> routeSegments) {
+  Future<Map<String, dynamic>> _fetchWeatherData(double lat, double lng) async {
+    final url = Uri.parse(
+      'https://api.openweathermap.org/data/2.5/weather?lat=$lat&lon=$lng&appid=$weatherApiKey&units=metric',
+    );
+    try {
+      final response = await http.get(url);
+      print('Weather URL: $url');
+      print('Weather response code: ${response.statusCode}');
+
+      if (response.statusCode == 200) {
+        final data = json.decode(response.body);
+
+        // Safely extract values (handle int or double)
+        double temp = (data['main']['temp'] is num)
+            ? (data['main']['temp'] as num).toDouble()
+            : 25.0;
+        double humidity = (data['main']['humidity'] is num)
+            ? (data['main']['humidity'] as num).toDouble()
+            : 70.0;
+        double windSpeed = (data['wind']['speed'] is num)
+            ? (data['wind']['speed'] as num).toDouble()
+            : 5.0;
+        double precipitation = (data['rain']?['1h'] is num)
+            ? (data['rain']['1h'] as num).toDouble()
+            : 0.0;
+        double visibility = (data['visibility'] is num)
+            ? (data['visibility'] as num).toDouble()
+            : 10000.0;
+
+        String weatherMain =
+            data['weather'][0]['main'].toString().toLowerCase();
+        String weatherCond = weatherMain;
+        if (weatherCond.contains('cloud'))
+          weatherCond = 'Cloudy';
+        else if (weatherCond.contains('rain') ||
+            weatherCond.contains('drizzle'))
+          weatherCond = 'Rainy';
+        else if (weatherCond.contains('snow'))
+          weatherCond = 'Snowy';
+        else if (weatherCond.contains('mist') || weatherCond.contains('fog'))
+          weatherCond = 'Foggy';
+        else if (weatherCond.contains('clear'))
+          weatherCond = 'Clear';
+        else
+          weatherCond = 'Cloudy'; // fallback
+
+        return {
+          'Temperature': temp,
+          'Humidity': humidity,
+          'Wind_Speed': windSpeed,
+          'Precipitation': precipitation,
+          'Visibility': visibility,
+          'Weather_Condition': weatherCond,
+        };
+      } else {
+        print('Weather API error: ${response.body}');
+        throw Exception('API failed');
+      }
+    } catch (e) {
+      print('Weather fetch failed: $e');
+      // Return empty → triggers fallback without crash
+      return {};
+    }
+  }
+
+  Future<List<LatLng>> _fetchTrafficAwareRoute(LatLng start, LatLng end) async {
+    final url = Uri.parse(
+      'https://maps.googleapis.com/maps/api/directions/json?origin=${start.latitude},${start.longitude}&destination=${end.latitude},${end.longitude}&key=$googleApiKey&departure_time=now&traffic_model=best_guess',
+    );
+    final response = await http.get(url);
+    print('Directions URL: $url');
+    print('Directions response code: ${response.statusCode}');
+    print('Directions response body: ${response.body}'); // Full debug
+
+    if (response.statusCode == 200) {
+      final data = json.decode(response.body);
+      if (data['status'] == 'OK') {
+        final route = data['routes'][0];
+        final polyline = route['overview_polyline']['points'];
+        return decodePolyline(polyline);
+      } else {
+        throw Exception('API status: ${data['status']}');
+      }
+    } else {
+      throw Exception('HTTP error: ${response.statusCode} - ${response.body}');
+    }
+  }
+
+  List<LatLng> decodePolyline(String encoded) {
+    List<LatLng> points = [];
+    int index = 0, lat = 0, lng = 0;
+    while (index < encoded.length) {
+      int shift = 0, result = 0, byte;
+      do {
+        byte = encoded.codeUnitAt(index++) - 63;
+        result |= (byte & 0x1f) << shift;
+        shift += 5;
+      } while (byte >= 0x20);
+      int dlat = ((result & 1) != 0 ? ~(result >> 1) : (result >> 1));
+      lat += dlat;
+
+      shift = 0;
+      result = 0;
+      do {
+        byte = encoded.codeUnitAt(index++) - 63;
+        result |= (byte & 0x1f) << shift;
+        shift += 5;
+      } while (byte >= 0x20);
+      int dlng = ((result & 1) != 0 ? ~(result >> 1) : (result >> 1));
+      lng += dlng;
+
+      points.add(LatLng(lat / 1E5, lng / 1E5));
+    }
+    return points;
+  }
+
+  Future<Map<String, dynamic>> generateRandomRouteDict(
+      List<LatLng> routeSegments) async {
     final r = Random();
 
     // Use first point of route as location, fallback to Colombo
@@ -303,6 +424,24 @@ class _Member4PageState extends State<Member4Page> {
         routeSegments.isNotEmpty ? routeSegments.first.latitude : 6.9271;
     double lng =
         routeSegments.isNotEmpty ? routeSegments.first.longitude : 79.8612;
+
+    // Fetch real-time weather for starting point
+    Map<String, dynamic> weatherData = {};
+    try {
+      weatherData = await _fetchWeatherData(lat, lng);
+    } catch (e) {
+      // Fallback to defaults if API fails
+      weatherData = {
+        'Temperature': 24.0 + r.nextDouble() * 10.0,
+        'Humidity': 60.0 + r.nextDouble() * 30.0,
+        'Wind_Speed': r.nextDouble() * 25.0,
+        'Precipitation': r.nextDouble() * 2.5,
+        'Visibility': 3000 + r.nextDouble() * 12000,
+        'Weather_Condition':
+            weatherConditions[r.nextInt(weatherConditions.length)],
+      };
+      safetyTips.add("Weather data fallback (API error)");
+    }
 
     // Calculate total route distance in km
     double routeLengthKm = 0.0;
@@ -316,26 +455,54 @@ class _Member4PageState extends State<Member4Page> {
           1000.0; // meters → km
     }
 
-    // Estimate travel time in minutes (average speed 40 km/h for motorcycle in mixed conditions)
-    double travelTimeMinutes = (routeLengthKm / 40.0) * 60.0;
-    if (travelTimeMinutes < 10) travelTimeMinutes = 10; // minimum
-    if (travelTimeMinutes > 180) travelTimeMinutes = 180; // cap at 3 hours
+    // Fetch live traffic ETA (duration in traffic)
+    double travelTimeMinutes = 30.0; // Default
+    double trafficSpeed = 40.0; // Default km/h
+    String congestionLevel = 'Medium'; // Default
+    try {
+      LatLng start = routeSegments.first;
+      LatLng end = routeSegments.last;
+      final url = Uri.parse(
+        'https://maps.googleapis.com/maps/api/directions/json?origin=${start.latitude},${start.longitude}&destination=${end.latitude},${end.longitude}&key=$googleApiKey&departure_time=now&traffic_model=best_guess',
+      );
+      final response = await http.get(url);
+      if (response.statusCode == 200) {
+        final data = json.decode(response.body);
+        if (data['status'] == 'OK') {
+          travelTimeMinutes = data['routes'][0]['legs'][0]
+                  ['duration_in_traffic']['value'] /
+              60.0; // seconds to minutes
+          trafficSpeed = routeLengthKm /
+              (travelTimeMinutes / 60.0); // km/h based on live ETA
+          congestionLevel = trafficSpeed < 30
+              ? 'High'
+              : (trafficSpeed < 50 ? 'Medium' : 'Low');
+        }
+      } else {
+        print('Traffic API error: ${response.body}');
+      }
+    } catch (e) {
+      safetyTips.add("Traffic data fallback (API error)");
+      travelTimeMinutes = (routeLengthKm / 40.0) * 60.0; // Fallback estimate
+      trafficSpeed = 40.0;
+      congestionLevel = 'Medium';
+    }
 
-    // Random realistic environmental & traffic data
+    if (travelTimeMinutes < 10) travelTimeMinutes = 10;
+    if (travelTimeMinutes > 180) travelTimeMinutes = 180;
+
     return {
       'Location_Latitude': lat,
       'Location_Longitude': lng,
-      'Temperature':
-          24.0 + r.nextDouble() * 10.0, // 24–34°C (typical tropical range)
-      'Humidity': 60.0 + r.nextDouble() * 30.0, // 60–90%
-      'Wind_Speed': r.nextDouble() * 25.0, // 0–25 km/h
-      'Precipitation': r.nextDouble() * 2.5, // 0–2.5 mm/h
-      'Visibility': 3000 + r.nextDouble() * 12000, // 3–15 km
-      'Traffic_Speed': 20.0 + r.nextDouble() * 50.0, // 20–70 km/h
+      'Temperature': weatherData['Temperature'],
+      'Humidity': weatherData['Humidity'],
+      'Wind_Speed': weatherData['Wind_Speed'],
+      'Precipitation': weatherData['Precipitation'],
+      'Visibility': weatherData['Visibility'],
+      'Traffic_Speed': trafficSpeed,
       'Travel_Time_Estimate': travelTimeMinutes.roundToDouble(),
-      'Weather_Condition':
-          weatherConditions[r.nextInt(weatherConditions.length)],
-      'Congestion_Level': congestionLevels[r.nextInt(congestionLevels.length)],
+      'Weather_Condition': weatherData['Weather_Condition'],
+      'Congestion_Level': congestionLevel,
       'Road_Type': roadTypes[r.nextInt(roadTypes.length)],
     };
   }
@@ -349,6 +516,10 @@ class _Member4PageState extends State<Member4Page> {
     try {
       List<double> inputNum = [];
       for (var col in numericalCols) {
+        if (col == 'Location_Latitude' || col == 'Location_Longitude') {
+          inputNum.add(0.0); // Neutral value — removes location bias
+          continue;
+        }
         var value = routeDict[col];
         double numValue = 0.0;
         if (value is num) {
@@ -399,11 +570,15 @@ class _Member4PageState extends State<Member4Page> {
     List<String> suggestions = [];
     bool isRisky = prob > 0.5;
 
+    // Add real-time weather summary at the top
+    double temp = (routeDict['Temperature'] as num?)?.toDouble() ?? 25.0;
+    String weather = routeDict['Weather_Condition'] as String? ?? 'Unknown';
+    suggestions.add("Current Weather: $weather, ${temp.toStringAsFixed(1)}°C");
+
     suggestions.add(
       'Predicted Risk Probability: ${(prob * 100).toStringAsFixed(1)}% → ${isRisky ? "Risky" : "Safe"}',
     );
 
-    String weather = (routeDict['Weather_Condition'] as String?) ?? 'Unknown';
     String cong = (routeDict['Congestion_Level'] as String?) ?? 'Unknown';
     double precipitation =
         (routeDict['Precipitation'] as num?)?.toDouble() ?? 0.0;
@@ -413,7 +588,6 @@ class _Member4PageState extends State<Member4Page> {
     double travelTime =
         (routeDict['Travel_Time_Estimate'] as num?)?.toDouble() ?? 0.0;
 
-    suggestions.add("• Weather: $weather");
     suggestions.add("• Traffic Congestion: $cong");
 
     if (isRisky) {
@@ -452,7 +626,7 @@ class _Member4PageState extends State<Member4Page> {
     return suggestions;
   }
 
-  void analyzeRoute(List<LatLng> routeSegments) {
+  Future<void> analyzeRoute(List<LatLng> routeSegments) async {
     polylines.clear();
     safetyTips.clear();
     _predictedRisk = null;
@@ -462,40 +636,25 @@ class _Member4PageState extends State<Member4Page> {
       return;
     }
 
-    Map<String, dynamic> routeDict = {};
-    if (isDummyRoute && destKey != null && dummyData.containsKey(destKey)) {
-      routeDict = Map.from(dummyData[destKey]?['features'] ?? {});
+    // Fetch real-time weather for the starting point
+    Map<String, dynamic> weatherData = {};
+    try {
+      double startLat = routeSegments.first.latitude;
+      double startLng = routeSegments.first.longitude;
+      weatherData = await _fetchWeatherData(startLat, startLng);
+      print('Real-time weather fetched: ${weatherData['Weather_Condition']}');
+    } catch (e) {
+      weatherData = {}; // Fallback handled in dict generation
+      safetyTips.add('Weather data unavailable - using estimates');
+    }
+
+    if (recentlyUsed && destKey != null && dummyData.containsKey(destKey)) {
+      Map<String, dynamic> routeDict =
+          Map.from(dummyData[destKey]?['features'] ?? {});
       if (!recentlyUsed) {
         safetyTips.add("Based on another member's journey data");
       }
-    } else {
-      routeDict = generateRandomRouteDict(routeSegments);
-    }
-
-    _predictedRisk = predictRouteRisk(routeDict);
-
-    if (_predictedRisk != null) {
-      safetyTips.addAll(getSafetySuggestions(_predictedRisk!, routeDict));
-    } else {
-      safetyTips.add('No AI risk prediction available');
-    }
-
-    if (recentlyUsed) {
-      double baseRisk = _predictedRisk ?? 0.5;
-      for (int i = 0; i < routeSegments.length - 1; i++) {
-        double riskScore = calculateRiskScore(i, baseRisk);
-        polylines.add(
-          Polyline(
-            polylineId: PolylineId('segment_$i'),
-            points: [routeSegments[i], routeSegments[i + 1]],
-            color: getRiskColor(riskScore),
-            width: 10,
-            jointType: JointType.round,
-            zIndex: 10,
-          ),
-        );
-      }
-    } else {
+      _predictedRisk = predictRouteRisk(routeDict);
       Color routeColor = getRiskColor(_predictedRisk ?? 0.5);
       polylines.add(
         Polyline(
@@ -507,19 +666,77 @@ class _Member4PageState extends State<Member4Page> {
           zIndex: 10,
         ),
       );
+      if (_predictedRisk != null) {
+        safetyTips.addAll(getSafetySuggestions(_predictedRisk!, routeDict));
+      } else {
+        safetyTips.add('No AI risk prediction available');
+      }
+    } else {
+      // New route: per-segment analysis for safe/risky parts
+      int highRiskCount = 0;
+      for (int i = 0; i < routeSegments.length - 1; i++) {
+        Map<String, dynamic> segmentDict = await generateRandomRouteDict(
+            [routeSegments[i], routeSegments[i + 1]]);
+        segmentDict.addAll(weatherData); // Apply real weather
+
+        double? segmentRisk = predictRouteRisk(segmentDict);
+        Color segmentColor = getRiskColor(segmentRisk ?? 0.5);
+
+        polylines.add(
+          Polyline(
+            polylineId: PolylineId('segment_$i'),
+            points: [routeSegments[i], routeSegments[i + 1]],
+            color: segmentColor,
+            width: 10,
+            jointType: JointType.round,
+            zIndex: 10,
+          ),
+        );
+
+        if (segmentRisk != null && segmentRisk > 0.7) highRiskCount++;
+      }
+
+      // Overall risk as average
+      _predictedRisk =
+          highRiskCount / (routeSegments.length - 1); // Simple average example
+
+      if (_predictedRisk != null) {
+        safetyTips.addAll(getSafetySuggestions(_predictedRisk!, weatherData));
+        if (highRiskCount > 0) {
+          safetyTips.add(
+              'There are $highRiskCount high-risk segments - proceed with caution');
+          await flutterTts
+              .speak('Caution: $highRiskCount high-risk segments ahead.');
+        } else {
+          safetyTips.add('All segments appear safe');
+          await flutterTts.speak('Route is safe. Enjoy your ride.');
+        }
+      } else {
+        safetyTips.add('No AI risk prediction available');
+      }
     }
 
+    // Improved camera fitting
     if (mapController != null && routeSegments.isNotEmpty) {
-      double minLat = routeSegments.map((p) => p.latitude).reduce(min);
-      double maxLat = routeSegments.map((p) => p.latitude).reduce(max);
-      double minLng = routeSegments.map((p) => p.longitude).reduce(min);
-      double maxLng = routeSegments.map((p) => p.longitude).reduce(max);
+      double minLat =
+          routeSegments.map((p) => p.latitude).reduce((a, b) => a < b ? a : b);
+      double maxLat =
+          routeSegments.map((p) => p.latitude).reduce((a, b) => a > b ? a : b);
+      double minLng =
+          routeSegments.map((p) => p.longitude).reduce((a, b) => a < b ? a : b);
+      double maxLng =
+          routeSegments.map((p) => p.longitude).reduce((a, b) => a > b ? a : b);
 
       final bounds = LatLngBounds(
         southwest: LatLng(minLat, minLng),
         northeast: LatLng(maxLat, maxLng),
       );
-      mapController!.animateCamera(CameraUpdate.newLatLngBounds(bounds, 80));
+
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        mapController?.animateCamera(
+          CameraUpdate.newLatLngBounds(bounds, 80),
+        );
+      });
     }
 
     generateSafetyTips();
@@ -610,7 +827,7 @@ class _Member4PageState extends State<Member4Page> {
             myLocationButtonEnabled: true,
             compassEnabled: true,
             zoomControlsEnabled: true,
-            trafficEnabled: true,
+            trafficEnabled: true, // Show live traffic layer on map
             mapToolbarEnabled: false,
           ),
           if (widget.startJourney)
@@ -798,7 +1015,6 @@ class LegendItem extends StatelessWidget {
   final Color color;
   final String label;
   const LegendItem({super.key, required this.color, required this.label});
-
   @override
   Widget build(BuildContext context) {
     return Row(
