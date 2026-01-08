@@ -1,5 +1,3 @@
-// dummy_data.dart
-
 const Map<String, dynamic> dummyData = {
   'kaduwela': {
     'sensorData': {
@@ -8,9 +6,35 @@ const Map<String, dynamic> dummyData = {
       'stressLevel': 45,
       'dangerAlert': false,
     },
+    'features': {
+      'Location_Latitude': 40.72,
+      'Location_Longitude': -74.02,
+      'Temperature': 18.0,
+      'Humidity': 70.0,
+      'Wind_Speed': 15.0,
+      'Precipitation': 0.8,
+      'Weather_Condition': 'Cloudy',
+      'Visibility': 6000.0,
+      'Traffic_Speed': 35.0,
+      'Congestion_Level': 'Medium',
+      'Road_Type': 'Urban',
+      'Travel_Time_Estimate': 45.0,
+    },
   },
   'malabe': {
-    'weather': 'Sunny, 30°C',
-    'traffic': 'Moderate',
+    'features': {
+      'Location_Latitude': 40.71,
+      'Location_Longitude': -74.01,
+      'Temperature': 20.0,
+      'Humidity': 50.0,
+      'Wind_Speed': 5.0,
+      'Precipitation': 0.0,
+      'Weather_Condition': 'Clear',
+      'Visibility': 10000.0,
+      'Traffic_Speed': 50.0,
+      'Congestion_Level': 'Low',
+      'Road_Type': 'Highway',
+      'Travel_Time_Estimate': 30.0,
+    },
   },
 };

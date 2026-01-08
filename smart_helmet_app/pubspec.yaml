@@ -49,6 +49,7 @@ flutter:
   uses-material-design: true
   assets:
     - assets/eeg_stress_model_final.tflite
+    - assets/route_risk_model.tflite
     - assets/icons/motorcycle.png
     - assets/icons/app_icon.png
     - assets/icons/g-logo.png
