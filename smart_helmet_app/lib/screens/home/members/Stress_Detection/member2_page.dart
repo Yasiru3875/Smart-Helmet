@@ -19,25 +19,21 @@ class _Member2PageState extends State<Member2Page> {
   static const String deviceName = "HR-S0C1913";
 
   String status = "Waiting...";
-  String errorMessage = "";
+  String? errorMessage = "";
 
   Interpreter? interpreter;
 
-  // Current values from model and bands
   double stressScore = 0.0;
   double relaxedScore = 0.0;
   String currentMood = "No Signal";
   String moodEmoji = "📡";
 
-  // Signal quality
   int poorSignalLevel = 200;
 
-  // Additional parsed metrics
   int attention = 0;
   int meditation = 0;
   List<double> powerBands = List.filled(8, 0.0);
 
-  // Combined EEG bands for display
   Map<String, double> eegBands = {
     'Delta': 0.0,
     'Theta': 0.0,
@@ -46,29 +42,27 @@ class _Member2PageState extends State<Member2Page> {
     'Gamma': 0.0,
   };
 
-  // New: Separate emotional states derived from EEG waves
-  double arousalLevel = 0.0; // High = excited/frustrated, Low = calm/bored
-  double valenceLevel =
-      0.0; // High = positive/pleasant, Low = negative/unpleasant (e.g., frustration)
+  double arousalLevel = 0.0;
+  double valenceLevel = 0.0;
   String frustrationState = "Neutral";
   String frustrationEmoji = "😐";
 
-  // For stable mood
   String _previousMood = "No Signal";
   static const double moodThresholdHigh = 0.75;
   static const double moodThresholdLow = 0.60;
 
-  // For persistent stress detection
   Timer? _stressTimer;
   bool showRestAlert = false;
   static const Duration stressPersistenceThreshold = Duration(seconds: 30);
 
-  // === Optimized Real-time EEG Waveform ===
-  static const int waveformMaxPoints = 800;
-  static const int waveformUpdateIntervalMs = 60;
+  // === Enhanced Real-time EEG Waveform ===
+  static const int waveformMaxPoints = 600; // Reduced for smoother feel
+  static const int waveformUpdateIntervalMs = 100; // Slower UI updates (10 FPS)
+  static const int smoothingWindow = 5; // Moving average smoothing
 
   final List<FlSpot> _waveformSpots = [];
   final List<double> _rawBuffer = [];
+  final List<double> _smoothedBuffer = []; // For moving average
   Timer? _waveformUpdateTimer;
 
   final ThinkGearParser tg = ThinkGearParser();
@@ -95,6 +89,7 @@ class _Member2PageState extends State<Member2Page> {
     tg.onRaw = (raw) {
       if (poorSignalLevel <= 50) {
         _processRawEEG(raw);
+        // Add to buffer for smoothing
         _rawBuffer.add(raw.toDouble());
       }
     };
@@ -140,7 +135,7 @@ class _Member2PageState extends State<Member2Page> {
           eegBands['Gamma'] = powerBands[6] + powerBands[7];
         });
         _updateStressAndMood();
-        _updateEmotionalStates(); // New: Update separate emotions
+        _updateEmotionalStates();
       }
     };
 
@@ -167,6 +162,7 @@ class _Member2PageState extends State<Member2Page> {
       showRestAlert = false;
       _waveformSpots.clear();
       _rawBuffer.clear();
+      errorMessage = ""; // Clear any error message
     });
     modelWindow.clear();
     _stressTimer?.cancel();
@@ -186,12 +182,25 @@ class _Member2PageState extends State<Member2Page> {
 
   Future<void> _loadModel() async {
     try {
-      interpreter = await Interpreter.fromAsset("assets/eeg_model.tflite");
-      debugPrint("EEG Stress Model Loaded");
+      interpreter = await Interpreter.fromAsset(
+        "assets/eeg_stress_model_final.tflite",
+      );
+
+      debugPrint("EEG Stress Model Loaded Successfully");
+
+      if (mounted) {
+        setState(() {
+          errorMessage = null; // Safe: clear error on success
+        });
+      }
     } catch (e) {
       debugPrint("Model load failed: $e");
+
       if (mounted) {
-        setState(() => errorMessage = "Failed to load AI model");
+        setState(() {
+          errorMessage =
+              "Failed to load AI model. Check if the file exists and pubspec.yaml is correct.";
+        });
       }
     }
   }
@@ -237,28 +246,41 @@ class _Member2PageState extends State<Member2Page> {
   }
 
   void _flushWaveformBuffer() {
-    if (_rawBuffer.isEmpty || !mounted || poorSignalLevel > 50) return;
-
-    setState(() {
-      final int startIndex = _waveformSpots.length;
-      for (int i = 0; i < _rawBuffer.length; i++) {
-        _waveformSpots.add(
-          FlSpot((startIndex + i).toDouble(), _rawBuffer[i] / 2048.0),
-        );
+    if (_rawBuffer.isEmpty || !mounted || poorSignalLevel > 50) {
+      if (_rawBuffer.isEmpty && _smoothedBuffer.isNotEmpty) {
+        _smoothedBuffer.clear();
       }
+      return;
+    }
 
-      if (_waveformSpots.length > waveformMaxPoints) {
-        _waveformSpots.removeRange(
-          0,
-          _waveformSpots.length - waveformMaxPoints,
-        );
+    // Apply moving average smoothing
+    for (double raw in _rawBuffer) {
+      _smoothedBuffer.add(raw);
+      if (_smoothedBuffer.length > smoothingWindow) {
+        _smoothedBuffer.removeAt(0);
       }
+      double avg =
+          _smoothedBuffer.reduce((a, b) => a + b) / _smoothedBuffer.length;
+      double normalized = avg / 2048.0;
 
-      _rawBuffer.clear();
-    });
+      _waveformSpots.add(FlSpot(_waveformSpots.length.toDouble(), normalized));
+    }
+
+    // Keep only max points
+    if (_waveformSpots.length > waveformMaxPoints) {
+      final int removeCount = _waveformSpots.length - waveformMaxPoints;
+      _waveformSpots.removeRange(0, removeCount);
+      // Re-index X values
+      for (int i = 0; i < _waveformSpots.length; i++) {
+        _waveformSpots[i] = FlSpot(i.toDouble(), _waveformSpots[i].y);
+      }
+    }
+
+    _rawBuffer.clear();
+
+    if (mounted) setState(() {});
   }
 
-  // New: Compute separate emotional dimensions from EEG power bands
   void _updateEmotionalStates() {
     if (powerBands.every((e) => e == 0)) return;
 
@@ -266,16 +288,12 @@ class _Member2PageState extends State<Member2Page> {
     double beta = eegBands['Beta']!;
     double gamma = eegBands['Gamma']!;
 
-    // Arousal: Higher beta/gamma relative to alpha indicates high arousal (excited or frustrated)
     double betaAlphaRatio = (beta + gamma) / alpha;
     arousalLevel = (betaAlphaRatio / (betaAlphaRatio + 2.0)).clamp(0.0, 1.0);
 
-    // Valence approximation for single-channel (forehead): Lower alpha + higher meditation → more pleasant
-    // Higher stress/beta → unpleasant (e.g., frustration)
     double pleasantFactor = (meditation / 100.0) + (1.0 - stressScore);
     valenceLevel = (pleasantFactor / 2.0).clamp(0.0, 1.0);
 
-    // Frustration detection: High arousal + low valence = Frustration/Anger-like state
     String candidateFrustration;
     String candidateEmoji;
 
@@ -482,37 +500,120 @@ class _Member2PageState extends State<Member2Page> {
   }
 
   Widget _buildWaveformChart() {
-    if (_waveformSpots.isEmpty) {
-      return const Center(
-        child: Text("No data yet", style: TextStyle(color: Colors.grey)),
+    final bool hasData = _waveformSpots.isNotEmpty;
+
+    if (!hasData) {
+      return Center(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Icon(Icons.waves, size: 48, color: Colors.grey.shade400),
+            const SizedBox(height: 12),
+            Text(
+              "Waiting for brain signals...",
+              style: TextStyle(color: Colors.grey.shade600, fontSize: 16),
+            ),
+          ],
+        ),
       );
     }
 
     return RepaintBoundary(
       child: LineChart(
         LineChartData(
-          gridData: const FlGridData(show: false),
-          titlesData: const FlTitlesData(show: false),
-          borderData: FlBorderData(show: false),
-          minX: _waveformSpots.first.x,
-          maxX: _waveformSpots.last.x,
+          gridData: FlGridData(
+            show: true,
+            drawVerticalLine: true,
+            horizontalInterval: 0.5,
+            verticalInterval: 100,
+            getDrawingHorizontalLine: (value) =>
+                FlLine(color: Colors.grey.withOpacity(0.2), strokeWidth: 1),
+            getDrawingVerticalLine: (value) =>
+                FlLine(color: Colors.grey.withOpacity(0.1), strokeWidth: 1),
+          ),
+          titlesData: FlTitlesData(
+            leftTitles: AxisTitles(
+              sideTitles: SideTitles(
+                showTitles: true,
+                reservedSize: 40,
+                interval: 0.5,
+                getTitlesWidget: (value, meta) {
+                  return Text(
+                    value.toStringAsFixed(1),
+                    style: const TextStyle(color: Colors.black54, fontSize: 12),
+                  );
+                },
+              ),
+            ),
+            bottomTitles: AxisTitles(
+              sideTitles: SideTitles(
+                showTitles: true,
+                reservedSize: 30,
+                interval: waveformMaxPoints / 4,
+                getTitlesWidget: (value, meta) {
+                  return Text(
+                    '${(value / waveformMaxPoints * 1.5).toStringAsFixed(1)}s',
+                    style: const TextStyle(color: Colors.black54, fontSize: 11),
+                  );
+                },
+              ),
+            ),
+            topTitles: const AxisTitles(
+              sideTitles: SideTitles(showTitles: false),
+            ),
+            rightTitles: const AxisTitles(
+              sideTitles: SideTitles(showTitles: false),
+            ),
+          ),
+          borderData: FlBorderData(
+            show: true,
+            border: Border.all(color: Colors.grey.shade300, width: 1),
+          ),
+          minX: 0,
+          maxX: waveformMaxPoints.toDouble(),
           minY: -1.0,
           maxY: 1.0,
           clipData: const FlClipData.all(),
+          backgroundColor: Colors.grey.shade50.withOpacity(0.3),
           lineBarsData: [
             LineChartBarData(
               spots: _waveformSpots,
-              isCurved: false,
-              color: Colors.cyan,
-              barWidth: 2,
+              isCurved: true,
+              curveSmoothness: 0.35,
+              color: Colors.cyanAccent,
+              barWidth: 3,
               isStrokeCapRound: true,
               dotData: const FlDotData(show: false),
-              belowBarData: BarAreaData(show: false),
+              belowBarData: BarAreaData(
+                show: true,
+                color: Colors.cyanAccent.withOpacity(0.15),
+              ),
+              shadow: const Shadow(
+                color: Colors.cyanAccent,
+                blurRadius: 8,
+                offset: Offset(0, 4),
+              ),
             ),
           ],
-          lineTouchData: LineTouchData(enabled: false),
+          lineTouchData: LineTouchData(
+            enabled: true,
+            touchTooltipData: LineTouchTooltipData(
+              tooltipBgColor: Colors.black87,
+              getTooltipItems: (touchedSpots) {
+                return touchedSpots.map((spot) {
+                  return LineTooltipItem(
+                    '${(spot.y * 2048).toStringAsFixed(0)} μV',
+                    const TextStyle(
+                      color: Colors.white,
+                      fontWeight: FontWeight.bold,
+                    ),
+                  );
+                }).toList();
+              },
+            ),
+          ),
         ),
-        duration: const Duration(milliseconds: 0),
+        duration: const Duration(milliseconds: 150),
       ),
     );
   }
@@ -535,7 +636,6 @@ class _Member2PageState extends State<Member2Page> {
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
-            // Connection Card (unchanged)
             Card(
               elevation: 6,
               shape: RoundedRectangleBorder(
@@ -595,7 +695,8 @@ class _Member2PageState extends State<Member2Page> {
                         ),
                       ],
                     ),
-                    if (errorMessage.isNotEmpty) ...[
+                    // FIXED: Safe null check for errorMessage
+                    if (errorMessage != null && errorMessage!.isNotEmpty) ...[
                       const SizedBox(height: 12),
                       Container(
                         padding: const EdgeInsets.all(14),
@@ -613,7 +714,7 @@ class _Member2PageState extends State<Member2Page> {
                             const SizedBox(width: 10),
                             Expanded(
                               child: Text(
-                                errorMessage,
+                                errorMessage!, // Safe to use ! here
                                 style: TextStyle(
                                   color: Colors.orange.shade800,
                                   fontSize: 14,
@@ -632,7 +733,6 @@ class _Member2PageState extends State<Member2Page> {
 
             const SizedBox(height: 30),
 
-            // Mood Display (unchanged)
             Card(
               elevation: 10,
               shape: RoundedRectangleBorder(
@@ -685,7 +785,6 @@ class _Member2PageState extends State<Member2Page> {
 
             const SizedBox(height: 30),
 
-            // Stress Level (unchanged)
             Card(
               elevation: 6,
               shape: RoundedRectangleBorder(
@@ -753,11 +852,10 @@ class _Member2PageState extends State<Member2Page> {
 
             const SizedBox(height: 30),
 
-            // Real-time EEG Waveform (unchanged)
             Card(
-              elevation: 6,
+              elevation: 8,
               shape: RoundedRectangleBorder(
-                borderRadius: BorderRadius.circular(20),
+                borderRadius: BorderRadius.circular(24),
               ),
               child: Padding(
                 padding: const EdgeInsets.all(24),
@@ -766,26 +864,48 @@ class _Member2PageState extends State<Member2Page> {
                     const Text(
                       "Real-time EEG Waveform",
                       style: TextStyle(
-                        fontSize: 20,
+                        fontSize: 22,
                         fontWeight: FontWeight.bold,
                       ),
                       textAlign: TextAlign.center,
                     ),
                     const SizedBox(height: 8),
-                    const Text(
-                      "Live raw brain signal (~1.5 seconds)",
-                      style: TextStyle(fontSize: 14, color: Colors.black54),
+                    Text(
+                      "Live brain electrical activity • ~1.5 seconds window",
+                      style: TextStyle(
+                        fontSize: 14,
+                        color: Colors.grey.shade600,
+                      ),
                       textAlign: TextAlign.center,
                     ),
-                    const SizedBox(height: 20),
-                    SizedBox(
-                      height: 200,
+                    const SizedBox(height: 24),
+                    Container(
+                      height: 240,
+                      padding: const EdgeInsets.all(12),
+                      decoration: BoxDecoration(
+                        color: Colors.black87,
+                        borderRadius: BorderRadius.circular(16),
+                      ),
                       child: hasGoodSignal
                           ? _buildWaveformChart()
-                          : const Center(
-                              child: Text(
-                                "Waiting for good signal...",
-                                style: TextStyle(color: Colors.grey),
+                          : Center(
+                              child: Column(
+                                mainAxisSize: MainAxisSize.min,
+                                children: [
+                                  Icon(
+                                    Icons.waves_outlined,
+                                    size: 60,
+                                    color: Colors.grey.shade600,
+                                  ),
+                                  const SizedBox(height: 12),
+                                  Text(
+                                    "Establishing signal contact...",
+                                    style: TextStyle(
+                                      color: Colors.grey.shade500,
+                                      fontSize: 16,
+                                    ),
+                                  ),
+                                ],
                               ),
                             ),
                     ),
@@ -796,7 +916,6 @@ class _Member2PageState extends State<Member2Page> {
 
             const SizedBox(height: 30),
 
-            // EEG Power Bands (unchanged)
             Card(
               elevation: 6,
               shape: RoundedRectangleBorder(
@@ -873,117 +992,6 @@ class _Member2PageState extends State<Member2Page> {
             ),
 
             const SizedBox(height: 30),
-
-            // New: Separate Emotional States from EEG Waves
-            Card(
-              elevation: 8,
-              shape: RoundedRectangleBorder(
-                borderRadius: BorderRadius.circular(20),
-              ),
-              color: Colors.indigo.shade50,
-              child: Padding(
-                padding: const EdgeInsets.all(24),
-                child: Column(
-                  children: [
-                    const Text(
-                      "Detected Emotional State (from EEG Waves)",
-                      style: TextStyle(
-                        fontSize: 20,
-                        fontWeight: FontWeight.bold,
-                        color: Colors.indigo,
-                      ),
-                      textAlign: TextAlign.center,
-                    ),
-                    const SizedBox(height: 16),
-                    Text(
-                      frustrationEmoji,
-                      style: const TextStyle(fontSize: 90),
-                      textAlign: TextAlign.center,
-                    ),
-                    const SizedBox(height: 16),
-                    Text(
-                      frustrationState,
-                      style: const TextStyle(
-                        fontSize: 30,
-                        fontWeight: FontWeight.bold,
-                        color: Colors.indigo,
-                      ),
-                      textAlign: TextAlign.center,
-                    ),
-                    const SizedBox(height: 12),
-                    Text(
-                      hasGoodSignal
-                          ? "Based on real-time EEG band ratios (Beta/Alpha for arousal + meditation/stress for valence)"
-                          : "Waiting for good signal...",
-                      style: const TextStyle(
-                        fontSize: 14,
-                        color: Colors.black54,
-                      ),
-                      textAlign: TextAlign.center,
-                    ),
-                    const SizedBox(height: 8),
-                    if (frustrationState == "Frustrated")
-                      const Text(
-                        "High arousal with unpleasant valence detected – possible frustration or anger.",
-                        style: TextStyle(
-                          fontSize: 14,
-                          color: Colors.red,
-                          fontWeight: FontWeight.bold,
-                        ),
-                        textAlign: TextAlign.center,
-                      ),
-                  ],
-                ),
-              ),
-            ),
-
-            const SizedBox(height: 30),
-
-            // Emotional States to Predict Heart Attack (unchanged from previous)
-            Card(
-              elevation: 6,
-              shape: RoundedRectangleBorder(
-                borderRadius: BorderRadius.circular(20),
-              ),
-              child: Padding(
-                padding: const EdgeInsets.all(24),
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    const Text(
-                      "Emotional States to Predict Heart Attack",
-                      style: TextStyle(
-                        fontSize: 20,
-                        fontWeight: FontWeight.bold,
-                      ),
-                      textAlign: TextAlign.center,
-                    ),
-                    const SizedBox(height: 16),
-                    const Text(
-                      "Based on research (PMID: 24149648):",
-                      style: TextStyle(fontSize: 16, color: Colors.black87),
-                    ),
-                    const SizedBox(height: 12),
-                    const BulletPoint(
-                      text:
-                          "Unpleasant emotions / Frustration (before the event)",
-                    ),
-                    const BulletPoint(
-                      text: "Rapid increase in anger (during the event)",
-                    ),
-                    const SizedBox(height: 16),
-                    const Text(
-                      "Monitor your stress levels and seek medical advice if experiencing these states persistently.",
-                      style: TextStyle(
-                        fontSize: 14,
-                        color: Colors.black54,
-                        fontStyle: FontStyle.italic,
-                      ),
-                    ),
-                  ],
-                ),
-              ),
-            ),
 
             if (showRestAlert) ...[
               const SizedBox(height: 20),
