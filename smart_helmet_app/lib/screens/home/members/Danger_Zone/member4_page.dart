@@ -57,8 +57,6 @@ class _Member4PageState extends State<Member4Page> {
   double? pastTemperature;
   int? pastStressLevel;
   bool? pastDangerAlert;
-  String? weather;
-  String? traffic;
   Timer? _sensorTimer;
   Timer? _locationTimer;
   String? destKey;
@@ -98,11 +96,7 @@ class _Member4PageState extends State<Member4Page> {
     'Foggy'
   ];
 
-  static const List<String> congestionLevels = [
-    'Low',
-    'Medium',
-    'High'
-  ];
+  static const List<String> congestionLevels = ['Low', 'Medium', 'High'];
 
   static const List<String> roadTypes = [
     'Highway',
@@ -150,14 +144,14 @@ class _Member4PageState extends State<Member4Page> {
   void initState() {
     super.initState();
     if (defaultTargetPlatform == TargetPlatform.android) {
-      final GoogleMapsFlutterPlatform mapsImplementation = GoogleMapsFlutterPlatform.instance;
+      final GoogleMapsFlutterPlatform mapsImplementation =
+          GoogleMapsFlutterPlatform.instance;
       if (mapsImplementation is GoogleMapsFlutterAndroid) {
         mapsImplementation.useAndroidViewSurface = true;
       }
     }
     flutterTts = FlutterTts();
     _loadMotorcycleIcon();
-    _loadModel();
 
     isPredefined = widget.predefinedRoute != null;
     final String destLower = (widget.destinationName ?? '').toLowerCase();
@@ -177,10 +171,15 @@ class _Member4PageState extends State<Member4Page> {
       startPoint = widget.predefinedStart;
       endPoint = widget.predefinedEnd;
       _addStartEndMarkers();
-      WidgetsBinding.instance.addPostFrameCallback((_) {
-        analyzeRoute(widget.predefinedRoute!);
-      });
     }
+
+    // Load model first, then analyze route if needed
+    _loadModel().then((_) {
+      if (isPredefined && widget.predefinedRoute != null) {
+        analyzeRoute(widget.predefinedRoute!);
+      }
+    });
+
     if (widget.startJourney) {
       _startLiveUpdates();
     }
@@ -188,10 +187,17 @@ class _Member4PageState extends State<Member4Page> {
 
   Future<void> _loadModel() async {
     try {
-      _interpreter = await Interpreter.fromAsset('route_risk_model.tflite');
-      print('TFLite model loaded successfully');
-    } catch (e) {
-      print('Error loading TFLite model: $e');
+      print('Attempting to load TFLite model...');
+      _interpreter =
+          await Interpreter.fromAsset('assets/route_risk_model.tflite');
+      print('✅ TFLite model loaded successfully!');
+      final input = _interpreter!.getInputTensors()[0];
+      final output = _interpreter!.getOutputTensors()[0];
+      print('Input shape: ${input.shape}');
+      print('Output shape: ${output.shape}');
+    } catch (e, stack) {
+      print('❌ Failed to load model: $e');
+      print(stack);
     }
   }
 
@@ -202,37 +208,50 @@ class _Member4PageState extends State<Member4Page> {
         'assets/icons/motorcycle.png',
       );
     } catch (e) {
-      _motorcycleIcon = BitmapDescriptor.defaultMarkerWithHue(BitmapDescriptor.hueAzure);
+      _motorcycleIcon =
+          BitmapDescriptor.defaultMarkerWithHue(BitmapDescriptor.hueAzure);
     }
     if (mounted) setState(() {});
   }
 
   void _addStartEndMarkers() {
-    markers.add(
-      Marker(
-        markerId: const MarkerId('start'),
-        position: startPoint!,
-        icon: BitmapDescriptor.defaultMarkerWithHue(BitmapDescriptor.hueGreen),
-        infoWindow: const InfoWindow(title: 'Start'),
-      ),
-    );
-    markers.add(
-      Marker(
-        markerId: const MarkerId('end'),
-        position: endPoint!,
-        icon: BitmapDescriptor.defaultMarkerWithHue(BitmapDescriptor.hueRed),
-        infoWindow: InfoWindow(title: widget.destinationName ?? 'Destination'),
-      ),
-    );
+    if (startPoint != null) {
+      markers.add(
+        Marker(
+          markerId: const MarkerId('start'),
+          position: startPoint!,
+          icon:
+              BitmapDescriptor.defaultMarkerWithHue(BitmapDescriptor.hueGreen),
+          infoWindow: const InfoWindow(title: 'Start'),
+        ),
+      );
+    }
+    if (endPoint != null) {
+      markers.add(
+        Marker(
+          markerId: const MarkerId('end'),
+          position: endPoint!,
+          icon: BitmapDescriptor.defaultMarkerWithHue(BitmapDescriptor.hueRed),
+          infoWindow:
+              InfoWindow(title: widget.destinationName ?? 'Destination'),
+        ),
+      );
+    }
   }
 
   void _startLiveUpdates() async {
-    currentPosition = await Geolocator.getCurrentPosition(desiredAccuracy: LocationAccuracy.high);
-    _updateCurrentMarker();
+    try {
+      currentPosition = await Geolocator.getCurrentPosition(
+          desiredAccuracy: LocationAccuracy.high);
+      _updateCurrentMarker();
+    } catch (e) {
+      print('Location error: $e');
+    }
     _locationTimer = Timer.periodic(const Duration(seconds: 2), (_) async {
       if (!mounted) return;
       try {
-        final pos = await Geolocator.getCurrentPosition(desiredAccuracy: LocationAccuracy.high);
+        final pos = await Geolocator.getCurrentPosition(
+            desiredAccuracy: LocationAccuracy.high);
         setState(() => currentPosition = pos);
         _updateCurrentMarker();
         mapController?.animateCamera(
@@ -272,113 +291,162 @@ class _Member4PageState extends State<Member4Page> {
         zIndex: 1000,
       ),
     );
-    setState(() {});
+    if (mounted) setState(() {});
   }
 
+  // Temporary hardcoded high-risk route for testing
   Map<String, dynamic> generateRandomRouteDict(List<LatLng> routeSegments) {
-    var r = Random();
-    double lat = routeSegments.isNotEmpty ? routeSegments.first.latitude : 40.71;
-    double lng = routeSegments.isNotEmpty ? routeSegments.first.longitude : -74.01;
+    final r = Random();
+
+    // Use first point of route as location, fallback to Colombo
+    double lat =
+        routeSegments.isNotEmpty ? routeSegments.first.latitude : 6.9271;
+    double lng =
+        routeSegments.isNotEmpty ? routeSegments.first.longitude : 79.8612;
+
+    // Calculate total route distance in km
     double routeLengthKm = 0.0;
     for (int i = 0; i < routeSegments.length - 1; i++) {
       routeLengthKm += Geolocator.distanceBetween(
-        routeSegments[i].latitude,
-        routeSegments[i].longitude,
-        routeSegments[i + 1].latitude,
-        routeSegments[i + 1].longitude,
-      ) / 1000.0;
+            routeSegments[i].latitude,
+            routeSegments[i].longitude,
+            routeSegments[i + 1].latitude,
+            routeSegments[i + 1].longitude,
+          ) /
+          1000.0; // meters → km
     }
-    double travelTime = (routeLengthKm / 40.0) * 60.0; // Assume average speed 40 km/h
 
+    // Estimate travel time in minutes (average speed 40 km/h for motorcycle in mixed conditions)
+    double travelTimeMinutes = (routeLengthKm / 40.0) * 60.0;
+    if (travelTimeMinutes < 10) travelTimeMinutes = 10; // minimum
+    if (travelTimeMinutes > 180) travelTimeMinutes = 180; // cap at 3 hours
+
+    // Random realistic environmental & traffic data
     return {
       'Location_Latitude': lat,
       'Location_Longitude': lng,
-      'Temperature': 10 + r.nextDouble() * 20,
-      'Humidity': 40 + r.nextDouble() * 50,
-      'Wind_Speed': r.nextDouble() * 25,
-      'Precipitation': r.nextDouble() * 2,
-      'Weather_Condition': weatherConditions[r.nextInt(weatherConditions.length)],
-      'Visibility': 2000 + r.nextDouble() * 10000,
-      'Traffic_Speed': 20 + r.nextDouble() * 50,
+      'Temperature':
+          24.0 + r.nextDouble() * 10.0, // 24–34°C (typical tropical range)
+      'Humidity': 60.0 + r.nextDouble() * 30.0, // 60–90%
+      'Wind_Speed': r.nextDouble() * 25.0, // 0–25 km/h
+      'Precipitation': r.nextDouble() * 2.5, // 0–2.5 mm/h
+      'Visibility': 3000 + r.nextDouble() * 12000, // 3–15 km
+      'Traffic_Speed': 20.0 + r.nextDouble() * 50.0, // 20–70 km/h
+      'Travel_Time_Estimate': travelTimeMinutes.roundToDouble(),
+      'Weather_Condition':
+          weatherConditions[r.nextInt(weatherConditions.length)],
       'Congestion_Level': congestionLevels[r.nextInt(congestionLevels.length)],
       'Road_Type': roadTypes[r.nextInt(roadTypes.length)],
-      'Travel_Time_Estimate': travelTime.clamp(10, 180),
     };
   }
 
   double? predictRouteRisk(Map<String, dynamic> routeDict) {
-    if (_interpreter == null) return null;
-
-    // Numerical scaling
-    List<double> inputNum = [];
-    for (var col in numericalCols) {
-      double val = (routeDict[col] as num).toDouble();
-      double mean = numMeans[col]!;
-      double scale = numScales[col]!;
-      inputNum.add((val - mean) / scale);
+    if (_interpreter == null) {
+      print('Warning: Model not loaded yet');
+      return null;
     }
 
-    // Categorical one-hot
-    Map<String, double> inputCat = {};
-    for (var col in categoricalCols) {
-      String val = routeDict[col];
-      String key = '${col}_$val';
-      if (catColumns.contains(key)) {
-        inputCat[key] = 1.0;
+    try {
+      List<double> inputNum = [];
+      for (var col in numericalCols) {
+        var value = routeDict[col];
+        double numValue = 0.0;
+        if (value is num) {
+          numValue = value.toDouble();
+        } else if (value is String) {
+          numValue = double.tryParse(value) ?? 0.0;
+        }
+        double mean = numMeans[col] ?? 0.0;
+        double scale = numScales[col] ?? 1.0;
+        inputNum.add((numValue - mean) / scale);
       }
+
+      List<double> inputCatVec = List.filled(catColumns.length, 0.0);
+      for (var col in categoricalCols) {
+        String? val = routeDict[col]?.toString().trim();
+        if (val != null && val.isNotEmpty) {
+          String key = '${col}_$val';
+          int index = catColumns.indexOf(key);
+          if (index != -1) {
+            inputCatVec[index] = 1.0;
+          }
+        }
+      }
+
+      List<double> inputFlat = [...inputNum, ...inputCatVec];
+      if (inputFlat.length != 27) {
+        print('ERROR: Input length ${inputFlat.length}, expected 27');
+        return null;
+      }
+
+      var input = [inputFlat];
+      var output = List.generate(1, (_) => List<double>.filled(1, 0.0));
+
+      _interpreter!.run(input, output);
+
+      double prob = output[0][0].clamp(0.0, 1.0);
+      print('Model prediction: ${(prob * 100).toStringAsFixed(1)}% risk');
+      return prob;
+    } catch (e, stack) {
+      print('Inference error: $e');
+      print(stack);
+      return null;
     }
-
-    List<double> inputCatVec = catColumns.map((col) => inputCat[col] ?? 0.0).toList();
-
-    // Full input
-    List<double> inputFlat = [...inputNum, ...inputCatVec];
-    var input = [inputFlat];
-
-    // Output buffer
-    var output = List.generate(1, (_) => List<double>.filled(1, 0.0));
-
-    _interpreter!.run(input, output);
-    double prob = output[0][0].clamp(0.0, 1.0);
-
-    return prob;
   }
 
-  List<String> getSafetySuggestions(double prob, Map<String, dynamic> routeDict) {
+  List<String> getSafetySuggestions(
+      double prob, Map<String, dynamic> routeDict) {
     List<String> suggestions = [];
     bool isRisky = prob > 0.5;
-    suggestions.add('Predicted Risk Probability: ${(prob * 100).toStringAsFixed(1)}% → ${isRisky ? "Risky" : "Safe"}');
+
+    suggestions.add(
+      'Predicted Risk Probability: ${(prob * 100).toStringAsFixed(1)}% → ${isRisky ? "Risky" : "Safe"}',
+    );
+
+    String weather = (routeDict['Weather_Condition'] as String?) ?? 'Unknown';
+    String cong = (routeDict['Congestion_Level'] as String?) ?? 'Unknown';
+    double precipitation =
+        (routeDict['Precipitation'] as num?)?.toDouble() ?? 0.0;
+    double visibility =
+        (routeDict['Visibility'] as num?)?.toDouble() ?? 10000.0;
+    String roadType = (routeDict['Road_Type'] as String?) ?? '';
+    double travelTime =
+        (routeDict['Travel_Time_Estimate'] as num?)?.toDouble() ?? 0.0;
+
+    suggestions.add("• Weather: $weather");
+    suggestions.add("• Traffic Congestion: $cong");
 
     if (isRisky) {
-      suggestions.add("***General Advice:*** Wear your helmet properly, avoid distractions, and stay hydrated.");
+      suggestions.add(
+          "***General Advice:*** Wear your helmet properly, avoid distractions, and stay hydrated.");
 
-      String weather = routeDict['Weather_Condition'];
       if (['Rainy', 'Snowy', 'Foggy'].contains(weather)) {
-        suggestions.add("• Adverse weather: Reduce speed, increase following distance, and use appropriate lights.");
+        suggestions.add(
+            "• Adverse weather: Reduce speed, increase following distance, and use appropriate lights.");
       }
-
-      if (routeDict['Precipitation'] > 0.5) {
-        suggestions.add("• Precipitation detected: Roads may be slippery — brake gently.");
+      if (precipitation > 0.5) {
+        suggestions.add(
+            "• Precipitation detected: Roads may be slippery — brake gently.");
       }
-
-      if (routeDict['Visibility'] < 5000) {
+      if (visibility < 5000) {
         suggestions.add("• Low visibility: Drive slowly and use headlights.");
       }
-
-      String cong = routeDict['Congestion_Level'];
       if (cong == 'High') {
-        suggestions.add("• High congestion: Anticipate sudden stops and maintain safe distance.");
+        suggestions.add(
+            "• High congestion: Anticipate sudden stops and maintain safe distance.");
       }
-
-      String road = routeDict['Road_Type'];
-      if (['Narrow paths', 'Heavy traffic', 'Busy urban', 'Poor lighting road'].contains(road)) {
-        suggestions.add("• Challenging road ($road): Stay extra vigilant; consider a safer alternative route.");
+      if (['Narrow paths', 'Heavy traffic', 'Busy urban', 'Poor lighting road']
+          .contains(roadType)) {
+        suggestions.add(
+            "• Challenging road ($roadType): Stay extra vigilant; consider a safer alternative route.");
       }
-
-      if (routeDict['Travel_Time_Estimate'] > 90) {
-        suggestions.add("• Long travel time: Plan regular breaks to avoid fatigue.");
+      if (travelTime > 90) {
+        suggestions
+            .add("• Long travel time: Plan regular breaks to avoid fatigue.");
       }
     } else {
-      suggestions.add("Route appears Safe. Still follow basic safety: Wear helmet, obey traffic rules, and ride defensively.");
+      suggestions.add(
+          "Route appears Safe. Still follow basic safety: Wear helmet, obey traffic rules, and ride defensively.");
     }
 
     return suggestions;
@@ -390,14 +458,32 @@ class _Member4PageState extends State<Member4Page> {
     _predictedRisk = null;
 
     if (routeSegments.length < 2) {
-      setState(() {});
+      if (mounted) setState(() {});
       return;
     }
 
-    if (isDummyRoute && recentlyUsed) {
-      // Recently used dummy route: per-segment coloring with past data
+    Map<String, dynamic> routeDict = {};
+    if (isDummyRoute && destKey != null && dummyData.containsKey(destKey)) {
+      routeDict = Map.from(dummyData[destKey]?['features'] ?? {});
+      if (!recentlyUsed) {
+        safetyTips.add("Based on another member's journey data");
+      }
+    } else {
+      routeDict = generateRandomRouteDict(routeSegments);
+    }
+
+    _predictedRisk = predictRouteRisk(routeDict);
+
+    if (_predictedRisk != null) {
+      safetyTips.addAll(getSafetySuggestions(_predictedRisk!, routeDict));
+    } else {
+      safetyTips.add('No AI risk prediction available');
+    }
+
+    if (recentlyUsed) {
+      double baseRisk = _predictedRisk ?? 0.5;
       for (int i = 0; i < routeSegments.length - 1; i++) {
-        double riskScore = calculateRiskScore(i);
+        double riskScore = calculateRiskScore(i, baseRisk);
         polylines.add(
           Polyline(
             polylineId: PolylineId('segment_$i'),
@@ -410,23 +496,7 @@ class _Member4PageState extends State<Member4Page> {
         );
       }
     } else {
-      // New or not recently used route: Use model for overall risk
-      Map<String, dynamic> routeDict;
-      if (isDummyRoute && destKey != null && dummyData[destKey]!.containsKey('features')) {
-        routeDict = dummyData[destKey]!['features'];
-      } else {
-        routeDict = generateRandomRouteDict(routeSegments);
-      }
-
-      _predictedRisk = predictRouteRisk(routeDict);
-      Color routeColor = Colors.blue; // Default
-      if (_predictedRisk != null) {
-        routeColor = getRiskColor(_predictedRisk!);
-        safetyTips.addAll(getSafetySuggestions(_predictedRisk!, routeDict));
-      } else {
-        safetyTips.add('No AI risk prediction available');
-      }
-
+      Color routeColor = getRiskColor(_predictedRisk ?? 0.5);
       polylines.add(
         Polyline(
           polylineId: const PolylineId('full_route'),
@@ -439,19 +509,11 @@ class _Member4PageState extends State<Member4Page> {
       );
     }
 
-    // Fit camera to route
     if (mapController != null && routeSegments.isNotEmpty) {
-      double minLat = routeSegments[0].latitude;
-      double maxLat = minLat;
-      double minLng = routeSegments[0].longitude;
-      double maxLng = minLng;
-
-      for (final point in routeSegments) {
-        minLat = min(minLat, point.latitude);
-        maxLat = max(maxLat, point.latitude);
-        minLng = min(minLng, point.longitude);
-        maxLng = max(maxLng, point.longitude);
-      }
+      double minLat = routeSegments.map((p) => p.latitude).reduce(min);
+      double maxLat = routeSegments.map((p) => p.latitude).reduce(max);
+      double minLng = routeSegments.map((p) => p.longitude).reduce(min);
+      double maxLng = routeSegments.map((p) => p.longitude).reduce(max);
 
       final bounds = LatLngBounds(
         southwest: LatLng(minLat, minLng),
@@ -461,23 +523,20 @@ class _Member4PageState extends State<Member4Page> {
     }
 
     generateSafetyTips();
-    setState(() {});
+    if (mounted) setState(() {});
     _speakSafetyTips();
   }
 
-  double calculateRiskScore(int segmentIndex) {
-    double baseRisk = 0.4;
-
+  double calculateRiskScore(int segmentIndex, double baseRisk) {
+    double riskScore = baseRisk;
     if (recentlyUsed && destKey == 'kaduwela') {
-      baseRisk += 0.2;
-      if (segmentIndex % 4 == 0 || segmentIndex % 7 == 2) {
-        baseRisk += 0.4;
-      }
-    } else if (!recentlyUsed && destKey == 'malabe') {
-      baseRisk *= 0.6;
+      if (pastDangerAlert == true) riskScore += 0.3;
+      if (pastStressLevel != null && pastStressLevel! > 60) riskScore += 0.2;
+      if (pastHeartRate != null && pastHeartRate! > 90) riskScore += 0.1;
+      if (pastTemperature != null && pastTemperature! > 37.5) riskScore += 0.1;
     }
-
-    return baseRisk.clamp(0.0, 1.0);
+    riskScore += (Random().nextDouble() * 0.2 - 0.1);
+    return riskScore.clamp(0.0, 1.0);
   }
 
   Color getRiskColor(double risk) {
@@ -487,24 +546,29 @@ class _Member4PageState extends State<Member4Page> {
   }
 
   void generateSafetyTips() {
-    if (recentlyUsed && destKey == 'kaduwela') {
-      final sensor = dummyData['kaduwela']!['sensorData'];
-      pastHeartRate = sensor['heartRate'];
-      pastTemperature = sensor['temperature'];
-      pastStressLevel = sensor['stressLevel'];
-      pastDangerAlert = sensor['dangerAlert'];
+    if (recentlyUsed &&
+        destKey == 'kaduwela' &&
+        dummyData['kaduwela'] != null) {
+      final sensor =
+          dummyData['kaduwela']!['sensorData'] as Map<String, dynamic>;
+      pastHeartRate = sensor['heartRate'] as int?;
+      pastTemperature = sensor['temperature'] as double?;
+      pastStressLevel = sensor['stressLevel'] as int?;
+      pastDangerAlert = sensor['dangerAlert'] as bool?;
+      safetyTips.insert(0, 'This route was recently used by you');
       safetyTips.addAll([
-        'This route was recently used by you',
         'Past ride data:',
-        '• Heart Rate: $pastHeartRate bpm',
-        '• Temperature: $pastTemperature°C',
-        '• Stress Level: $pastStressLevel%',
-        if (pastDangerAlert!) '• Danger alert triggered in past ride',
-        'High-risk zones marked in red — stay extra vigilant',
+        if (pastHeartRate != null) '• Heart Rate: $pastHeartRate bpm',
+        if (pastTemperature != null) '• Temperature: $pastTemperature°C',
+        if (pastStressLevel != null) '• Stress Level: $pastStressLevel%',
       ]);
+      if (pastDangerAlert == true) {
+        safetyTips
+            .add('• Danger alert triggered in past ride - be extra careful');
+      }
+      safetyTips.add('High-risk zones marked in red — stay extra vigilant');
     } else {
-      // Model-based tips already added in analyzeRoute
-      safetyTips.add('This is a new route');
+      safetyTips.insert(0, 'This is a new route');
     }
   }
 
@@ -521,6 +585,7 @@ class _Member4PageState extends State<Member4Page> {
     _sensorTimer?.cancel();
     flutterTts.stop();
     _interpreter?.close();
+    mapController?.dispose();
     super.dispose();
   }
 
@@ -532,7 +597,13 @@ class _Member4PageState extends State<Member4Page> {
         children: [
           GoogleMap(
             initialCameraPosition: initialPosition,
-            onMapCreated: (controller) => mapController = controller,
+            onMapCreated: (controller) {
+              if (mapController == null) {
+                setState(() {
+                  mapController = controller;
+                });
+              }
+            },
             markers: markers,
             polylines: polylines,
             myLocationEnabled: false,
@@ -542,7 +613,6 @@ class _Member4PageState extends State<Member4Page> {
             trafficEnabled: true,
             mapToolbarEnabled: false,
           ),
-          // Live Sensor Overlay
           if (widget.startJourney)
             Positioned(
               top: MediaQuery.of(context).padding.top + 16,
@@ -552,49 +622,68 @@ class _Member4PageState extends State<Member4Page> {
                 decoration: BoxDecoration(
                   color: Colors.black87,
                   borderRadius: BorderRadius.circular(16),
-                  boxShadow: const [BoxShadow(color: Colors.black45, blurRadius: 10)],
+                  boxShadow: const [
+                    BoxShadow(color: Colors.black45, blurRadius: 10)
+                  ],
                 ),
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    const Text('Live Sensors', style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold)),
+                    const Text('Live Sensors',
+                        style: TextStyle(
+                            color: Colors.white, fontWeight: FontWeight.bold)),
                     const SizedBox(height: 8),
                     Row(children: [
-                      Icon(Icons.favorite, color: heartRate > 100 ? Colors.red : Colors.pink, size: 20),
-                      Text(' $heartRate bpm', style: const TextStyle(color: Colors.white)),
+                      Icon(Icons.favorite,
+                          color: heartRate > 100 ? Colors.red : Colors.pink,
+                          size: 20),
+                      Text(' $heartRate bpm',
+                          style: const TextStyle(color: Colors.white)),
                     ]),
                     Row(children: [
-                      Icon(Icons.thermostat, color: temperature > 37.5 ? Colors.orange : Colors.cyan, size: 20),
-                      Text(' ${temperature.toStringAsFixed(1)}°C', style: const TextStyle(color: Colors.white)),
+                      Icon(Icons.thermostat,
+                          color:
+                              temperature > 37.5 ? Colors.orange : Colors.cyan,
+                          size: 20),
+                      Text(' ${temperature.toStringAsFixed(1)}°C',
+                          style: const TextStyle(color: Colors.white)),
                     ]),
                     Row(children: [
-                      Icon(Icons.psychology, color: stressLevel > 65 ? Colors.deepOrange : Colors.amber, size: 20),
-                      Text(' $stressLevel%', style: const TextStyle(color: Colors.white)),
+                      Icon(Icons.psychology,
+                          color: stressLevel > 65
+                              ? Colors.deepOrange
+                              : Colors.amber,
+                          size: 20),
+                      Text(' $stressLevel%',
+                          style: const TextStyle(color: Colors.white)),
                     ]),
                   ],
                 ),
               ),
             ),
-          // Legend
-          if (isDummyRoute || (!isDummyRoute && _predictedRisk != null))
+          if (_predictedRisk != null || recentlyUsed)
             Positioned(
               bottom: showTips ? 220 : 140,
               left: 16,
               right: 16,
               child: Center(
                 child: Container(
-                  padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
+                  padding:
+                      const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
                   decoration: BoxDecoration(
                     color: Colors.white,
                     borderRadius: BorderRadius.circular(30),
-                    boxShadow: const [BoxShadow(color: Colors.black26, blurRadius: 8)],
+                    boxShadow: const [
+                      BoxShadow(color: Colors.black26, blurRadius: 8)
+                    ],
                   ),
                   child: recentlyUsed
                       ? Row(
                           mainAxisAlignment: MainAxisAlignment.spaceEvenly,
                           children: const [
                             LegendItem(color: Colors.green, label: 'Low Risk'),
-                            LegendItem(color: Colors.orange, label: 'Medium Risk'),
+                            LegendItem(
+                                color: Colors.orange, label: 'Medium Risk'),
                             LegendItem(color: Colors.red, label: 'High Risk'),
                           ],
                         )
@@ -602,7 +691,7 @@ class _Member4PageState extends State<Member4Page> {
                           mainAxisAlignment: MainAxisAlignment.center,
                           children: [
                             LegendItem(
-                              color: getRiskColor(_predictedRisk!),
+                              color: getRiskColor(_predictedRisk ?? 0.5),
                               label: 'Predicted Risk',
                             ),
                           ],
@@ -610,7 +699,6 @@ class _Member4PageState extends State<Member4Page> {
                 ),
               ),
             ),
-          // View/Hide Tips Button
           if (safetyTips.isNotEmpty)
             Positioned(
               bottom: showTips ? 160 : 80,
@@ -619,18 +707,22 @@ class _Member4PageState extends State<Member4Page> {
               child: Center(
                 child: ElevatedButton.icon(
                   onPressed: () => setState(() => showTips = !showTips),
-                  icon: Icon(showTips ? Icons.keyboard_arrow_down : Icons.security, size: 20),
-                  label: Text(showTips ? 'Hide Safety Tips' : 'View Safety Tips'),
+                  icon: Icon(
+                      showTips ? Icons.keyboard_arrow_down : Icons.security,
+                      size: 20),
+                  label:
+                      Text(showTips ? 'Hide Safety Tips' : 'View Safety Tips'),
                   style: ElevatedButton.styleFrom(
                     backgroundColor: Colors.deepPurple,
                     foregroundColor: Colors.white,
-                    padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 12),
-                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(30)),
+                    padding: const EdgeInsets.symmetric(
+                        horizontal: 24, vertical: 12),
+                    shape: RoundedRectangleBorder(
+                        borderRadius: BorderRadius.circular(30)),
                   ),
                 ),
               ),
             ),
-          // Safety Tips Panel
           if (showTips && safetyTips.isNotEmpty)
             Positioned(
               left: 0,
@@ -649,13 +741,18 @@ class _Member4PageState extends State<Member4Page> {
                       padding: const EdgeInsets.all(16),
                       decoration: const BoxDecoration(
                         color: Colors.deepPurple,
-                        borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
+                        borderRadius:
+                            BorderRadius.vertical(top: Radius.circular(20)),
                       ),
                       child: Row(
                         children: [
                           const Icon(Icons.security, color: Colors.white),
                           const SizedBox(width: 10),
-                          const Text('Safety Recommendations', style: TextStyle(color: Colors.white, fontSize: 18, fontWeight: FontWeight.bold)),
+                          const Text('Safety Recommendations',
+                              style: TextStyle(
+                                  color: Colors.white,
+                                  fontSize: 18,
+                                  fontWeight: FontWeight.bold)),
                           const Spacer(),
                           IconButton(
                             icon: const Icon(Icons.close, color: Colors.white),
@@ -674,8 +771,13 @@ class _Member4PageState extends State<Member4Page> {
                             child: Row(
                               crossAxisAlignment: CrossAxisAlignment.start,
                               children: [
-                                const Text('• ', style: TextStyle(fontSize: 18, color: Colors.deepPurple)),
-                                Expanded(child: Text(safetyTips[index], style: const TextStyle(fontSize: 15))),
+                                const Text('• ',
+                                    style: TextStyle(
+                                        fontSize: 18,
+                                        color: Colors.deepPurple)),
+                                Expanded(
+                                    child: Text(safetyTips[index],
+                                        style: const TextStyle(fontSize: 15))),
                               ],
                             ),
                           );
@@ -696,6 +798,7 @@ class LegendItem extends StatelessWidget {
   final Color color;
   final String label;
   const LegendItem({super.key, required this.color, required this.label});
+
   @override
   Widget build(BuildContext context) {
     return Row(
@@ -711,7 +814,8 @@ class LegendItem extends StatelessWidget {
           ),
         ),
         const SizedBox(width: 8),
-        Text(label, style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w600)),
+        Text(label,
+            style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w600)),
       ],
     );
   }

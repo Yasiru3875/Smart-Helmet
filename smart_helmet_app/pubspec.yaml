@@ -43,5 +43,5 @@ flutter:
 
   assets:
     - assets/eeg_stress_model_final.tflite
-    - assets/icons/motorcycle.png
     - assets/route_risk_model.tflite
+    - assets/icons/motorcycle.png
