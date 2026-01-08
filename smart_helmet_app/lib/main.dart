@@ -9,6 +9,7 @@ import 'services/bluetooth_manager.dart'; // Manages Bluetooth connections
 import 'screens/auth/login_screen.dart'; // User login interface
 import 'screens/home/home_screen.dart'; // Main application screen
 import 'screens/home/members/Health_Monitoring/member1_page.dart'; // Your BLE dashboard
+import 'providers/journey_provider.dart';
 
 void main() async {
   // Ensure that Flutter widgets binding is initialized before calling native code (like Firebase)
@@ -32,6 +33,7 @@ class SmartHelmetApp extends StatelessWidget {
       providers: [
         ChangeNotifierProvider(create: (_) => AuthService()),
         ChangeNotifierProvider(create: (_) => BluetoothManager()),
+        ChangeNotifierProvider(create: (_) => JourneyProvider()),
         // Add other providers for state management here if needed
       ],
       child: MaterialApp(
