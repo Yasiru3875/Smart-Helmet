@@ -3,6 +3,7 @@ import 'dart:convert';
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import 'package:tflite_flutter/tflite_flutter.dart';
+import 'package:fl_chart/fl_chart.dart';
 import '../../../../services/bluetooth_manager.dart';
 
 class Member1Page extends StatefulWidget {
@@ -21,7 +22,7 @@ class _Member1PageState extends State<Member1Page> {
   int reconnectAttempts = 0;
   final int maxReconnectAttempts = 3;
 
-  // Parsed sensor values
+  // Sensor values
   double heartRate = 0.0;
   double bodyTemperature = 0.0;
   String riskLevel = "Unknown";
@@ -29,11 +30,15 @@ class _Member1PageState extends State<Member1Page> {
 
   Interpreter? _interpreter;
 
-  // New: For Separate Emotional States (defaults since no EEG data in this page; integrate EEG for dynamic updates)
-  double arousalLevel = 0.0; // High = excited/frustrated, Low = calm/bored
-  double valenceLevel = 0.0; // High = positive/pleasant, Low = negative/unpleasant (e.g., frustration)
+  // Emotional state (placeholder)
   String frustrationState = "Neutral";
   String frustrationEmoji = "😐";
+
+  // Chart data
+  final int maxDataPoints = 30;
+  final List<FlSpot> heartRateSpots = [];
+  final List<FlSpot> temperatureSpots = [];
+  double _currentX = 0.0;
 
   @override
   void initState() {
@@ -47,19 +52,14 @@ class _Member1PageState extends State<Member1Page> {
       _interpreter = await Interpreter.fromAsset('assets/model.tflite');
       debugPrint("TFLite model loaded successfully");
     } catch (e) {
-      debugPrint("Error loading TFLite model: $e");
-      if (mounted) {
-        setState(() {
-          errorMessage = "Failed to load prediction model";
-        });
-      }
+      debugPrint("Error loading model: $e");
+      if (mounted) setState(() => errorMessage = "Failed to load prediction model");
     }
   }
 
   Future<void> _init() async {
     final btManager = context.read<BluetoothManager>();
     await btManager.requestPermissions();
-
     if (btManager.isConnected(deviceName)) {
       _subscribeToData();
       setState(() => status = "Connected");
@@ -69,7 +69,6 @@ class _Member1PageState extends State<Member1Page> {
   void _subscribeToData() {
     final btManager = context.read<BluetoothManager>();
     final dataStream = btManager.getDataStream(deviceName);
-
     String buffer = '';
 
     _dataSubscription?.cancel();
@@ -77,41 +76,27 @@ class _Member1PageState extends State<Member1Page> {
       (data) {
         if (!mounted) return;
         buffer += String.fromCharCodes(data);
-
-        // Split by newline (ESP32 sends with println)
         List<String> lines = buffer.split('\n');
         if (lines.length > 1) {
           for (int i = 0; i < lines.length - 1; i++) {
             String line = lines[i].trim();
-            if (line.isNotEmpty) {
-              _parseAndUpdateData(line);
-            }
+            if (line.isNotEmpty) _parseAndUpdateData(line);
           }
-          buffer = lines.last; // Keep incomplete part
+          buffer = lines.last;
         }
       },
-      onError: (e) {
-        debugPrint("Data stream error: $e");
-        if (mounted) {
-          setState(() => errorMessage = "Stream error: ${e.toString()}");
-        }
-      },
-      onDone: () {
-        debugPrint("$deviceName stream closed");
-        if (mounted) {
-          setState(() {
-            status = "Disconnected";
-            riskLevel = "Unknown";
-            riskColor = Colors.grey;
-          });
-        }
-      },
+      onError: (e) => setState(() => errorMessage = "Stream error: $e"),
+      onDone: () => setState(() {
+        status = "Disconnected";
+        riskLevel = "Unknown";
+        riskColor = Colors.grey;
+      }),
     );
   }
 
   void _parseAndUpdateData(String jsonString) {
     try {
-      final Map<String, dynamic> json = jsonDecode(jsonString);
+      final json = jsonDecode(jsonString);
       final double hr = (json['hr'] as num?)?.toDouble() ?? 0.0;
       final double temp = (json['temp'] as num?)?.toDouble() ?? 0.0;
 
@@ -119,13 +104,29 @@ class _Member1PageState extends State<Member1Page> {
         setState(() {
           heartRate = hr;
           bodyTemperature = temp;
+
+          _currentX += 1.0;
+          heartRateSpots.add(FlSpot(_currentX, hr));
+          temperatureSpots.add(FlSpot(_currentX, temp));
+
+          if (heartRateSpots.length > maxDataPoints) {
+            heartRateSpots.removeAt(0);
+            temperatureSpots.removeAt(0);
+            // Re-index X values to keep chart scrolling smoothly
+            for (int i = 0; i < heartRateSpots.length; i++) {
+              heartRateSpots[i] = FlSpot(heartRateSpots[i].x, heartRateSpots[i].y);
+              temperatureSpots[i] = FlSpot(temperatureSpots[i].x, temperatureSpots[i].y);
+            }
+            // Optional: Keep X incrementing or reset. 
+            // If resetting X is complex with FLChart, keeping it incrementing is fine
+            // as long as minX/maxX follow the window.
+          }
         });
       }
 
-      // Predict using TFLite
       _predictWithTFLite(hr, temp);
     } catch (e) {
-      debugPrint("JSON parse error: $e | Raw: $jsonString");
+      debugPrint("Parse error: $e | Raw: $jsonString");
     }
   }
 
@@ -136,107 +137,79 @@ class _Member1PageState extends State<Member1Page> {
     }
 
     try {
-      // Input: [heart_rate, body_temperature]
-      // Assuming model expects float32 input shape [1, 2]
       var input = [[hr, temp]];
-      var output = List.filled(1, [0.0]); // Output shape [1, 1] for probability
-
+      var output = List.filled(1, [0.0]);
       _interpreter!.run(input, output);
 
-      double prob = output[0][0] * 100; // Assuming sigmoid output (0-1)
-      String newRisk = (output[0][0] > 0.5) ? "High" : "Low";
-      int probInt = prob.round();
-
-      Color newRiskColor = Colors.green;
-      if (newRisk == "High") newRiskColor = Colors.red;
-      else if (newRisk == "Medium") newRiskColor = Colors.orange; // If model outputs medium, but binary here
+      final double probability = output[0][0];
+      final int riskPercentage = (probability * 100).round();
+      final String newRisk = probability > 0.5 ? "High" : "Low";
+      final Color newColor = newRisk == "High" ? Colors.red : Colors.green;
 
       if (mounted) {
         setState(() {
-          riskLevel = "$newRisk ($probInt%)";
-          riskColor = newRiskColor;
+          riskLevel = "$newRisk ($riskPercentage%)";
+          riskColor = newColor;
         });
       }
     } catch (e) {
-      debugPrint("TFLite prediction error: $e");
+      debugPrint("TFLite inference error: $e");
       _fallbackLocalRisk(hr, temp);
     }
   }
 
   void _fallbackLocalRisk(double hr, double temp) {
     String newRisk = "Low";
-    Color newRiskColor = Colors.green;
+    Color newColor = Colors.green;
+    int riskPercentage = 15;
 
     if (hr > 100 || temp > 38.0) {
       newRisk = "High";
-      newRiskColor = Colors.red;
+      newColor = Colors.red;
+      riskPercentage = 85;
     } else if (hr > 90 || temp > 37.5) {
       newRisk = "Medium";
-      newRiskColor = Colors.orange;
+      newColor = Colors.orange;
+      riskPercentage = 60;
     }
 
     if (mounted) {
       setState(() {
-        riskLevel = newRisk;
-        riskColor = newRiskColor;
+        riskLevel = "$newRisk ($riskPercentage%)";
+        riskColor = newColor;
       });
     }
   }
 
   Future<void> connectToDevice() async {
     final btManager = context.read<BluetoothManager>();
-
-    setState(() {
-      status = "Connecting...";
-      errorMessage = "";
-    });
-
-    await Future.delayed(const Duration(seconds: 2));
+    setState(() { status = "Connecting..."; errorMessage = ""; });
 
     try {
       final result = await btManager.connectToDevice(deviceName);
+      if (!mounted) return;
 
-      if (mounted) {
-        setState(() => status = result);
-
-        if (btManager.isConnected(deviceName)) {
-          reconnectAttempts = 0;
-          _subscribeToData();
-          setState(() {
-            status = "Connected";
-            errorMessage = "";
-          });
+      if (btManager.isConnected(deviceName)) {
+        reconnectAttempts = 0;
+        _subscribeToData();
+        setState(() { status = "Connected"; errorMessage = ""; });
+      } else {
+        if (reconnectAttempts < maxReconnectAttempts) {
+          reconnectAttempts++;
+          await Future.delayed(const Duration(seconds: 3));
+          connectToDevice();
         } else {
-          errorMessage = result;
-          if (reconnectAttempts < maxReconnectAttempts) {
-            reconnectAttempts++;
-            debugPrint(
-              "Reconnection attempt $reconnectAttempts/$maxReconnectAttempts",
-            );
-            await Future.delayed(const Duration(seconds: 3));
-            if (mounted && !btManager.isConnected(deviceName))
-              connectToDevice();
-          } else {
-            setState(() {
-              status = "Connection failed";
-              errorMessage =
-                  "Failed after $maxReconnectAttempts attempts.\n\nTroubleshooting:\n"
-                  "• Ensure ESP32 is powered on\n"
-                  "• Check pairing in Bluetooth settings\n"
-                  "• Unpair & re-pair device\n"
-                  "• Restart ESP32\n"
-                  "• Stay within 10m range";
-            });
-          }
+          setState(() {
+            status = "Connection failed";
+            errorMessage = "Failed after $maxReconnectAttempts attempts. Please check device.";
+          });
         }
       }
     } catch (e) {
-      if (mounted) {
-        setState(() {
-          status = "Connection failed";
-          errorMessage = "Error: ${e.toString()}";
-        });
-      }
+      setState(() {
+        status = "Connection failed";
+        errorMessage = "Error: $e";
+      });
     }
   }
 
@@ -244,15 +217,15 @@ class _Member1PageState extends State<Member1Page> {
     final btManager = context.read<BluetoothManager>();
     await btManager.disconnectDevice(deviceName);
     _dataSubscription?.cancel();
-    _dataSubscription = null;
 
     setState(() {
       status = "Disconnected";
-      errorMessage = "";
-      heartRate = 0.0;
-      bodyTemperature = 0.0;
+      heartRate = bodyTemperature = 0.0;
       riskLevel = "Unknown";
       riskColor = Colors.grey;
+      heartRateSpots.clear();
+      temperatureSpots.clear();
+      _currentX = 0.0;
     });
   }
 
@@ -269,118 +242,31 @@ class _Member1PageState extends State<Member1Page> {
     final isConnected = btManager.isConnected(deviceName);
 
     return Scaffold(
+      backgroundColor: Colors.grey[50],
       appBar: AppBar(
-        title: const Text("Health Monitoring"),
-        backgroundColor: Colors.indigo,
-        foregroundColor: Colors.white,
-        elevation: 4,
+        title: const Text(
+          "Health Monitor",
+          style: TextStyle(fontSize: 18, fontWeight: FontWeight.w600),
+        ),
+        backgroundColor: Colors.white,
+        foregroundColor: Colors.black87,
+        elevation: 0,
+        centerTitle: true,
       ),
       body: SingleChildScrollView(
-        padding: const EdgeInsets.all(20),
+        padding: const EdgeInsets.all(16),
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
-            // Connection Card
-            Card(
-              elevation: 6,
-              shape: RoundedRectangleBorder(
-                borderRadius: BorderRadius.circular(16),
-              ),
-              child: Padding(
-                padding: const EdgeInsets.all(20),
-                child: Column(
-                  children: [
-                    Row(
-                      mainAxisAlignment: MainAxisAlignment.center,
-                      children: [
-                        Expanded(
-                          child: ElevatedButton.icon(
-                            onPressed: isConnected ? null : connectToDevice,
-                            icon: const Icon(Icons.bluetooth_connected),
-                            label: const Text("Connect"),
-                            style: ElevatedButton.styleFrom(
-                              backgroundColor: Colors.indigo,
-                              foregroundColor: Colors.white,
-                              padding: const EdgeInsets.symmetric(vertical: 14),
-                              shape: RoundedRectangleBorder(
-                                borderRadius: BorderRadius.circular(12),
-                              ),
-                            ),
-                          ),
-                        ),
-                        const SizedBox(width: 12),
-                        Expanded(
-                          child: ElevatedButton.icon(
-                            onPressed: isConnected ? disconnectDevice : null,
-                            icon: const Icon(Icons.bluetooth_disabled),
-                            label: const Text("Disconnect"),
-                            style: ElevatedButton.styleFrom(
-                              backgroundColor: Colors.redAccent,
-                              foregroundColor: Colors.white,
-                              padding: const EdgeInsets.symmetric(vertical: 14),
-                              shape: RoundedRectangleBorder(
-                                borderRadius: BorderRadius.circular(12),
-                              ),
-                            ),
-                          ),
-                        ),
-                      ],
-                    ),
-                    const SizedBox(height: 16),
-                    Row(
-                      mainAxisAlignment: MainAxisAlignment.center,
-                      children: [
-                        Icon(
-                          isConnected ? Icons.circle : Icons.circle_outlined,
-                          color: isConnected ? Colors.green : Colors.orange,
-                          size: 18,
-                        ),
-                        const SizedBox(width: 10),
-                        Text(
-                          status,
-                          style: TextStyle(
-                            fontSize: 18,
-                            fontWeight: FontWeight.bold,
-                            color: isConnected ? Colors.green : Colors.orange,
-                          ),
-                        ),
-                      ],
-                    ),
-                    if (errorMessage.isNotEmpty) ...[
-                      const SizedBox(height: 12),
-                      Container(
-                        padding: const EdgeInsets.all(14),
-                        decoration: BoxDecoration(
-                          color: Colors.red.shade50,
-                          borderRadius: BorderRadius.circular(12),
-                          border: Border.all(color: Colors.red.shade300),
-                        ),
-                        child: Row(
-                          children: [
-                            Icon(
-                              Icons.error_outline,
-                              color: Colors.red.shade700,
-                            ),
-                            const SizedBox(width: 10),
-                            Expanded(
-                              child: Text(
-                                errorMessage,
-                                style: TextStyle(
-                                  color: Colors.red.shade700,
-                                  fontSize: 13,
-                                ),
-                              ),
-                            ),
-                          ],
-                        ),
-                      ),
-                    ],
-                  ],
-                ),
-              ),
-            ),
+            // Connection Status Bar
+            _buildConnectionStatus(isConnected),
+            
+            const SizedBox(height: 16),
 
-            const SizedBox(height: 24),
+            // Connection Controls
+            _buildConnectionControls(isConnected),
+
+            const SizedBox(height: 20),
 
             // Vital Signs Cards
             Row(
@@ -388,20 +274,18 @@ class _Member1PageState extends State<Member1Page> {
                 Expanded(
                   child: _buildVitalCard(
                     title: "Heart Rate",
-                    value: heartRate > 0
-                        ? "${heartRate.toStringAsFixed(0)} BPM"
-                        : "--",
+                    value: heartRate > 0 ? heartRate.toStringAsFixed(0) : "--",
+                    unit: "BPM",
                     icon: Icons.favorite,
                     color: Colors.red.shade400,
                   ),
                 ),
-                const SizedBox(width: 16),
+                const SizedBox(width: 12),
                 Expanded(
                   child: _buildVitalCard(
-                    title: "Body Temperature",
-                    value: bodyTemperature > 0
-                        ? "${bodyTemperature.toStringAsFixed(1)} °C"
-                        : "--",
+                    title: "Temperature",
+                    value: bodyTemperature > 0 ? bodyTemperature.toStringAsFixed(1) : "--",
+                    unit: "°C",
                     icon: Icons.thermostat,
                     color: Colors.blue.shade400,
                   ),
@@ -409,177 +293,129 @@ class _Member1PageState extends State<Member1Page> {
               ],
             ),
 
-            const SizedBox(height: 24),
+            const SizedBox(height: 20),
 
             // Risk Assessment Card
-            Card(
-              elevation: 8,
-              shape: RoundedRectangleBorder(
-                borderRadius: BorderRadius.circular(20),
+            _buildRiskAssessment(),
+
+            const SizedBox(height: 20),
+
+            // Emotional State Card
+            _buildEmotionalState(isConnected),
+
+            const SizedBox(height: 20),
+
+            // Live Vitals Chart (Enhanced)
+            _buildVitalsChart(),
+
+            const SizedBox(height: 20),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _buildConnectionStatus(bool isConnected) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+      decoration: BoxDecoration(
+        color: isConnected ? Colors.green.shade50 : Colors.orange.shade50,
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(
+          color: isConnected ? Colors.green.shade200 : Colors.orange.shade200,
+          width: 1,
+        ),
+      ),
+      child: Row(
+        children: [
+          Icon(
+            isConnected ? Icons.check_circle : Icons.warning_amber_rounded,
+            color: isConnected ? Colors.green.shade700 : Colors.orange.shade700,
+            size: 20,
+          ),
+          const SizedBox(width: 12),
+          Expanded(
+            child: Text(
+              status,
+              style: TextStyle(
+                fontSize: 14,
+                fontWeight: FontWeight.w500,
+                color: isConnected ? Colors.green.shade700 : Colors.orange.shade700,
               ),
-              child: Container(
-                padding: const EdgeInsets.all(24),
-                decoration: BoxDecoration(
-                  borderRadius: BorderRadius.circular(20),
-                  gradient: LinearGradient(
-                    colors: [
-                      riskColor.withOpacity(0.2),
-                      riskColor.withOpacity(0.05),
-                    ],
-                    begin: Alignment.topLeft,
-                    end: Alignment.bottomRight,
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildConnectionControls(bool isConnected) {
+    return Card(
+      elevation: 2,
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+      child: Padding(
+        padding: const EdgeInsets.all(16),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            const Text(
+              "Device Connection",
+              style: TextStyle(fontSize: 14, fontWeight: FontWeight.w600, color: Colors.black87),
+            ),
+            const SizedBox(height: 12),
+            Row(
+              children: [
+                Expanded(
+                  child: OutlinedButton.icon(
+                    onPressed: isConnected ? null : connectToDevice,
+                    icon: const Icon(Icons.bluetooth, size: 18),
+                    label: const Text("Connect"),
+                    style: OutlinedButton.styleFrom(
+                      padding: const EdgeInsets.symmetric(vertical: 12),
+                      side: BorderSide(color: isConnected ? Colors.grey.shade300 : Colors.indigo),
+                      foregroundColor: isConnected ? Colors.grey : Colors.indigo,
+                      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+                    ),
                   ),
                 ),
-                child: Column(
+                const SizedBox(width: 12),
+                Expanded(
+                  child: OutlinedButton.icon(
+                    onPressed: isConnected ? disconnectDevice : null,
+                    icon: const Icon(Icons.bluetooth_disabled, size: 18),
+                    label: const Text("Disconnect"),
+                    style: OutlinedButton.styleFrom(
+                      padding: const EdgeInsets.symmetric(vertical: 12),
+                      side: BorderSide(color: isConnected ? Colors.red : Colors.grey.shade300),
+                      foregroundColor: isConnected ? Colors.red : Colors.grey,
+                      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+                    ),
+                  ),
+                ),
+              ],
+            ),
+            if (errorMessage.isNotEmpty) ...[
+              const SizedBox(height: 12),
+              Container(
+                padding: const EdgeInsets.all(12),
+                decoration: BoxDecoration(
+                  color: Colors.red.shade50,
+                  borderRadius: BorderRadius.circular(8),
+                ),
+                child: Row(
                   children: [
-                    Icon(Icons.monitor_heart, size: 60, color: riskColor),
-                    const SizedBox(height: 16),
-                    const Text(
-                      "Cardiac Risk Assessment",
-                      style: TextStyle(
-                        fontSize: 20,
-                        fontWeight: FontWeight.bold,
-                        color: Colors.black87,
-                      ),
-                    ),
-                    const SizedBox(height: 12),
-                    Text(
-                      riskLevel,
-                      style: TextStyle(
-                        fontSize: 36,
-                        fontWeight: FontWeight.w900,
-                        color: riskColor,
-                        letterSpacing: 1.2,
-                      ),
-                    ),
-                    const SizedBox(height: 8),
-                    Text(
-                      _getRiskMessage(),
-                      textAlign: TextAlign.center,
-                      style: const TextStyle(
-                        fontSize: 14,
-                        color: Colors.black54,
+                    Icon(Icons.error_outline, size: 16, color: Colors.red.shade700),
+                    const SizedBox(width: 8),
+                    Expanded(
+                      child: Text(
+                        errorMessage,
+                        style: TextStyle(color: Colors.red.shade700, fontSize: 12),
                       ),
                     ),
                   ],
                 ),
               ),
-            ),
-
-            const SizedBox(height: 30),
-
-            // New: Separate Emotional States from EEG Waves
-            Card(
-              elevation: 8,
-              shape: RoundedRectangleBorder(
-                borderRadius: BorderRadius.circular(20),
-              ),
-              color: Colors.indigo.shade50,
-              child: Padding(
-                padding: const EdgeInsets.all(24),
-                child: Column(
-                  children: [
-                    const Text(
-                      "Detected Emotional State (from EEG Waves)",
-                      style: TextStyle(
-                        fontSize: 20,
-                        fontWeight: FontWeight.bold,
-                        color: Colors.indigo,
-                      ),
-                      textAlign: TextAlign.center,
-                    ),
-                    const SizedBox(height: 16),
-                    Text(
-                      frustrationEmoji,
-                      style: const TextStyle(fontSize: 90),
-                      textAlign: TextAlign.center,
-                    ),
-                    const SizedBox(height: 16),
-                    Text(
-                      frustrationState,
-                      style: const TextStyle(
-                        fontSize: 30,
-                        fontWeight: FontWeight.bold,
-                        color: Colors.indigo,
-                      ),
-                      textAlign: TextAlign.center,
-                    ),
-                    const SizedBox(height: 12),
-                    Text(
-                      isConnected
-                          ? "Based on real-time EEG band ratios (Beta/Alpha for arousal + meditation/stress for valence)"
-                          : "Waiting for good signal...",
-                      style: const TextStyle(
-                        fontSize: 14,
-                        color: Colors.black54,
-                      ),
-                      textAlign: TextAlign.center,
-                    ),
-                    const SizedBox(height: 8),
-                    if (frustrationState == "Frustrated")
-                      const Text(
-                        "High arousal with unpleasant valence detected – possible frustration or anger.",
-                        style: TextStyle(
-                          fontSize: 14,
-                          color: Colors.red,
-                          fontWeight: FontWeight.bold,
-                        ),
-                        textAlign: TextAlign.center,
-                      ),
-                  ],
-                ),
-              ),
-            ),
-
-            const SizedBox(height: 30),
-
-            // Emotional States to Predict Heart Attack (unchanged from previous)
-            Card(
-              elevation: 6,
-              shape: RoundedRectangleBorder(
-                borderRadius: BorderRadius.circular(20),
-              ),
-              child: Padding(
-                padding: const EdgeInsets.all(24),
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    const Text(
-                      "Emotional States to Predict Heart Attack",
-                      style: TextStyle(
-                        fontSize: 20,
-                        fontWeight: FontWeight.bold,
-                      ),
-                      textAlign: TextAlign.center,
-                    ),
-                    const SizedBox(height: 16),
-                    const Text(
-                      "Based on research (PMID: 24149648):",
-                      style: TextStyle(fontSize: 16, color: Colors.black87),
-                    ),
-                    const SizedBox(height: 12),
-                    const BulletPoint(
-                      text:
-                          "Unpleasant emotions / Frustration (before the event)",
-                    ),
-                    const BulletPoint(
-                      text: "Rapid increase in anger (during the event)",
-                    ),
-                    const SizedBox(height: 16),
-                    const Text(
-                      "Monitor your stress levels and seek medical advice if experiencing these states persistently.",
-                      style: TextStyle(
-                        fontSize: 14,
-                        color: Colors.black54,
-                        fontStyle: FontStyle.italic,
-                      ),
-                    ),
-                  ],
-                ),
-              ),
-            ),
-
-            const SizedBox(height: 40),
+            ],
           ],
         ),
       ),
@@ -589,30 +425,60 @@ class _Member1PageState extends State<Member1Page> {
   Widget _buildVitalCard({
     required String title,
     required String value,
+    required String unit,
     required IconData icon,
     required Color color,
   }) {
     return Card(
-      elevation: 6,
-      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+      elevation: 2,
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
       child: Padding(
-        padding: const EdgeInsets.symmetric(vertical: 24, horizontal: 16),
+        padding: const EdgeInsets.all(16),
         child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            Icon(icon, size: 48, color: color),
-            const SizedBox(height: 12),
-            Text(
-              title,
-              style: const TextStyle(fontSize: 16, color: Colors.black54),
+            Row(
+              children: [
+                Icon(icon, size: 20, color: color),
+                const SizedBox(width: 8),
+                Expanded(
+                  child: Text(
+                    title,
+                    style: const TextStyle(
+                      fontSize: 13,
+                      color: Colors.black54,
+                      fontWeight: FontWeight.w500,
+                    ),
+                  ),
+                ),
+              ],
             ),
-            const SizedBox(height: 8),
-            Text(
-              value,
-              style: TextStyle(
-                fontSize: 28,
-                fontWeight: FontWeight.bold,
-                color: color,
-              ),
+            const SizedBox(height: 12),
+            Row(
+              crossAxisAlignment: CrossAxisAlignment.end,
+              children: [
+                Text(
+                  value,
+                  style: TextStyle(
+                    fontSize: 32,
+                    fontWeight: FontWeight.bold,
+                    color: color,
+                    height: 1,
+                  ),
+                ),
+                const SizedBox(width: 4),
+                Padding(
+                  padding: const EdgeInsets.only(bottom: 4),
+                  child: Text(
+                    unit,
+                    style: TextStyle(
+                      fontSize: 14,
+                      fontWeight: FontWeight.w500,
+                      color: Colors.grey.shade600,
+                    ),
+                  ),
+                ),
+              ],
             ),
           ],
         ),
@@ -620,43 +486,376 @@ class _Member1PageState extends State<Member1Page> {
     );
   }
 
-  String _getRiskMessage() {
-    if (riskLevel.contains("High")) {
-      return "Immediate attention recommended.\nHigh heart rate or elevated temperature detected.";
-    } else if (riskLevel.contains("Medium")) {
-      return "Monitor closely.\nSlightly elevated vitals – rest and hydrate.";
-    } else if (riskLevel.contains("Low")) {
-      return "Vitals appear normal.\nContinue regular monitoring.";
-    } else {
-      return "Waiting for data...";
-    }
-  }
-}
-
-class BulletPoint extends StatelessWidget {
-  final String text;
-
-  const BulletPoint({super.key, required this.text});
-
-  @override
-  Widget build(BuildContext context) {
-    return Padding(
-      padding: const EdgeInsets.only(bottom: 8.0),
-      child: Row(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          const Text(
-            "• ",
-            style: TextStyle(fontSize: 16, color: Colors.black87),
+  Widget _buildRiskAssessment() {
+    return Card(
+      elevation: 2,
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+      child: Container(
+        padding: const EdgeInsets.all(20),
+        decoration: BoxDecoration(
+          borderRadius: BorderRadius.circular(12),
+          gradient: LinearGradient(
+            colors: [riskColor.withOpacity(0.1), Colors.white],
+            begin: Alignment.topLeft,
+            end: Alignment.bottomRight,
           ),
-          Expanded(
-            child: Text(
-              text,
-              style: const TextStyle(fontSize: 16, color: Colors.black87),
+        ),
+        child: Column(
+          children: [
+            Row(
+              children: [
+                Icon(Icons.monitor_heart, size: 24, color: riskColor),
+                const SizedBox(width: 12),
+                const Text(
+                  "Cardiac Risk Assessment",
+                  style: TextStyle(fontSize: 16, fontWeight: FontWeight.w600),
+                ),
+              ],
+            ),
+            const SizedBox(height: 16),
+            Container(
+              padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 12),
+              decoration: BoxDecoration(
+                color: riskColor.withOpacity(0.15),
+                borderRadius: BorderRadius.circular(8),
+              ),
+              child: Text(
+                riskLevel,
+                style: TextStyle(
+                  fontSize: 28,
+                  fontWeight: FontWeight.bold,
+                  color: riskColor,
+                ),
+              ),
+            ),
+            const SizedBox(height: 12),
+            Text(
+              _getRiskMessage(),
+              style: const TextStyle(fontSize: 13, color: Colors.black54),
+              textAlign: TextAlign.center,
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _buildEmotionalState(bool isConnected) {
+    return Card(
+      elevation: 2,
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+      child: Padding(
+        padding: const EdgeInsets.all(20),
+        child: Column(
+          children: [
+            const Text(
+              "Emotional State",
+              style: TextStyle(fontSize: 16, fontWeight: FontWeight.w600),
+            ),
+            const SizedBox(height: 16),
+            Text(frustrationEmoji, style: const TextStyle(fontSize: 64)),
+            const SizedBox(height: 12),
+            Text(
+              frustrationState,
+              style: const TextStyle(
+                fontSize: 20,
+                fontWeight: FontWeight.w600,
+                color: Colors.indigo,
+              ),
+            ),
+            const SizedBox(height: 8),
+            Text(
+              isConnected
+                  ? "Analyzing real-time signals..."
+                  : "Connect device to detect emotional state",
+              style: const TextStyle(fontSize: 12, color: Colors.black38),
+              textAlign: TextAlign.center,
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  // --- ENHANCED CHART CODE STARTS HERE ---
+
+Widget _buildVitalsChart() {
+    // Define professional colors
+    final Color hrColor = const Color(0xFFFF4D4D);
+    final Color tempColor = const Color(0xFF4D94FF);
+
+    // 1. CALCULATE DYNAMIC MIN/MAX Y
+    double minY = 0;
+    double maxY = 100;
+    
+    if (heartRateSpots.isNotEmpty || temperatureSpots.isNotEmpty) {
+      // Get all Y values from both lists
+      final allYValues = [
+        ...heartRateSpots.map((e) => e.y),
+        ...temperatureSpots.map((e) => e.y)
+      ];
+      
+      if (allYValues.isNotEmpty) {
+        // Find the absolute min and max in the current data
+        double dataMin = allYValues.reduce((curr, next) => curr < next ? curr : next);
+        double dataMax = allYValues.reduce((curr, next) => curr > next ? curr : next);
+
+        // Add "padding" so the line doesn't touch the very edge
+        minY = (dataMin - 10).clamp(0, double.infinity); // Ensure it doesn't go below 0
+        maxY = dataMax + 20; // Add headroom at the top
+      }
+    }
+
+    return Card(
+      elevation: 4,
+      shadowColor: Colors.black12,
+      color: Colors.white,
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+      child: Padding(
+        padding: const EdgeInsets.fromLTRB(16, 24, 24, 16),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            // ... Header logic remains the same ...
+            Row(
+              mainAxisAlignment: MainAxisAlignment.spaceBetween,
+              children: [
+                const Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      "Real-time Analytics",
+                      style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold, color: Colors.black87),
+                    ),
+                    Text(
+                      "Live sensor feed",
+                      style: TextStyle(fontSize: 12, color: Colors.grey),
+                    ),
+                  ],
+                ),
+                Container(
+                  padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                  decoration: BoxDecoration(
+                    color: Colors.green.withOpacity(0.1),
+                    borderRadius: BorderRadius.circular(4),
+                    border: Border.all(color: Colors.green.withOpacity(0.3))
+                  ),
+                  child: Row(
+                    children: [
+                      Container(
+                        width: 6, height: 6,
+                        decoration: const BoxDecoration(color: Colors.green, shape: BoxShape.circle),
+                      ),
+                      const SizedBox(width: 6),
+                      Text("LIVE", style: TextStyle(fontSize: 10, fontWeight: FontWeight.bold, color: Colors.green.shade700)),
+                    ],
+                  ),
+                )
+              ],
+            ),
+            const SizedBox(height: 24),
+            SizedBox(
+              height: 240,
+              child: heartRateSpots.isEmpty
+                  ? Center(
+                      child: Column(
+                        mainAxisAlignment: MainAxisAlignment.center,
+                        children: [
+                          Icon(Icons.query_stats, size: 48, color: Colors.grey.shade200),
+                          const SizedBox(height: 12),
+                          Text("Waiting for signal...", style: TextStyle(color: Colors.grey.shade400)),
+                        ],
+                      ),
+                    )
+                  : LineChart(
+                      LineChartData(
+                        backgroundColor: Colors.transparent,
+                        clipData: const FlClipData.all(),
+                        gridData: FlGridData(
+                          show: true,
+                          drawVerticalLine: true,
+                          horizontalInterval: 20,
+                          verticalInterval: 5,
+                          getDrawingHorizontalLine: (value) => FlLine(
+                            color: Colors.grey.shade200,
+                            strokeWidth: 1,
+                            dashArray: [5, 5], 
+                          ),
+                          getDrawingVerticalLine: (value) => FlLine(
+                            color: Colors.grey.shade100,
+                            strokeWidth: 1,
+                          ),
+                        ),
+                        borderData: FlBorderData(
+                          show: true,
+                          border: Border(
+                            bottom: BorderSide(color: Colors.grey.shade200),
+                            left: BorderSide(color: Colors.grey.shade200),
+                            right: const BorderSide(color: Colors.transparent),
+                            top: const BorderSide(color: Colors.transparent),
+                          ),
+                        ),
+                        titlesData: FlTitlesData(
+                          leftTitles: AxisTitles(
+                            sideTitles: SideTitles(
+                              showTitles: true,
+                              reservedSize: 40,
+                              // 2. DYNAMIC INTERVAL
+                              // Calculate interval based on range to prevent cluttered labels
+                              interval: (maxY - minY) > 100 ? 50 : 20, 
+                              getTitlesWidget: (value, meta) {
+                                if (value < minY || value > maxY) return const SizedBox.shrink();
+                                return Padding(
+                                  padding: const EdgeInsets.only(right: 8.0),
+                                  child: Text(
+                                    value.toInt().toString(),
+                                    style: TextStyle(
+                                      fontSize: 10, 
+                                      color: Colors.grey.shade500,
+                                      fontWeight: FontWeight.w500
+                                    ),
+                                    textAlign: TextAlign.right,
+                                  ),
+                                );
+                              },
+                            ),
+                          ),
+                          rightTitles: AxisTitles(
+                            sideTitles: SideTitles(
+                              showTitles: true,
+                              reservedSize: 40,
+                              interval: (maxY - minY) > 100 ? 50 : 20,
+                              getTitlesWidget: (value, meta) {
+                                if (value < minY || value > maxY) return const SizedBox.shrink();
+                                return Text(
+                                  '${value.toStringAsFixed(1)}°',
+                                  style: TextStyle(fontSize: 10, color: Colors.blue.shade300),
+                                );
+                              },
+                            ),
+                          ),
+                          bottomTitles: const AxisTitles(sideTitles: SideTitles(showTitles: false)),
+                          topTitles: const AxisTitles(sideTitles: SideTitles(showTitles: false)),
+                        ),
+                        minX: heartRateSpots.first.x,
+                        maxX: heartRateSpots.last.x,
+                        // 3. APPLY DYNAMIC MIN/MAX
+                        minY: minY,
+                        maxY: maxY,
+                        lineTouchData: LineTouchData(
+                          enabled: true,
+                          touchTooltipData: LineTouchTooltipData(
+                            getTooltipColor: (_) => Colors.blueGrey.shade900,
+                            tooltipRoundedRadius: 8,
+                            getTooltipItems: (spots) {
+                              return spots.map((spot) {
+                                final isHR = spot.barIndex == 0;
+                                return LineTooltipItem(
+                                  isHR ? '${spot.y.toInt()} BPM' : '${spot.y.toStringAsFixed(1)}°C',
+                                  TextStyle(
+                                    color: isHR ? const Color(0xFFFF8A8A) : const Color(0xFF8AAFFF),
+                                    fontWeight: FontWeight.bold,
+                                    fontSize: 12,
+                                  ),
+                                );
+                              }).toList();
+                            },
+                          ),
+                        ),
+                        lineBarsData: [
+                          LineChartBarData(
+                            spots: heartRateSpots,
+                            isCurved: true,
+                            curveSmoothness: 0.35,
+                            color: hrColor,
+                            barWidth: 3,
+                            isStrokeCapRound: true,
+                            dotData: const FlDotData(show: false),
+                            belowBarData: BarAreaData(
+                              show: true,
+                              gradient: LinearGradient(
+                                begin: Alignment.topCenter,
+                                end: Alignment.bottomCenter,
+                                colors: [
+                                  hrColor.withOpacity(0.2),
+                                  hrColor.withOpacity(0.0),
+                                ],
+                              ),
+                            ),
+                          ),
+                          LineChartBarData(
+                            spots: temperatureSpots,
+                            isCurved: true,
+                            curveSmoothness: 0.35,
+                            color: tempColor,
+                            barWidth: 3,
+                            isStrokeCapRound: true,
+                            dotData: const FlDotData(show: false),
+                            belowBarData: BarAreaData(
+                              show: true,
+                              gradient: LinearGradient(
+                                begin: Alignment.topCenter,
+                                end: Alignment.bottomCenter,
+                                colors: [
+                                  tempColor.withOpacity(0.2),
+                                  tempColor.withOpacity(0.0),
+                                ],
+                              ),
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+            ),
+            const SizedBox(height: 16),
+            Row(
+              mainAxisAlignment: MainAxisAlignment.center,
+              children: [
+                _buildModernLegend(hrColor, "Heart Rate"),
+                const SizedBox(width: 24),
+                _buildModernLegend(tempColor, "Body Temp"),
+              ],
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  // Helper widget for the Legend
+  Widget _buildModernLegend(Color color, String label) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+      decoration: BoxDecoration(
+        color: color.withOpacity(0.05),
+        borderRadius: BorderRadius.circular(20),
+        border: Border.all(color: color.withOpacity(0.2)),
+      ),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Container(
+            width: 8, height: 8,
+            decoration: BoxDecoration(color: color, shape: BoxShape.circle),
+          ),
+          const SizedBox(width: 8),
+          Text(
+            label,
+            style: TextStyle(
+              fontSize: 12, 
+              fontWeight: FontWeight.w600, 
+              color: color.withOpacity(0.8)
             ),
           ),
         ],
       ),
     );
+  }
+
+  String _getRiskMessage() {
+    if (riskLevel.contains("High")) return "Immediate attention recommended. Elevated vitals detected.";
+    if (riskLevel.contains("Medium")) return "Monitor closely. Rest and stay hydrated.";
+    if (riskLevel.contains("Low")) return "Vitals within normal range. Continue monitoring.";
+    return "Waiting for sensor data...";
   }
 }
