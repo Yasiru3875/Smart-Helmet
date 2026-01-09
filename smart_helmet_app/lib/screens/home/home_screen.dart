@@ -174,10 +174,9 @@ class _HomeScreenState extends State<HomeScreen> {
                 children: [
                   CircleAvatar(
                     radius: 30,
-                    backgroundImage: const AssetImage('assets/icons/app_icon.png'),
+                    backgroundImage:
+                        const AssetImage('assets/icons/app_icon.png'),
                   ),
-
-
                   const SizedBox(height: 8),
                   const Text(
                     'Smart Helmet',
@@ -200,8 +199,20 @@ class _HomeScreenState extends State<HomeScreen> {
 
             // Main Navigation
             ...[0, 1, 2, 3, 4].map((i) {
-              final titles = ['Home', 'Health Monitoring', 'Stress Detection', 'Post Journey', 'Danger Zone Detection'];
-              final icons = [Icons.home, Icons.favorite, Icons.psychology, Icons.history, Icons.warning_amber];
+              final titles = [
+                'Home',
+                'Health Monitoring',
+                'Stress Detection',
+                'Post Journey',
+                'Danger Zone Detection'
+              ];
+              final icons = [
+                Icons.home,
+                Icons.favorite,
+                Icons.psychology,
+                Icons.history,
+                Icons.warning_amber
+              ];
 
               return ListTile(
                 leading: Icon(icons[i]),
@@ -223,7 +234,8 @@ class _HomeScreenState extends State<HomeScreen> {
               title: const Text('About Us'),
               onTap: () {
                 Navigator.pop(context);
-                Navigator.push(context, MaterialPageRoute(builder: (_) => AboutUsPage()));
+                Navigator.push(
+                    context, MaterialPageRoute(builder: (_) => AboutUsPage()));
               },
             ),
             ListTile(
@@ -231,7 +243,8 @@ class _HomeScreenState extends State<HomeScreen> {
               title: const Text('Privacy Policy'),
               onTap: () {
                 Navigator.pop(context);
-                Navigator.push(context, MaterialPageRoute(builder: (_) => PrivacyPolicyPage()));
+                Navigator.push(context,
+                    MaterialPageRoute(builder: (_) => PrivacyPolicyPage()));
               },
             ),
             ListTile(
@@ -239,7 +252,8 @@ class _HomeScreenState extends State<HomeScreen> {
               title: const Text('Terms of Service'),
               onTap: () {
                 Navigator.pop(context);
-                Navigator.push(context, MaterialPageRoute(builder: (_) => TermsOfServicePage()));
+                Navigator.push(context,
+                    MaterialPageRoute(builder: (_) => TermsOfServicePage()));
               },
             ),
             ListTile(
@@ -247,7 +261,8 @@ class _HomeScreenState extends State<HomeScreen> {
               title: const Text('Contact Support'),
               onTap: () {
                 Navigator.pop(context);
-                Navigator.push(context, MaterialPageRoute(builder: (_) => ContactSupportPage()));
+                Navigator.push(context,
+                    MaterialPageRoute(builder: (_) => ContactSupportPage()));
               },
             ),
             ListTile(
@@ -255,7 +270,8 @@ class _HomeScreenState extends State<HomeScreen> {
               title: const Text('Rate App'),
               onTap: () {
                 Navigator.pop(context);
-                _launchURL('https://play.google.com/store/apps/details?id=com.yourpackage'); // Update with real ID
+                _launchURL(
+                    'https://play.google.com/store/apps/details?id=com.yourpackage'); // Update with real ID
               },
             ),
 
@@ -284,9 +300,12 @@ class _HomeScreenState extends State<HomeScreen> {
         items: const [
           BottomNavigationBarItem(icon: Icon(Icons.home), label: 'Home'),
           BottomNavigationBarItem(icon: Icon(Icons.favorite), label: 'Health'),
-          BottomNavigationBarItem(icon: Icon(Icons.psychology), label: 'Stress'),
-          BottomNavigationBarItem(icon: Icon(Icons.history), label: 'Post Journey'),
-          BottomNavigationBarItem(icon: Icon(Icons.warning), label: 'Danger Zone'),
+          BottomNavigationBarItem(
+              icon: Icon(Icons.psychology), label: 'Stress'),
+          BottomNavigationBarItem(
+              icon: Icon(Icons.history), label: 'Post Journey'),
+          BottomNavigationBarItem(
+              icon: Icon(Icons.warning), label: 'Danger Zone'),
         ],
       ),
     );
