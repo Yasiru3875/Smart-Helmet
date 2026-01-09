@@ -598,7 +598,7 @@ class _Member2PageState extends State<Member2Page> {
           lineTouchData: LineTouchData(
             enabled: true,
             touchTooltipData: LineTouchTooltipData(
-              tooltipBgColor: Colors.black87,
+              getTooltipColor: (touchedSpot) => Colors.black87,
               getTooltipItems: (touchedSpots) {
                 return touchedSpots.map((spot) {
                   return LineTooltipItem(
@@ -730,9 +730,7 @@ class _Member2PageState extends State<Member2Page> {
                 ),
               ),
             ),
-
             const SizedBox(height: 30),
-
             Card(
               elevation: 10,
               shape: RoundedRectangleBorder(
@@ -782,9 +780,7 @@ class _Member2PageState extends State<Member2Page> {
                 ),
               ),
             ),
-
             const SizedBox(height: 30),
-
             Card(
               elevation: 6,
               shape: RoundedRectangleBorder(
@@ -849,9 +845,7 @@ class _Member2PageState extends State<Member2Page> {
                 ),
               ),
             ),
-
             const SizedBox(height: 30),
-
             Card(
               elevation: 8,
               shape: RoundedRectangleBorder(
@@ -913,9 +907,7 @@ class _Member2PageState extends State<Member2Page> {
                 ),
               ),
             ),
-
             const SizedBox(height: 30),
-
             Card(
               elevation: 6,
               shape: RoundedRectangleBorder(
@@ -990,9 +982,7 @@ class _Member2PageState extends State<Member2Page> {
                 ),
               ),
             ),
-
             const SizedBox(height: 30),
-
             if (showRestAlert) ...[
               const SizedBox(height: 20),
               Card(
@@ -1022,7 +1012,6 @@ class _Member2PageState extends State<Member2Page> {
                 ),
               ),
             ],
-
             const SizedBox(height: 40),
           ],
         ),
