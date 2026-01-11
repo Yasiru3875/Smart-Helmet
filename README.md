@@ -29,7 +29,6 @@
 - [Usage](#usage)
 - [Screenshots](#screenshots)
 - [Contributors](#contributors)
-- [License](#license)
 
 ## Overview
 
