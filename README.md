@@ -134,9 +134,9 @@ _Install via managers like `flutter pub get`. No runtime pip installs._
 
 <p align="center">
   <!-- Add your app screenshots here, e.g. -->
-  <img src="images/screenshot1.png" alt="App Home" width="275">
-  <img src="images/screenshot2.png" alt="Monitoring View" width="275">
-  <img src="images/screenshot3.png" alt="Home View" width="275">
+  <img src="Images/screenshot1.png" alt="App Home" width="275">
+  <img src="Images/screenshot2.png" alt="Monitoring View" width="275">
+  <img src="Images/screenshot3.png" alt="Home View" width="275">
 </p>
 
 _Upload app screenshots to 'images' for better preview._
