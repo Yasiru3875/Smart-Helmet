@@ -55,8 +55,6 @@ This project continues from ID 25-26J-294 (2025) under SLIIT's IT specialization
   <img src="Images/architecture_diagram.png" alt="Architecture Diagram" width="600">
 </p>
 
-_Note: Extract and upload the conceptual diagram from PAGE 3 of TAF_25-26J-294.pdf to the 'images' folder._
-
 ### Core Components
 
 - **Hardware**: ESP32, MAX30102 (heart rate), EEG, IMU, GPS.
@@ -137,8 +135,6 @@ _Install via managers like `flutter pub get`. No runtime pip installs._
   <img src="Images/screenshot2.png" alt="Monitoring View" width="275">
   <img src="Images/screenshot3.png" alt="Home View" width="275">
 </p>
-
-_Upload app screenshots to 'images' for better preview._
 
 ## Contributors
 
