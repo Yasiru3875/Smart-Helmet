@@ -168,4 +168,6 @@ class GpsPoint {
       timestamp: map['timestamp'] != null ? DateTime.parse(map['timestamp']) : null,
     );
   }
+
 }
+
