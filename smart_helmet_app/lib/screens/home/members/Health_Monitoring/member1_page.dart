@@ -1,10 +1,13 @@
 import 'dart:async';
 import 'dart:convert';
+import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import 'package:tflite_flutter/tflite_flutter.dart';
 import 'package:fl_chart/fl_chart.dart';
 import '../../../../services/bluetooth_manager.dart';
+// If you have auth service:
+// import '../../../../services/auth_service.dart';
 
 class Member1Page extends StatefulWidget {
   const Member1Page({super.key});
@@ -40,6 +43,10 @@ class _Member1PageState extends State<Member1Page> {
   final List<FlSpot> temperatureSpots = [];
   double _currentX = 0.0;
 
+  // Firestore
+  final FirebaseFirestore _firestore = FirebaseFirestore.instance;
+  bool _isSaving = false;
+
   @override
   void initState() {
     super.initState();
@@ -53,7 +60,8 @@ class _Member1PageState extends State<Member1Page> {
       debugPrint("TFLite model loaded successfully");
     } catch (e) {
       debugPrint("Error loading model: $e");
-      if (mounted) setState(() => errorMessage = "Failed to load prediction model");
+      if (mounted)
+        setState(() => errorMessage = "Failed to load prediction model");
     }
   }
 
@@ -112,21 +120,71 @@ class _Member1PageState extends State<Member1Page> {
           if (heartRateSpots.length > maxDataPoints) {
             heartRateSpots.removeAt(0);
             temperatureSpots.removeAt(0);
-            // Re-index X values to keep chart scrolling smoothly
-            for (int i = 0; i < heartRateSpots.length; i++) {
-              heartRateSpots[i] = FlSpot(heartRateSpots[i].x, heartRateSpots[i].y);
-              temperatureSpots[i] = FlSpot(temperatureSpots[i].x, temperatureSpots[i].y);
-            }
-            // Optional: Keep X incrementing or reset. 
-            // If resetting X is complex with FLChart, keeping it incrementing is fine
-            // as long as minX/maxX follow the window.
           }
         });
       }
 
       _predictWithTFLite(hr, temp);
+
+      // Add these fields at class level
+      DateTime? _lastSavedTime;
+      final Duration _saveInterval =
+          const Duration(seconds: 10); // ← change this value
+
+// Then replace the save condition in _parseAndUpdateData with:
+      if (hr > 0 && temp > 0) {
+        final now = DateTime.now();
+        if (_lastSavedTime == null ||
+            now.difference(_lastSavedTime!) >= _saveInterval) {
+          _saveToFirestore(hr, temp);
+          _lastSavedTime = now;
+        }
+      }
     } catch (e) {
       debugPrint("Parse error: $e | Raw: $jsonString");
+    }
+  }
+
+  Future<void> _saveToFirestore(double hr, double temp) async {
+    if (_isSaving) return;
+    setState(() => _isSaving = true);
+
+    try {
+      // Get current user ID (replace with your real auth logic)
+      // final user = context.read<AuthService>().currentUser;
+      // final userId = user?.uid ?? "anonymous";
+      const String userId = "abc123xyz"; // ← REPLACE WITH REAL USER ID
+
+      // Optional: client-side ISO timestamp (for display / queries)
+      final String isoTimestamp = DateTime.now().toIso8601String();
+
+      // Recommended: use server timestamp for ordering & consistency
+      final data = {
+        "timestamp": isoTimestamp, // client-side ISO string (optional)
+        "heartRate": hr,
+        "bodyTemperature": temp,
+        "riskLevel": riskLevel,
+        "riskColor":
+            "#${riskColor.value.toRadixString(16).padLeft(8, '0').substring(2)}", // e.g. #FFA500
+        "userId": userId,
+        "deviceName": deviceName,
+        "createdAt": FieldValue.serverTimestamp(), // ← most important
+        // Location (replace with real values from Geolocator or device)
+        "location": const GeoPoint(7.2000, 79.8730), // Example: Negombo approx
+      };
+
+      await _firestore.collection("health_readings").add(data);
+
+      debugPrint("Health reading saved: HR=$hr, Temp=$temp");
+    } catch (e) {
+      debugPrint("Firestore save error: $e");
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text("Failed to save reading: $e")),
+        );
+      }
+    } finally {
+      if (mounted) setState(() => _isSaving = false);
     }
   }
 
@@ -137,7 +195,9 @@ class _Member1PageState extends State<Member1Page> {
     }
 
     try {
-      var input = [[hr, temp]];
+      var input = [
+        [hr, temp]
+      ];
       var output = List.filled(1, [0.0]);
       _interpreter!.run(input, output);
 
@@ -183,7 +243,10 @@ class _Member1PageState extends State<Member1Page> {
 
   Future<void> connectToDevice() async {
     final btManager = context.read<BluetoothManager>();
-    setState(() { status = "Connecting..."; errorMessage = ""; });
+    setState(() {
+      status = "Connecting...";
+      errorMessage = "";
+    });
 
     try {
       final result = await btManager.connectToDevice(deviceName);
@@ -192,7 +255,10 @@ class _Member1PageState extends State<Member1Page> {
       if (btManager.isConnected(deviceName)) {
         reconnectAttempts = 0;
         _subscribeToData();
-        setState(() { status = "Connected"; errorMessage = ""; });
+        setState(() {
+          status = "Connected";
+          errorMessage = "";
+        });
       } else {
         if (reconnectAttempts < maxReconnectAttempts) {
           reconnectAttempts++;
@@ -201,7 +267,8 @@ class _Member1PageState extends State<Member1Page> {
         } else {
           setState(() {
             status = "Connection failed";
-            errorMessage = "Failed after $maxReconnectAttempts attempts. Please check device.";
+            errorMessage =
+                "Failed after $maxReconnectAttempts attempts. Please check device.";
           });
         }
       }
@@ -253,64 +320,102 @@ class _Member1PageState extends State<Member1Page> {
         elevation: 0,
         centerTitle: true,
       ),
-      body: SingleChildScrollView(
-        padding: const EdgeInsets.all(16),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.stretch,
-          children: [
-            // Connection Status Bar
-            _buildConnectionStatus(isConnected),
-            
-            const SizedBox(height: 16),
-
-            // Connection Controls
-            _buildConnectionControls(isConnected),
-
-            const SizedBox(height: 20),
-
-            // Vital Signs Cards
-            Row(
+      body: Stack(
+        children: [
+          SingleChildScrollView(
+            padding: const EdgeInsets.all(16),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.stretch,
               children: [
-                Expanded(
-                  child: _buildVitalCard(
-                    title: "Heart Rate",
-                    value: heartRate > 0 ? heartRate.toStringAsFixed(0) : "--",
-                    unit: "BPM",
-                    icon: Icons.favorite,
-                    color: Colors.red.shade400,
-                  ),
+                // Connection Status Bar
+                _buildConnectionStatus(isConnected),
+
+                const SizedBox(height: 16),
+
+                // Connection Controls
+                _buildConnectionControls(isConnected),
+
+                const SizedBox(height: 20),
+
+                // Vital Signs Cards
+                Row(
+                  children: [
+                    Expanded(
+                      child: _buildVitalCard(
+                        title: "Heart Rate",
+                        value:
+                            heartRate > 0 ? heartRate.toStringAsFixed(0) : "--",
+                        unit: "BPM",
+                        icon: Icons.favorite,
+                        color: Colors.red.shade400,
+                      ),
+                    ),
+                    const SizedBox(width: 12),
+                    Expanded(
+                      child: _buildVitalCard(
+                        title: "Temperature",
+                        value: bodyTemperature > 0
+                            ? bodyTemperature.toStringAsFixed(1)
+                            : "--",
+                        unit: "°C",
+                        icon: Icons.thermostat,
+                        color: Colors.blue.shade400,
+                      ),
+                    ),
+                  ],
                 ),
-                const SizedBox(width: 12),
-                Expanded(
-                  child: _buildVitalCard(
-                    title: "Temperature",
-                    value: bodyTemperature > 0 ? bodyTemperature.toStringAsFixed(1) : "--",
-                    unit: "°C",
-                    icon: Icons.thermostat,
-                    color: Colors.blue.shade400,
-                  ),
-                ),
+
+                const SizedBox(height: 20),
+
+                // Risk Assessment Card
+                _buildRiskAssessment(),
+
+                const SizedBox(height: 20),
+
+                // Emotional State Card
+                _buildEmotionalState(isConnected),
+
+                const SizedBox(height: 20),
+
+                // Live Vitals Chart
+                _buildVitalsChart(),
+
+                const SizedBox(height: 40),
               ],
             ),
+          ),
 
-            const SizedBox(height: 20),
-
-            // Risk Assessment Card
-            _buildRiskAssessment(),
-
-            const SizedBox(height: 20),
-
-            // Emotional State Card
-            _buildEmotionalState(isConnected),
-
-            const SizedBox(height: 20),
-
-            // Live Vitals Chart (Enhanced)
-            _buildVitalsChart(),
-
-            const SizedBox(height: 20),
-          ],
-        ),
+          // Optional: small saving indicator
+          if (_isSaving)
+            const Positioned(
+              bottom: 24,
+              right: 24,
+              child: Card(
+                color: Colors.black87,
+                child: Padding(
+                  padding: EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+                  child: Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      SizedBox(
+                        width: 16,
+                        height: 16,
+                        child: CircularProgressIndicator(
+                          strokeWidth: 2.5,
+                          color: Colors.white,
+                        ),
+                      ),
+                      SizedBox(width: 12),
+                      Text(
+                        "Saving reading...",
+                        style: TextStyle(color: Colors.white, fontSize: 13),
+                      ),
+                    ],
+                  ),
+                ),
+              ),
+            ),
+        ],
       ),
     );
   }
@@ -340,7 +445,9 @@ class _Member1PageState extends State<Member1Page> {
               style: TextStyle(
                 fontSize: 14,
                 fontWeight: FontWeight.w500,
-                color: isConnected ? Colors.green.shade700 : Colors.orange.shade700,
+                color: isConnected
+                    ? Colors.green.shade700
+                    : Colors.orange.shade700,
               ),
             ),
           ),
@@ -360,7 +467,10 @@ class _Member1PageState extends State<Member1Page> {
           children: [
             const Text(
               "Device Connection",
-              style: TextStyle(fontSize: 14, fontWeight: FontWeight.w600, color: Colors.black87),
+              style: TextStyle(
+                  fontSize: 14,
+                  fontWeight: FontWeight.w600,
+                  color: Colors.black87),
             ),
             const SizedBox(height: 12),
             Row(
@@ -372,9 +482,14 @@ class _Member1PageState extends State<Member1Page> {
                     label: const Text("Connect"),
                     style: OutlinedButton.styleFrom(
                       padding: const EdgeInsets.symmetric(vertical: 12),
-                      side: BorderSide(color: isConnected ? Colors.grey.shade300 : Colors.indigo),
-                      foregroundColor: isConnected ? Colors.grey : Colors.indigo,
-                      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+                      side: BorderSide(
+                          color: isConnected
+                              ? Colors.grey.shade300
+                              : Colors.indigo),
+                      foregroundColor:
+                          isConnected ? Colors.grey : Colors.indigo,
+                      shape: RoundedRectangleBorder(
+                          borderRadius: BorderRadius.circular(8)),
                     ),
                   ),
                 ),
@@ -386,9 +501,12 @@ class _Member1PageState extends State<Member1Page> {
                     label: const Text("Disconnect"),
                     style: OutlinedButton.styleFrom(
                       padding: const EdgeInsets.symmetric(vertical: 12),
-                      side: BorderSide(color: isConnected ? Colors.red : Colors.grey.shade300),
+                      side: BorderSide(
+                          color:
+                              isConnected ? Colors.red : Colors.grey.shade300),
                       foregroundColor: isConnected ? Colors.red : Colors.grey,
-                      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+                      shape: RoundedRectangleBorder(
+                          borderRadius: BorderRadius.circular(8)),
                     ),
                   ),
                 ),
@@ -404,12 +522,14 @@ class _Member1PageState extends State<Member1Page> {
                 ),
                 child: Row(
                   children: [
-                    Icon(Icons.error_outline, size: 16, color: Colors.red.shade700),
+                    Icon(Icons.error_outline,
+                        size: 16, color: Colors.red.shade700),
                     const SizedBox(width: 8),
                     Expanded(
                       child: Text(
                         errorMessage,
-                        style: TextStyle(color: Colors.red.shade700, fontSize: 12),
+                        style:
+                            TextStyle(color: Colors.red.shade700, fontSize: 12),
                       ),
                     ),
                   ],
@@ -579,7 +699,7 @@ class _Member1PageState extends State<Member1Page> {
 
   // --- ENHANCED CHART CODE STARTS HERE ---
 
-Widget _buildVitalsChart() {
+  Widget _buildVitalsChart() {
     // Define professional colors
     final Color hrColor = const Color(0xFFFF4D4D);
     final Color tempColor = const Color(0xFF4D94FF);
@@ -587,21 +707,24 @@ Widget _buildVitalsChart() {
     // 1. CALCULATE DYNAMIC MIN/MAX Y
     double minY = 0;
     double maxY = 100;
-    
+
     if (heartRateSpots.isNotEmpty || temperatureSpots.isNotEmpty) {
       // Get all Y values from both lists
       final allYValues = [
         ...heartRateSpots.map((e) => e.y),
         ...temperatureSpots.map((e) => e.y)
       ];
-      
+
       if (allYValues.isNotEmpty) {
         // Find the absolute min and max in the current data
-        double dataMin = allYValues.reduce((curr, next) => curr < next ? curr : next);
-        double dataMax = allYValues.reduce((curr, next) => curr > next ? curr : next);
+        double dataMin =
+            allYValues.reduce((curr, next) => curr < next ? curr : next);
+        double dataMax =
+            allYValues.reduce((curr, next) => curr > next ? curr : next);
 
         // Add "padding" so the line doesn't touch the very edge
-        minY = (dataMin - 10).clamp(0, double.infinity); // Ensure it doesn't go below 0
+        minY = (dataMin - 10)
+            .clamp(0, double.infinity); // Ensure it doesn't go below 0
         maxY = dataMax + 20; // Add headroom at the top
       }
     }
@@ -625,7 +748,10 @@ Widget _buildVitalsChart() {
                   children: [
                     Text(
                       "Real-time Analytics",
-                      style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold, color: Colors.black87),
+                      style: TextStyle(
+                          fontSize: 18,
+                          fontWeight: FontWeight.bold,
+                          color: Colors.black87),
                     ),
                     Text(
                       "Live sensor feed",
@@ -634,20 +760,26 @@ Widget _buildVitalsChart() {
                   ],
                 ),
                 Container(
-                  padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                  padding:
+                      const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
                   decoration: BoxDecoration(
-                    color: Colors.green.withOpacity(0.1),
-                    borderRadius: BorderRadius.circular(4),
-                    border: Border.all(color: Colors.green.withOpacity(0.3))
-                  ),
+                      color: Colors.green.withOpacity(0.1),
+                      borderRadius: BorderRadius.circular(4),
+                      border: Border.all(color: Colors.green.withOpacity(0.3))),
                   child: Row(
                     children: [
                       Container(
-                        width: 6, height: 6,
-                        decoration: const BoxDecoration(color: Colors.green, shape: BoxShape.circle),
+                        width: 6,
+                        height: 6,
+                        decoration: const BoxDecoration(
+                            color: Colors.green, shape: BoxShape.circle),
                       ),
                       const SizedBox(width: 6),
-                      Text("LIVE", style: TextStyle(fontSize: 10, fontWeight: FontWeight.bold, color: Colors.green.shade700)),
+                      Text("LIVE",
+                          style: TextStyle(
+                              fontSize: 10,
+                              fontWeight: FontWeight.bold,
+                              color: Colors.green.shade700)),
                     ],
                   ),
                 )
@@ -661,9 +793,11 @@ Widget _buildVitalsChart() {
                       child: Column(
                         mainAxisAlignment: MainAxisAlignment.center,
                         children: [
-                          Icon(Icons.query_stats, size: 48, color: Colors.grey.shade200),
+                          Icon(Icons.query_stats,
+                              size: 48, color: Colors.grey.shade200),
                           const SizedBox(height: 12),
-                          Text("Waiting for signal...", style: TextStyle(color: Colors.grey.shade400)),
+                          Text("Waiting for signal...",
+                              style: TextStyle(color: Colors.grey.shade400)),
                         ],
                       ),
                     )
@@ -679,7 +813,7 @@ Widget _buildVitalsChart() {
                           getDrawingHorizontalLine: (value) => FlLine(
                             color: Colors.grey.shade200,
                             strokeWidth: 1,
-                            dashArray: [5, 5], 
+                            dashArray: [5, 5],
                           ),
                           getDrawingVerticalLine: (value) => FlLine(
                             color: Colors.grey.shade100,
@@ -702,18 +836,18 @@ Widget _buildVitalsChart() {
                               reservedSize: 40,
                               // 2. DYNAMIC INTERVAL
                               // Calculate interval based on range to prevent cluttered labels
-                              interval: (maxY - minY) > 100 ? 50 : 20, 
+                              interval: (maxY - minY) > 100 ? 50 : 20,
                               getTitlesWidget: (value, meta) {
-                                if (value < minY || value > maxY) return const SizedBox.shrink();
+                                if (value < minY || value > maxY)
+                                  return const SizedBox.shrink();
                                 return Padding(
                                   padding: const EdgeInsets.only(right: 8.0),
                                   child: Text(
                                     value.toInt().toString(),
                                     style: TextStyle(
-                                      fontSize: 10, 
-                                      color: Colors.grey.shade500,
-                                      fontWeight: FontWeight.w500
-                                    ),
+                                        fontSize: 10,
+                                        color: Colors.grey.shade500,
+                                        fontWeight: FontWeight.w500),
                                     textAlign: TextAlign.right,
                                   ),
                                 );
@@ -726,16 +860,21 @@ Widget _buildVitalsChart() {
                               reservedSize: 40,
                               interval: (maxY - minY) > 100 ? 50 : 20,
                               getTitlesWidget: (value, meta) {
-                                if (value < minY || value > maxY) return const SizedBox.shrink();
+                                if (value < minY || value > maxY)
+                                  return const SizedBox.shrink();
                                 return Text(
                                   '${value.toStringAsFixed(1)}°',
-                                  style: TextStyle(fontSize: 10, color: Colors.blue.shade300),
+                                  style: TextStyle(
+                                      fontSize: 10,
+                                      color: Colors.blue.shade300),
                                 );
                               },
                             ),
                           ),
-                          bottomTitles: const AxisTitles(sideTitles: SideTitles(showTitles: false)),
-                          topTitles: const AxisTitles(sideTitles: SideTitles(showTitles: false)),
+                          bottomTitles: const AxisTitles(
+                              sideTitles: SideTitles(showTitles: false)),
+                          topTitles: const AxisTitles(
+                              sideTitles: SideTitles(showTitles: false)),
                         ),
                         minX: heartRateSpots.first.x,
                         maxX: heartRateSpots.last.x,
@@ -751,9 +890,13 @@ Widget _buildVitalsChart() {
                               return spots.map((spot) {
                                 final isHR = spot.barIndex == 0;
                                 return LineTooltipItem(
-                                  isHR ? '${spot.y.toInt()} BPM' : '${spot.y.toStringAsFixed(1)}°C',
+                                  isHR
+                                      ? '${spot.y.toInt()} BPM'
+                                      : '${spot.y.toStringAsFixed(1)}°C',
                                   TextStyle(
-                                    color: isHR ? const Color(0xFFFF8A8A) : const Color(0xFF8AAFFF),
+                                    color: isHR
+                                        ? const Color(0xFFFF8A8A)
+                                        : const Color(0xFF8AAFFF),
                                     fontWeight: FontWeight.bold,
                                     fontSize: 12,
                                   ),
@@ -835,17 +978,17 @@ Widget _buildVitalsChart() {
         mainAxisSize: MainAxisSize.min,
         children: [
           Container(
-            width: 8, height: 8,
+            width: 8,
+            height: 8,
             decoration: BoxDecoration(color: color, shape: BoxShape.circle),
           ),
           const SizedBox(width: 8),
           Text(
             label,
             style: TextStyle(
-              fontSize: 12, 
-              fontWeight: FontWeight.w600, 
-              color: color.withOpacity(0.8)
-            ),
+                fontSize: 12,
+                fontWeight: FontWeight.w600,
+                color: color.withOpacity(0.8)),
           ),
         ],
       ),
@@ -853,9 +996,12 @@ Widget _buildVitalsChart() {
   }
 
   String _getRiskMessage() {
-    if (riskLevel.contains("High")) return "Immediate attention recommended. Elevated vitals detected.";
-    if (riskLevel.contains("Medium")) return "Monitor closely. Rest and stay hydrated.";
-    if (riskLevel.contains("Low")) return "Vitals within normal range. Continue monitoring.";
+    if (riskLevel.contains("High"))
+      return "Immediate attention recommended. Elevated vitals detected.";
+    if (riskLevel.contains("Medium"))
+      return "Monitor closely. Rest and stay hydrated.";
+    if (riskLevel.contains("Low"))
+      return "Vitals within normal range. Continue monitoring.";
     return "Waiting for sensor data...";
   }
 }
