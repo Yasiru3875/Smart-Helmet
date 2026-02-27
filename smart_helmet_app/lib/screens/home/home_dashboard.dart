@@ -277,36 +277,52 @@ class _HomeDashboardState extends State<HomeDashboard> {
       return;
     }
 
-    // Navigate to Member4Page with full route data
-    Navigator.push(
-      context,
-      MaterialPageRoute(
-        builder: (context) => Member4Page(
-          predefinedStart:
-              LatLng(_currentPosition!.latitude, _currentPosition!.longitude),
-          predefinedEnd: routePoints.last,
-          predefinedRoute: routePoints, // ← This is crucial!
-          destinationName: _destinationController.text.trim(),
-          startJourney: true, // Starts live sensors and updates
-        ),
-      ),
+    // // Navigate to Member4Page with full route data
+    // Navigator.push(
+    //   context,
+    //   MaterialPageRoute(
+    //     builder: (context) => Member4Page(
+    //       predefinedStart:
+    //           LatLng(_currentPosition!.latitude, _currentPosition!.longitude),
+    //       predefinedEnd: routePoints.last,
+    //       predefinedRoute: routePoints, // ← This is crucial!
+    //       destinationName: _destinationController.text.trim(),
+    //       isJourneyActive: true, // Starts live sensors and updates
+    //     ),
+    //   ),
+    // );
+    // Just notify parent — no push!
+    widget.onStartJourney(
+      start: LatLng(_currentPosition!.latitude, _currentPosition!.longitude),
+      end: routePoints.last,
+      route: routePoints,
+      destinationName: _destinationController.text.trim(),
+    );
+
+    // Optional: visual feedback
+    ScaffoldMessenger.of(context).showSnackBar(
+      const SnackBar(
+          content: Text('Journey started — switched to Danger Zone')),
     );
   }
 
   void _endJourney() {
-    // Call parent callback if provided
     widget.onEndJourney?.call();
 
     setState(() {
       _isJourneyStarted = false;
       _isRoutePlanned = false;
+      _polylines.clear();
+      _markers.removeWhere((m) =>
+          m.markerId.value == 'destination' ||
+          m.markerId.value == 'current_location'); // or keep current marker
+      _routePoints = [];
+      _destinationController.clear();
+      _routes = [];
+      _placeSuggestions = [];
     });
-    _locationTimer?.cancel();
-    _sensorTimer?.cancel();
-    _polylines.clear();
-    _markers.removeWhere((m) =>
-        m.markerId.value == 'destination' ||
-        m.markerId.value == 'current_location');
+
+    _centerOnCurrentLocation(); // ← reset view to current location
   }
 
   List<LatLng> _decodePolyline(String encoded) {
@@ -349,6 +365,45 @@ class _HomeDashboardState extends State<HomeDashboard> {
     super.dispose();
   }
 
+  void _centerOnCurrentLocation() async {
+    if (_currentPosition == null || _mapController == null) {
+      _showSnackBar('Current location not available');
+      return;
+    }
+
+    _mapController!.animateCamera(
+      CameraUpdate.newCameraPosition(
+        CameraPosition(
+          target:
+              LatLng(_currentPosition!.latitude, _currentPosition!.longitude),
+          zoom: 17.0,
+          bearing: _currentPosition!.heading ?? 0.0,
+        ),
+      ),
+    );
+
+    // Optional: update marker rotation if needed
+    _addCurrentLocationMarker(_currentPosition!);
+  }
+
+  void _resetMapAndSearch() {
+    setState(() {
+      _destinationController.clear();
+      _placeSuggestions = [];
+      _routes = [];
+      _selectedRouteIndex = 0;
+      _isRoutePlanned = false;
+      _polylines.clear();
+      _markers.removeWhere((m) => m.markerId.value == 'destination');
+
+      // Optional: also stop showing any journey-related UI if not started
+      // (but since journey not started yet, usually not needed)
+    });
+
+    // Center map on current location
+    _centerOnCurrentLocation();
+  }
+
   Widget _buildSensorItem(IconData icon, String value, Color color) {
     return Column(children: [
       Icon(icon, size: 26, color: color),
@@ -370,16 +425,28 @@ class _HomeDashboardState extends State<HomeDashboard> {
       body: _currentPosition == null
           ? const Center(
               child: CircularProgressIndicator(
-                  color: Colors.indigo, strokeWidth: 3))
+                color: Colors.indigo,
+                strokeWidth: 3,
+              ),
+            )
           : SafeArea(
               child: Stack(
                 children: [
                   GoogleMap(
                     initialCameraPosition: CameraPosition(
-                        target: LatLng(_currentPosition!.latitude,
-                            _currentPosition!.longitude),
-                        zoom: 16),
-                    onMapCreated: (controller) => _mapController = controller,
+                      target: LatLng(
+                        _currentPosition!.latitude,
+                        _currentPosition!.longitude,
+                      ),
+                      zoom: 16,
+                    ),
+                    onMapCreated: (controller) {
+                      _mapController = controller;
+                      // Optional: center immediately after map is ready
+                      if (_currentPosition != null) {
+                        _centerOnCurrentLocation();
+                      }
+                    },
                     myLocationEnabled: false,
                     myLocationButtonEnabled: false,
                     zoomControlsEnabled: false,
@@ -391,67 +458,123 @@ class _HomeDashboardState extends State<HomeDashboard> {
                     markers: _markers,
                     padding: const EdgeInsets.only(top: 120, bottom: 90),
                   ),
+
+                  // Floating "My Location" button
+                  Positioned(
+                    right: 16,
+                    bottom: 140, // Adjust if sensor bar height changes
+                    child: FloatingActionButton(
+                      mini: true,
+                      backgroundColor: Colors.white,
+                      foregroundColor: Colors.indigo,
+                      elevation: 4,
+                      shape: const CircleBorder(),
+                      onPressed: _centerOnCurrentLocation,
+                      child: const Icon(Icons.my_location, size: 28),
+                    ),
+                  ),
+
+                  // Search + controls panel
                   Positioned(
                     top: 0,
                     left: 0,
                     right: 0,
                     child: Container(
                       padding: EdgeInsets.only(
-                          top: MediaQuery.of(context).padding.top + 8,
-                          left: 12,
-                          right: 12,
-                          bottom: 8),
+                        top: MediaQuery.of(context).padding.top + 8,
+                        left: 12,
+                        right: 12,
+                        bottom: 8,
+                      ),
                       child: Material(
                         elevation: 10,
                         borderRadius: BorderRadius.circular(16),
                         child: Container(
                           padding: const EdgeInsets.all(12),
                           decoration: BoxDecoration(
-                              color: Colors.white,
-                              borderRadius: BorderRadius.circular(16)),
-                          child:
-                              Column(mainAxisSize: MainAxisSize.min, children: [
-                            TextField(
-                              controller: _destinationController,
-                              textInputAction: TextInputAction.go,
-                              onSubmitted: (_) => _planRoute(),
-                              decoration: InputDecoration(
-                                hintText: 'Search destination',
-                                prefixIcon: const Icon(Icons.search,
-                                    color: Colors.indigo),
-                                suffixIcon: IconButton(
-                                    icon: const Icon(Icons.directions,
-                                        color: Colors.indigo, size: 26),
-                                    onPressed: _planRoute),
-                                filled: true,
-                                fillColor: Colors.grey[50],
-                                border: OutlineInputBorder(
+                            color: Colors.white,
+                            borderRadius: BorderRadius.circular(16),
+                          ),
+                          child: Column(
+                            mainAxisSize: MainAxisSize.min,
+                            children: [
+                              // Search field with dynamic suffix icon
+                              TextField(
+                                controller: _destinationController,
+                                textInputAction: TextInputAction.go,
+                                onSubmitted: (_) => _planRoute(),
+                                decoration: InputDecoration(
+                                  hintText: 'Search destination',
+                                  prefixIcon: const Icon(
+                                    Icons.search,
+                                    color: Colors.indigo,
+                                  ),
+                                  suffixIcon: _destinationController
+                                          .text.isNotEmpty
+                                      ? IconButton(
+                                          icon: const Icon(
+                                            Icons.clear,
+                                            color: Colors.grey,
+                                          ),
+                                          onPressed:
+                                              _resetMapAndSearch, // ← full reset + center
+                                        )
+                                      : null, // hide directions icon when empty (cleaner UX)
+                                  filled: true,
+                                  fillColor: Colors.grey[50],
+                                  border: OutlineInputBorder(
                                     borderRadius: BorderRadius.circular(12),
-                                    borderSide: BorderSide.none),
-                              ),
-                            ),
-                            if (_placeSuggestions.isNotEmpty)
-                              Container(
-                                height: 200,
-                                color: Colors.white,
-                                child: ListView.builder(
-                                  itemCount: _placeSuggestions.length,
-                                  itemBuilder: (context, index) {
-                                    final s = _placeSuggestions[index];
-                                    return ListTile(
-                                      title: Text(s['description']),
-                                      onTap: () {
-                                        _destinationController.text =
-                                            s['description'];
-                                        _placeSuggestions = [];
-                                        _planRoute();
-                                      },
-                                    );
-                                  },
+                                    borderSide: BorderSide.none,
+                                  ),
+                                  contentPadding: const EdgeInsets.symmetric(
+                                    vertical: 0,
+                                    horizontal: 12,
+                                  ),
                                 ),
                               ),
-                            const SizedBox(height: 12),
-                            Row(
+
+                              if (_placeSuggestions.isNotEmpty)
+                                Container(
+                                  constraints:
+                                      const BoxConstraints(maxHeight: 200),
+                                  decoration: BoxDecoration(
+                                    color: Colors.white,
+                                    borderRadius: BorderRadius.circular(8),
+                                    boxShadow: [
+                                      BoxShadow(
+                                        color: Colors.black.withOpacity(0.1),
+                                        blurRadius: 6,
+                                        offset: const Offset(0, 3),
+                                      ),
+                                    ],
+                                  ),
+                                  child: ListView.builder(
+                                    shrinkWrap: true,
+                                    itemCount: _placeSuggestions.length,
+                                    itemBuilder: (context, index) {
+                                      final s = _placeSuggestions[index];
+                                      return ListTile(
+                                        title: Text(
+                                          s['description'],
+                                          maxLines: 2,
+                                          overflow: TextOverflow.ellipsis,
+                                        ),
+                                        onTap: () {
+                                          _destinationController.text =
+                                              s['description'];
+                                          setState(
+                                              () => _placeSuggestions = []);
+                                          _planRoute();
+                                        },
+                                      );
+                                    },
+                                  ),
+                                ),
+
+                              const SizedBox(height: 16),
+
+                              // START / END buttons
+                              Row(
                                 mainAxisAlignment: MainAxisAlignment.center,
                                 children: [
                                   ElevatedButton.icon(
@@ -460,68 +583,87 @@ class _HomeDashboardState extends State<HomeDashboard> {
                                         : _startJourney,
                                     icon: const Icon(Icons.directions_bike,
                                         size: 26),
-                                    label: Text('START',
-                                        style: TextStyle(
-                                            fontSize: buttonFontSize,
-                                            fontWeight: FontWeight.bold)),
+                                    label: Text(
+                                      'START',
+                                      style: TextStyle(
+                                        fontSize: buttonFontSize,
+                                        fontWeight: FontWeight.bold,
+                                      ),
+                                    ),
                                     style: ElevatedButton.styleFrom(
-                                        backgroundColor: Colors.green[600],
-                                        foregroundColor: Colors.white,
-                                        padding: EdgeInsets.symmetric(
-                                            horizontal: buttonPadding,
-                                            vertical: 14),
-                                        shape: RoundedRectangleBorder(
-                                            borderRadius:
-                                                BorderRadius.circular(30))),
+                                      backgroundColor: Colors.green[700],
+                                      foregroundColor: Colors.white,
+                                      padding: EdgeInsets.symmetric(
+                                        horizontal: buttonPadding,
+                                        vertical: 14,
+                                      ),
+                                      shape: RoundedRectangleBorder(
+                                        borderRadius: BorderRadius.circular(30),
+                                      ),
+                                    ),
                                   ),
                                   const SizedBox(width: 16),
                                   ElevatedButton.icon(
-                                    onPressed: _isJourneyStarted
-                                        ? _endJourney
-                                        : null, // Enabled when journey active
+                                    onPressed:
+                                        _isJourneyStarted ? _endJourney : null,
                                     icon: const Icon(Icons.stop, size: 22),
-                                    label: Text('END',
-                                        style: TextStyle(
-                                            fontSize: buttonFontSize)),
+                                    label: Text(
+                                      'END',
+                                      style:
+                                          TextStyle(fontSize: buttonFontSize),
+                                    ),
                                     style: ElevatedButton.styleFrom(
-                                        backgroundColor: Colors.red[600],
-                                        foregroundColor: Colors.white,
-                                        padding: EdgeInsets.symmetric(
-                                            horizontal: buttonPadding,
-                                            vertical: 14),
-                                        shape: RoundedRectangleBorder(
-                                            borderRadius:
-                                                BorderRadius.circular(30))),
+                                      backgroundColor: Colors.red[700],
+                                      foregroundColor: Colors.white,
+                                      padding: EdgeInsets.symmetric(
+                                        horizontal: buttonPadding,
+                                        vertical: 14,
+                                      ),
+                                      shape: RoundedRectangleBorder(
+                                        borderRadius: BorderRadius.circular(30),
+                                      ),
+                                    ),
                                   ),
-                                ]),
-                            if (_routes.isNotEmpty)
-                              SizedBox(
-                                height: 50,
-                                child: ListView.builder(
-                                  scrollDirection: Axis.horizontal,
-                                  itemCount: _routes.length,
-                                  itemBuilder: (context, index) {
-                                    final r = _routes[index];
-                                    final summary =
-                                        '${r['legs'][0]['distance']['text']} - ${r['legs'][0]['duration']['text']}';
-                                    return Padding(
-                                      padding: const EdgeInsets.symmetric(
-                                          horizontal: 8),
-                                      child: ChoiceChip(
+                                ],
+                              ),
+
+                              if (_routes.isNotEmpty) ...[
+                                const SizedBox(height: 12),
+                                SizedBox(
+                                  height: 48,
+                                  child: ListView.builder(
+                                    scrollDirection: Axis.horizontal,
+                                    itemCount: _routes.length,
+                                    itemBuilder: (context, index) {
+                                      final r = _routes[index];
+                                      final summary =
+                                          '${r['legs'][0]['distance']['text']} • ${r['legs'][0]['duration']['text']}';
+                                      return Padding(
+                                        padding: const EdgeInsets.symmetric(
+                                            horizontal: 6),
+                                        child: ChoiceChip(
                                           label: Text(summary),
                                           selected:
                                               _selectedRouteIndex == index,
-                                          onSelected: (s) =>
-                                              s ? _selectRoute(index) : null),
-                                    );
-                                  },
+                                          selectedColor: Colors.indigo[100],
+                                          backgroundColor: Colors.grey[200],
+                                          onSelected: (selected) {
+                                            if (selected) _selectRoute(index);
+                                          },
+                                        ),
+                                      );
+                                    },
+                                  ),
                                 ),
-                              ),
-                          ]),
+                              ],
+                            ],
+                          ),
                         ),
                       ),
                     ),
                   ),
+
+                  // Journey active indicator
                   if (_isJourneyStarted)
                     Positioned(
                       top: MediaQuery.of(context).padding.top + 140,
@@ -530,28 +672,37 @@ class _HomeDashboardState extends State<HomeDashboard> {
                       child: Center(
                         child: Container(
                           padding: const EdgeInsets.symmetric(
-                              horizontal: 20, vertical: 12),
+                            horizontal: 20,
+                            vertical: 12,
+                          ),
                           decoration: BoxDecoration(
-                              color: Colors.blue[900],
-                              borderRadius: BorderRadius.circular(30),
-                              boxShadow: const [
-                                BoxShadow(color: Colors.black38, blurRadius: 8)
-                              ]),
+                            color: Colors.blue[900],
+                            borderRadius: BorderRadius.circular(30),
+                            boxShadow: const [
+                              BoxShadow(color: Colors.black38, blurRadius: 8),
+                            ],
+                          ),
                           child: const Row(
-                              mainAxisSize: MainAxisSize.min,
-                              children: [
-                                Icon(Icons.directions_bike,
-                                    color: Colors.white, size: 28),
-                                SizedBox(width: 10),
-                                Text('JOURNEY ACTIVE',
-                                    style: TextStyle(
-                                        color: Colors.white,
-                                        fontWeight: FontWeight.bold,
-                                        fontSize: 16)),
-                              ]),
+                            mainAxisSize: MainAxisSize.min,
+                            children: [
+                              Icon(Icons.directions_bike,
+                                  color: Colors.white, size: 28),
+                              SizedBox(width: 10),
+                              Text(
+                                'JOURNEY ACTIVE',
+                                style: TextStyle(
+                                  color: Colors.white,
+                                  fontWeight: FontWeight.bold,
+                                  fontSize: 16,
+                                ),
+                              ),
+                            ],
+                          ),
                         ),
                       ),
                     ),
+
+                  // Bottom sensor bar
                   Positioned(
                     bottom: 0,
                     left: 0,
@@ -559,45 +710,48 @@ class _HomeDashboardState extends State<HomeDashboard> {
                     child: Container(
                       padding: const EdgeInsets.symmetric(vertical: 10),
                       decoration: BoxDecoration(
-                          color: Colors.black87,
-                          borderRadius: const BorderRadius.vertical(
-                              top: Radius.circular(20)),
-                          boxShadow: const [
-                            BoxShadow(
-                                color: Colors.black38,
-                                blurRadius: 8,
-                                offset: Offset(0, -2))
-                          ]),
+                        color: Colors.black87,
+                        borderRadius: const BorderRadius.vertical(
+                          top: Radius.circular(20),
+                        ),
+                        boxShadow: const [
+                          BoxShadow(
+                            color: Colors.black38,
+                            blurRadius: 8,
+                            offset: Offset(0, -2),
+                          ),
+                        ],
+                      ),
                       child: SafeArea(
-                          top: false,
-                          child: Row(
-                              mainAxisAlignment: MainAxisAlignment.spaceEvenly,
-                              children: [
-                                _buildSensorItem(
-                                    Icons.favorite,
-                                    '$heartRate bpm',
-                                    heartRate > 100
-                                        ? Colors.red
-                                        : Colors.pinkAccent),
-                                _buildSensorItem(
-                                    Icons.thermostat,
-                                    '${temperature.toStringAsFixed(1)}°C',
-                                    temperature > 37.5
-                                        ? Colors.orange
-                                        : Colors.cyan),
-                                _buildSensorItem(
-                                    Icons.psychology,
-                                    '$stressLevel%',
-                                    stressLevel > 65
-                                        ? Colors.deepOrange
-                                        : Colors.amber),
-                                _buildSensorItem(
-                                    dangerAlert
-                                        ? Icons.warning_amber
-                                        : Icons.shield,
-                                    dangerAlert ? 'ALERT' : 'SAFE',
-                                    dangerAlert ? Colors.red : Colors.green),
-                              ])),
+                        top: false,
+                        child: Row(
+                          mainAxisAlignment: MainAxisAlignment.spaceEvenly,
+                          children: [
+                            _buildSensorItem(
+                              Icons.favorite,
+                              '$heartRate bpm',
+                              heartRate > 100 ? Colors.red : Colors.pinkAccent,
+                            ),
+                            _buildSensorItem(
+                              Icons.thermostat,
+                              '${temperature.toStringAsFixed(1)}°C',
+                              temperature > 37.5 ? Colors.orange : Colors.cyan,
+                            ),
+                            _buildSensorItem(
+                              Icons.psychology,
+                              '$stressLevel%',
+                              stressLevel > 65
+                                  ? Colors.deepOrange
+                                  : Colors.amber,
+                            ),
+                            _buildSensorItem(
+                              dangerAlert ? Icons.warning_amber : Icons.shield,
+                              dangerAlert ? 'ALERT' : 'SAFE',
+                              dangerAlert ? Colors.red : Colors.green,
+                            ),
+                          ],
+                        ),
+                      ),
                     ),
                   ),
                 ],
