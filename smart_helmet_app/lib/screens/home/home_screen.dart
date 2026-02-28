@@ -15,6 +15,10 @@ import 'Side_Panel_Screens/PrivacyPolicyPage.dart';
 import 'Side_Panel_Screens/TermsOfServicePage.dart';
 import 'Side_Panel_Screens/ContactSupportPage.dart';
 
+// If bluetooth_connect_dialog.dart is in lib/services/
+import '../../services/bluetooth_manager.dart';
+import '../../services/bluetooth_connect_dialog.dart';
+
 class HomeScreen extends StatefulWidget {
   const HomeScreen({super.key});
 
@@ -57,7 +61,7 @@ class _HomeScreenState extends State<HomeScreen> {
         predefinedEnd: _routeEnd,
         predefinedRoute: _routePoints,
         destinationName: _destinationName,
-        startJourney: _isJourneyActive,
+        isJourneyActive: _isJourneyActive, // ← changed name
       ),
     ];
   }
@@ -80,9 +84,9 @@ class _HomeScreenState extends State<HomeScreen> {
       _pages[4] = Member4Page(
         predefinedStart: _routeStart,
         predefinedEnd: _routeEnd,
-        predefinedRoute: _routePoints,
+        predefinedRoute: _routePoints?.toList(),
         destinationName: _destinationName,
-        startJourney: _isJourneyActive,
+        isJourneyActive: _isJourneyActive, // ← correct name
       );
     });
   }
@@ -96,7 +100,7 @@ class _HomeScreenState extends State<HomeScreen> {
     setState(() {
       _routeStart = start;
       _routeEnd = end;
-      _routePoints = route;
+      _routePoints = List.from(route); // defensive copy
       _destinationName = destinationName;
       _isJourneyActive = true;
       _index = 4; // Auto-switch to Danger Zone tab
@@ -129,7 +133,7 @@ class _HomeScreenState extends State<HomeScreen> {
 
   String _getTitle(int index) {
     return switch (index) {
-      0 => 'Smart Helmet - Home',
+      0 => 'Smart Helmet',
       1 => 'Health Monitoring',
       2 => 'Stress Detection',
       3 => 'Post Journey',
@@ -148,18 +152,41 @@ class _HomeScreenState extends State<HomeScreen> {
         backgroundColor: Colors.indigo,
         foregroundColor: Colors.white,
         actions: [
+          // NEW: Bluetooth connection/status button
+          // In HomeScreen → AppBar → actions
           IconButton(
-            icon: const Icon(Icons.logout),
-            onPressed: () => auth.signOut(),
-            tooltip: 'Sign out',
+            icon: const Icon(Icons.bluetooth, size: 26),
+            tooltip: 'Connect Bluetooth Devices',
+            onPressed: () async {
+              final manager = BluetoothManager();
+
+              // First ensure permissions
+              bool permissionsOk = await manager.requestPermissions();
+              if (!permissionsOk) {
+                if (!mounted) return;
+                ScaffoldMessenger.of(context).showSnackBar(
+                  const SnackBar(content: Text('Bluetooth permissions denied')),
+                );
+                return;
+              }
+
+              // Show dialog with bonded devices + connect all button
+              if (!mounted) return;
+              await showDialog(
+                context: context,
+                builder: (context) => BluetoothConnectDialog(manager: manager),
+              );
+            },
           ),
+          const SizedBox(
+              width: 8), // small spacing before other icons if needed
         ],
       ),
       drawer: Drawer(
         child: ListView(
           padding: EdgeInsets.zero,
           children: [
-            // Professional Drawer Header
+            // Drawer Header (unchanged)
             DrawerHeader(
               decoration: const BoxDecoration(
                 gradient: LinearGradient(
@@ -197,7 +224,7 @@ class _HomeScreenState extends State<HomeScreen> {
               ),
             ),
 
-            // Main Navigation
+            // Main Navigation items (unchanged)
             ...[0, 1, 2, 3, 4].map((i) {
               final titles = [
                 'Home',
@@ -226,7 +253,7 @@ class _HomeScreenState extends State<HomeScreen> {
               );
             }).toList(),
 
-            const Divider(),
+            const Divider(height: 32, thickness: 1),
 
             // Additional Links
             ListTile(
@@ -235,7 +262,9 @@ class _HomeScreenState extends State<HomeScreen> {
               onTap: () {
                 Navigator.pop(context);
                 Navigator.push(
-                    context, MaterialPageRoute(builder: (_) => AboutUsPage()));
+                  context,
+                  MaterialPageRoute(builder: (_) => AboutUsPage()),
+                );
               },
             ),
             ListTile(
@@ -243,8 +272,10 @@ class _HomeScreenState extends State<HomeScreen> {
               title: const Text('Privacy Policy'),
               onTap: () {
                 Navigator.pop(context);
-                Navigator.push(context,
-                    MaterialPageRoute(builder: (_) => PrivacyPolicyPage()));
+                Navigator.push(
+                  context,
+                  MaterialPageRoute(builder: (_) => PrivacyPolicyPage()),
+                );
               },
             ),
             ListTile(
@@ -252,8 +283,10 @@ class _HomeScreenState extends State<HomeScreen> {
               title: const Text('Terms of Service'),
               onTap: () {
                 Navigator.pop(context);
-                Navigator.push(context,
-                    MaterialPageRoute(builder: (_) => TermsOfServicePage()));
+                Navigator.push(
+                  context,
+                  MaterialPageRoute(builder: (_) => TermsOfServicePage()),
+                );
               },
             ),
             ListTile(
@@ -261,8 +294,10 @@ class _HomeScreenState extends State<HomeScreen> {
               title: const Text('Contact Support'),
               onTap: () {
                 Navigator.pop(context);
-                Navigator.push(context,
-                    MaterialPageRoute(builder: (_) => ContactSupportPage()));
+                Navigator.push(
+                  context,
+                  MaterialPageRoute(builder: (_) => ContactSupportPage()),
+                );
               },
             ),
             ListTile(
@@ -271,10 +306,40 @@ class _HomeScreenState extends State<HomeScreen> {
               onTap: () {
                 Navigator.pop(context);
                 _launchURL(
-                    'https://play.google.com/store/apps/details?id=com.yourpackage'); // Update with real ID
+                    'https://play.google.com/store/apps/details?id=com.yourpackage');
               },
             ),
 
+            const Spacer(), // ← pushes logout to bottom
+
+            // LOGOUT – moved to bottom, red color, professional look
+            Padding(
+              padding: const EdgeInsets.fromLTRB(16, 8, 16, 24),
+              child: ListTile(
+                leading: const Icon(
+                  Icons.logout,
+                  color: Colors.redAccent,
+                ),
+                title: const Text(
+                  'Logout',
+                  style: TextStyle(
+                    color: Colors.redAccent,
+                    fontWeight: FontWeight.w600,
+                    fontSize: 16,
+                  ),
+                ),
+                tileColor: Colors.red.withOpacity(0.08),
+                shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(12),
+                ),
+                onTap: () {
+                  Navigator.pop(context); // close drawer first
+                  auth.signOut();
+                },
+              ),
+            ),
+
+            // Version info at very bottom
             const Padding(
               padding: EdgeInsets.all(16),
               child: Center(
@@ -290,7 +355,7 @@ class _HomeScreenState extends State<HomeScreen> {
       body: IndexedStack(
         index: _index,
         children: _pages,
-      ), // Better than direct indexing for preserving state
+      ),
       bottomNavigationBar: BottomNavigationBar(
         currentIndex: _index,
         onTap: (value) => setState(() => _index = value),
