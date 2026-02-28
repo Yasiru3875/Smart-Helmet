@@ -33,10 +33,16 @@ class _WeeklyStressReportState extends State<WeeklyStressReport> {
     'Relaxed': 0
   };
 
-  // Google Maps controller
-  GoogleMapController? _mapController;
+  // Stress level distribution
+  int highStressCount = 0;
+  int moderateStressCount = 0;
+  int lowStressCount = 0;
 
-  // Markers for map (color-coded by stress)
+  // Daily averages for cleaner line chart
+  List<MapEntry<String, double>> _dailyAverages = [];
+
+  // Google Maps
+  GoogleMapController? _mapController;
   final Set<Marker> _markers = {};
 
   @override
@@ -80,7 +86,9 @@ class _WeeklyStressReportState extends State<WeeklyStressReport> {
 
       _weeklyData = snapshot.docs.map((doc) => doc.data()).toList();
 
-      // Calculate stats
+      // ────────────────────────────────────────────────
+      // Calculate statistics + daily averages
+      // ────────────────────────────────────────────────
       Map<String, List<Map<String, dynamic>>> dailyGroups = {};
       for (var reading in _weeklyData) {
         final timestamp =
@@ -92,21 +100,31 @@ class _WeeklyStressReportState extends State<WeeklyStressReport> {
 
       double totalStress = 0.0;
       int totalDays = 0;
+      _dailyAverages.clear();
 
       dailyGroups.forEach((day, readings) {
-        double dayAvg = readings
-                .map((r) => (r['stressScore'] as num?)?.toDouble() ?? 0.0)
-                .reduce((a, b) => a + b) /
-            readings.length;
+        double daySum = readings.fold(0.0,
+            (sum, r) => sum + (r['stressScore'] as num? ?? 0.0).toDouble());
+        double dayAvg = daySum / readings.length;
 
         totalStress += dayAvg;
         totalDays++;
+
+        _dailyAverages.add(MapEntry(day, dayAvg));
 
         if (dayAvg > 0.7) highStressDays++;
 
         for (var r in readings) {
           final mood = r['currentMood'] as String? ?? 'Neutral';
           moodDistribution[mood] = (moodDistribution[mood] ?? 0) + 1;
+
+          final stress = (r['stressScore'] as num?)?.toDouble() ?? 0.0;
+          if (stress > 0.7)
+            highStressCount++;
+          else if (stress > 0.4)
+            moderateStressCount++;
+          else
+            lowStressCount++;
         }
       });
 
@@ -118,8 +136,7 @@ class _WeeklyStressReportState extends State<WeeklyStressReport> {
       setState(() => _isLoading = false);
     } catch (e) {
       setState(() {
-        _error =
-            "Error loading report: $e\n\n(Please check if the Firestore index exists.)";
+        _error = "Error loading report: $e\n\n(Please check Firestore index.)";
         _isLoading = false;
       });
     }
@@ -138,14 +155,13 @@ class _WeeklyStressReportState extends State<WeeklyStressReport> {
       final mood = reading['currentMood'] as String? ?? 'Neutral';
       final time = (reading['timestamp'] as String?) ?? '';
 
-      Color markerColor;
-      if (stress > 0.7) {
-        markerColor = Colors.red;
-      } else if (stress > 0.4) {
-        markerColor = Colors.orange;
-      } else {
-        markerColor = Colors.green;
-      }
+      BitmapDescriptor markerIcon = BitmapDescriptor.defaultMarkerWithHue(
+        stress > 0.7
+            ? BitmapDescriptor.hueRed
+            : stress > 0.4
+                ? BitmapDescriptor.hueOrange
+                : BitmapDescriptor.hueGreen,
+      );
 
       _markers.add(
         Marker(
@@ -155,18 +171,11 @@ class _WeeklyStressReportState extends State<WeeklyStressReport> {
             title: '${(stress * 100).toStringAsFixed(0)}% Stress • $mood',
             snippet: 'Time: ${time.substring(11, 16)}',
           ),
-          icon: BitmapDescriptor.defaultMarkerWithHue(
-            markerColor == Colors.red
-                ? BitmapDescriptor.hueRed
-                : markerColor == Colors.orange
-                    ? BitmapDescriptor.hueOrange
-                    : BitmapDescriptor.hueGreen,
-          ),
+          icon: markerIcon,
         ),
       );
     }
 
-    // Center map on first point or Negombo default
     if (_weeklyData.isNotEmpty && _mapController != null) {
       final first = _weeklyData.first['location'] as GeoPoint?;
       if (first != null) {
@@ -178,16 +187,106 @@ class _WeeklyStressReportState extends State<WeeklyStressReport> {
     }
   }
 
-  List<FlSpot> _getStressSpots() {
-    List<FlSpot> spots = [];
-    if (_weeklyData.isNotEmpty) {
-      for (int i = 0; i < _weeklyData.length; i++) {
-        final stress =
-            (_weeklyData[i]['stressScore'] as num?)?.toDouble() ?? 0.0;
-        spots.add(FlSpot(i.toDouble(), stress));
-      }
-    }
-    return spots;
+  List<FlSpot> _getDailyStressSpots() {
+    return _dailyAverages.asMap().entries.map((e) {
+      return FlSpot(e.key.toDouble(), e.value.value);
+    }).toList();
+  }
+
+  List<PieChartSectionData> _getStressPieSections() {
+    final total = highStressCount + moderateStressCount + lowStressCount;
+    if (total == 0) return [];
+
+    final highPct = (highStressCount / total * 100);
+    final modPct = (moderateStressCount / total * 100);
+    final lowPct = (lowStressCount / total * 100);
+
+    return [
+      PieChartSectionData(
+        value: highStressCount.toDouble(),
+        title: highStressCount > 0 ? '${highPct.toStringAsFixed(0)}%' : '',
+        color: Colors.redAccent.withOpacity(0.9),
+        radius: 90,
+        titleStyle: const TextStyle(
+          color: Colors.white,
+          fontSize: 14,
+          fontWeight: FontWeight.bold,
+          shadows: [Shadow(color: Colors.black45, blurRadius: 4)],
+        ),
+      ),
+      PieChartSectionData(
+        value: moderateStressCount.toDouble(),
+        title: moderateStressCount > 0 ? '${modPct.toStringAsFixed(0)}%' : '',
+        color: Colors.orangeAccent.withOpacity(0.9),
+        radius: 90,
+        titleStyle: const TextStyle(
+          color: Colors.white,
+          fontSize: 14,
+          fontWeight: FontWeight.bold,
+          shadows: [Shadow(color: Colors.black45, blurRadius: 4)],
+        ),
+      ),
+      PieChartSectionData(
+        value: lowStressCount.toDouble(),
+        title: lowStressCount > 0 ? '${lowPct.toStringAsFixed(0)}%' : '',
+        color: Colors.greenAccent.withOpacity(0.9),
+        radius: 90,
+        titleStyle: const TextStyle(
+          color: Colors.white,
+          fontSize: 14,
+          fontWeight: FontWeight.bold,
+          shadows: [Shadow(color: Colors.black45, blurRadius: 4)],
+        ),
+      ),
+    ];
+  }
+
+  Widget _buildStressPieLegend() {
+    final total = highStressCount + moderateStressCount + lowStressCount;
+    if (total == 0) return const SizedBox.shrink();
+
+    return Column(
+      children: [
+        _legendItem(
+            Colors.redAccent, 'High Stress (>70%)', highStressCount, total),
+        _legendItem(Colors.orangeAccent, 'Moderate (40–70%)',
+            moderateStressCount, total),
+        _legendItem(
+            Colors.greenAccent, 'Low/Relaxed (≤40%)', lowStressCount, total),
+      ],
+    );
+  }
+
+  Widget _legendItem(Color color, String label, int count, int total) {
+    final pct = total > 0 ? (count / total * 100).toStringAsFixed(1) : '0.0';
+    return Padding(
+      padding: const EdgeInsets.symmetric(vertical: 4),
+      child: Row(
+        children: [
+          Container(
+            width: 16,
+            height: 16,
+            decoration: BoxDecoration(
+              color: color,
+              shape: BoxShape.circle,
+              boxShadow: [
+                BoxShadow(
+                    color: color.withOpacity(0.4),
+                    blurRadius: 4,
+                    offset: const Offset(0, 2)),
+              ],
+            ),
+          ),
+          const SizedBox(width: 12),
+          Expanded(
+            child: Text(
+              '$label: $count readings ($pct%)',
+              style: const TextStyle(fontSize: 14, fontWeight: FontWeight.w500),
+            ),
+          ),
+        ],
+      ),
+    );
   }
 
   Future<void> _generateAndDownloadPdf() async {
@@ -210,11 +309,16 @@ class _WeeklyStressReportState extends State<WeeklyStressReport> {
           pw.Text('Summary:',
               style:
                   pw.TextStyle(fontSize: 18, fontWeight: pw.FontWeight.bold)),
-          pw.Bullet(text: 'Average Stress: ${avgStress.toStringAsFixed(2)}'),
-          pw.Bullet(text: 'High Stress Days: $highStressDays'),
           pw.Bullet(
-              text:
-                  'Mood: Stressed ${moodDistribution['Stressed']}, Neutral ${moodDistribution['Neutral']}, Relaxed ${moodDistribution['Relaxed']}'),
+              text: 'Average Stress Level: ${avgStress.toStringAsFixed(2)}'),
+          pw.Bullet(text: 'High Stress Days: $highStressDays'),
+          pw.SizedBox(height: 16),
+          pw.Text('Stress Level Distribution:',
+              style:
+                  pw.TextStyle(fontSize: 16, fontWeight: pw.FontWeight.bold)),
+          pw.Bullet(text: 'High (>70%): $highStressCount readings'),
+          pw.Bullet(text: 'Moderate (40–70%): $moderateStressCount readings'),
+          pw.Bullet(text: 'Low/Relaxed (≤40%): $lowStressCount readings'),
           pw.SizedBox(height: 20),
           pw.Text('Key Locations & Stress Zones:',
               style:
@@ -246,17 +350,19 @@ class _WeeklyStressReportState extends State<WeeklyStressReport> {
   }
 
   String _getHealthTips() {
-    final highStressCount = moodDistribution['Stressed'] ?? 0;
     if (avgStress > 0.65 || highStressDays >= 4 || highStressCount > 10) {
-      return "Your stress levels were elevated this week, especially in certain locations. "
-          "If you felt anxious, had headaches, or poor sleep in those areas, consider consulting a doctor. "
-          "Try deep breathing, short walks, or mindfulness when in high-stress zones.";
+      return "Your stress levels were significantly elevated this week, particularly in certain locations. "
+          "Persistent high stress can impact physical and mental health. Consider consulting a healthcare professional "
+          "if symptoms like anxiety, fatigue, headaches, or sleep disturbances continue. "
+          "Immediate steps: practice 4-7-8 breathing in high-stress zones, take short walks, and prioritize recovery.";
     } else if (avgStress > 0.4) {
-      return "Moderate stress detected. Your body handled it well overall. "
-          "To stay in the relaxed zone longer, maintain hydration, limit caffeine, and take 5-minute breaks in calm locations.";
+      return "Moderate stress levels detected — you're managing it reasonably well. "
+          "To shift toward more relaxed states: incorporate 5–10 minutes of mindfulness daily, "
+          "stay hydrated, reduce screen time before bed, and use calm locations for breaks.";
     } else {
-      return "Excellent! You stayed mostly relaxed this week. "
-          "Keep protecting your mental health with regular rest and positive routines.";
+      return "Outstanding! Your week was dominated by low stress and relaxation. "
+          "This balance supports strong mental resilience. Continue your healthy routines — "
+          "they're clearly working very effectively for you.";
     }
   }
 
@@ -311,27 +417,41 @@ class _WeeklyStressReportState extends State<WeeklyStressReport> {
                         // Summary Card
                         Card(
                           elevation: 4,
+                          shape: RoundedRectangleBorder(
+                              borderRadius: BorderRadius.circular(16)),
                           child: Padding(
                             padding: const EdgeInsets.all(20),
                             child: Column(
                               crossAxisAlignment: CrossAxisAlignment.start,
                               children: [
-                                Text('Summary • Last 7 Days',
-                                    style:
-                                        Theme.of(context).textTheme.titleLarge),
+                                Text('Weekly Summary',
+                                    style: Theme.of(context)
+                                        .textTheme
+                                        .titleLarge
+                                        ?.copyWith(
+                                            fontWeight: FontWeight.bold)),
                                 const SizedBox(height: 16),
-                                Text(
-                                    'Avg Stress: ${avgStress.toStringAsFixed(2)}'),
-                                Text('High Stress Days: $highStressDays'),
+                                Row(
+                                  mainAxisAlignment:
+                                      MainAxisAlignment.spaceBetween,
+                                  children: [
+                                    _statItem('Avg Stress',
+                                        '${avgStress.toStringAsFixed(2)}'),
+                                    _statItem(
+                                        'High Days', '$highStressDays / 7'),
+                                  ],
+                                ),
                                 const SizedBox(height: 12),
-                                Text('Mood Breakdown:',
+                                Text('Mood Distribution:',
                                     style: Theme.of(context)
                                         .textTheme
                                         .titleMedium),
                                 Text(
-                                    'Stressed: ${moodDistribution['Stressed']} • '
-                                    'Neutral: ${moodDistribution['Neutral']} • '
-                                    'Relaxed: ${moodDistribution['Relaxed']}'),
+                                  'Stressed: ${moodDistribution['Stressed']} • '
+                                  'Neutral: ${moodDistribution['Neutral']} • '
+                                  'Relaxed: ${moodDistribution['Relaxed']}',
+                                  style: const TextStyle(fontSize: 15),
+                                ),
                               ],
                             ),
                           ),
@@ -339,84 +459,316 @@ class _WeeklyStressReportState extends State<WeeklyStressReport> {
 
                         const SizedBox(height: 24),
 
-                        // Stress Trend Chart
-                        const Text('Stress Trend Over Time',
-                            style: TextStyle(
-                                fontSize: 20, fontWeight: FontWeight.bold)),
-                        SizedBox(
-                          height: 240,
-                          child: _weeklyData.isEmpty
-                              ? const Center(child: Text('No data yet'))
-                              : LineChart(
-                                  LineChartData(
-                                    lineBarsData: [
-                                      LineChartBarData(
-                                        spots: _getStressSpots(),
-                                        isCurved: true,
-                                        color: Colors.redAccent,
-                                        barWidth: 3,
-                                        dotData: const FlDotData(show: false),
-                                      ),
-                                    ],
-                                    gridData: const FlGridData(show: true),
-                                    titlesData: const FlTitlesData(show: true),
-                                    borderData: FlBorderData(show: true),
-                                  ),
-                                ),
-                        ),
-
-                        const SizedBox(height: 32),
-
-                        // Locations Map – NEW FEATURE
-                        const Text('Your Locations & Stress Zones',
-                            style: TextStyle(
-                                fontSize: 20, fontWeight: FontWeight.bold)),
-                        const SizedBox(height: 12),
-                        const Text(
-                            'Red = High Stress • Orange = Moderate • Green = Relaxed',
-                            style: TextStyle(color: Colors.grey, fontSize: 14)),
-                        const SizedBox(height: 8),
-                        SizedBox(
-                          height: 300,
-                          child: _weeklyData.isEmpty || _markers.isEmpty
-                              ? const Center(
-                                  child: Text('No location data available'))
-                              : GoogleMap(
-                                  initialCameraPosition: const CameraPosition(
-                                    target: LatLng(
-                                        7.2000, 79.8730), // Negombo default
-                                    zoom: 11,
-                                  ),
-                                  markers: _markers,
-                                  onMapCreated: (controller) {
-                                    _mapController = controller;
-                                    if (_weeklyData.isNotEmpty) {
-                                      final first = _weeklyData
-                                          .first['location'] as GeoPoint?;
-                                      if (first != null) {
-                                        controller.animateCamera(
-                                          CameraUpdate.newLatLngZoom(
-                                            LatLng(first.latitude,
-                                                first.longitude),
-                                            12,
-                                          ),
-                                        );
-                                      }
-                                    }
-                                  },
-                                  myLocationEnabled: false,
-                                  zoomControlsEnabled: true,
-                                  mapToolbarEnabled: false,
-                                ),
-                        ),
-
-                        const SizedBox(height: 32),
-
-                        // Health Tips
+                        // Professional Stress Trend Chart
                         Card(
+                          elevation: 4,
+                          shape: RoundedRectangleBorder(
+                              borderRadius: BorderRadius.circular(16)),
+                          child: Padding(
+                            padding: const EdgeInsets.all(20),
+                            child: Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                Text('Daily Average Stress Trend',
+                                    style: Theme.of(context)
+                                        .textTheme
+                                        .titleMedium
+                                        ?.copyWith(
+                                            fontWeight: FontWeight.bold)),
+                                const SizedBox(height: 16),
+                                SizedBox(
+                                  height: 260,
+                                  child: _dailyAverages.isEmpty
+                                      ? const Center(
+                                          child: Text('No data yet',
+                                              style: TextStyle(
+                                                  color: Colors.grey)))
+                                      : LineChart(
+                                          LineChartData(
+                                            lineTouchData: LineTouchData(
+                                              enabled: true,
+                                              touchTooltipData:
+                                                  LineTouchTooltipData(
+                                                getTooltipColor:
+                                                    (touchedSpot) => Colors
+                                                        .black
+                                                        .withOpacity(0.8),
+                                                getTooltipItems:
+                                                    (touchedSpots) {
+                                                  return touchedSpots
+                                                      .map((spot) {
+                                                    final day = _dailyAverages[
+                                                            spot.x.toInt()]
+                                                        .key;
+                                                    return LineTooltipItem(
+                                                      '${DateFormat('MMM dd').format(DateTime.parse(day))}\n'
+                                                      '${(spot.y * 100).toStringAsFixed(0)}% Stress',
+                                                      const TextStyle(
+                                                          color: Colors.white,
+                                                          fontSize: 14),
+                                                    );
+                                                  }).toList();
+                                                },
+                                              ),
+                                            ),
+                                            gridData: FlGridData(
+                                              show: true,
+                                              drawVerticalLine: true,
+                                              horizontalInterval: 0.2,
+                                              verticalInterval: 1,
+                                              getDrawingHorizontalLine:
+                                                  (value) => FlLine(
+                                                color: Colors.grey
+                                                    .withOpacity(0.2),
+                                                strokeWidth: 1,
+                                              ),
+                                              getDrawingVerticalLine: (value) =>
+                                                  FlLine(
+                                                color: Colors.grey
+                                                    .withOpacity(0.1),
+                                                strokeWidth: 1,
+                                              ),
+                                            ),
+                                            titlesData: FlTitlesData(
+                                              leftTitles: AxisTitles(
+                                                sideTitles: SideTitles(
+                                                  showTitles: true,
+                                                  reservedSize: 40,
+                                                  interval: 0.2,
+                                                  getTitlesWidget:
+                                                      (value, meta) => Text(
+                                                    '${(value * 100).toInt()}%',
+                                                    style: const TextStyle(
+                                                        fontSize: 12,
+                                                        color: Colors.grey),
+                                                  ),
+                                                ),
+                                              ),
+                                              bottomTitles: AxisTitles(
+                                                sideTitles: SideTitles(
+                                                  showTitles: true,
+                                                  reservedSize: 40,
+                                                  interval: 1,
+                                                  getTitlesWidget:
+                                                      (value, meta) {
+                                                    if (value.toInt() >=
+                                                        _dailyAverages.length)
+                                                      return const Text('');
+                                                    final day = _dailyAverages[
+                                                            value.toInt()]
+                                                        .key;
+                                                    return Padding(
+                                                      padding:
+                                                          const EdgeInsets.only(
+                                                              top: 8),
+                                                      child: Text(
+                                                        DateFormat('dd').format(
+                                                            DateTime.parse(
+                                                                day)),
+                                                        style: const TextStyle(
+                                                            fontSize: 12,
+                                                            color: Colors.grey),
+                                                      ),
+                                                    );
+                                                  },
+                                                ),
+                                              ),
+                                              topTitles: const AxisTitles(
+                                                  sideTitles: SideTitles(
+                                                      showTitles: false)),
+                                              rightTitles: const AxisTitles(
+                                                  sideTitles: SideTitles(
+                                                      showTitles: false)),
+                                            ),
+                                            borderData:
+                                                FlBorderData(show: false),
+                                            minX: 0,
+                                            maxX: (_dailyAverages.length - 1)
+                                                .toDouble(),
+                                            minY: 0,
+                                            maxY: 1.0,
+                                            lineBarsData: [
+                                              LineChartBarData(
+                                                spots: _getDailyStressSpots(),
+                                                isCurved: true,
+                                                curveSmoothness: 0.4,
+                                                color: Colors.redAccent,
+                                                barWidth: 3.5,
+                                                dotData: FlDotData(
+                                                  show: true,
+                                                  getDotPainter: (spot, percent,
+                                                          barData, index) =>
+                                                      FlDotCirclePainter(
+                                                    radius: 5,
+                                                    color: Colors.redAccent,
+                                                    strokeColor: Colors.white,
+                                                    strokeWidth: 2,
+                                                  ),
+                                                ),
+                                                belowBarData: BarAreaData(
+                                                  show: true,
+                                                  gradient: LinearGradient(
+                                                    begin: Alignment.topCenter,
+                                                    end: Alignment.bottomCenter,
+                                                    colors: [
+                                                      Colors.redAccent
+                                                          .withOpacity(0.35),
+                                                      Colors.redAccent
+                                                          .withOpacity(0.05),
+                                                    ],
+                                                  ),
+                                                ),
+                                              ),
+                                            ],
+                                          ),
+                                        ),
+                                ),
+                                const SizedBox(height: 12),
+                                const Center(
+                                  child: Text(
+                                    'Daily average stress level • Higher = more stressed',
+                                    style: TextStyle(
+                                        fontSize: 12, color: Colors.grey),
+                                  ),
+                                ),
+                              ],
+                            ),
+                          ),
+                        ),
+
+                        const SizedBox(height: 32),
+
+                        // Locations Map
+                        Card(
+                          elevation: 4,
+                          shape: RoundedRectangleBorder(
+                              borderRadius: BorderRadius.circular(16)),
+                          child: Padding(
+                            padding: const EdgeInsets.all(20),
+                            child: Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                Text('Your Locations & Stress Zones',
+                                    style: Theme.of(context)
+                                        .textTheme
+                                        .titleMedium
+                                        ?.copyWith(
+                                            fontWeight: FontWeight.bold)),
+                                const SizedBox(height: 12),
+                                const Text(
+                                  'Red = High Stress • Orange = Moderate • Green = Relaxed',
+                                  style: TextStyle(
+                                      color: Colors.grey, fontSize: 13),
+                                ),
+                                const SizedBox(height: 12),
+                                SizedBox(
+                                  height: 320,
+                                  child: _weeklyData.isEmpty || _markers.isEmpty
+                                      ? const Center(
+                                          child: Text(
+                                              'No location data this week'))
+                                      : ClipRRect(
+                                          borderRadius:
+                                              BorderRadius.circular(12),
+                                          child: GoogleMap(
+                                            initialCameraPosition:
+                                                const CameraPosition(
+                                              target: LatLng(7.2000, 79.8730),
+                                              zoom: 11,
+                                            ),
+                                            markers: _markers,
+                                            onMapCreated: (controller) {
+                                              _mapController = controller;
+                                              if (_weeklyData.isNotEmpty) {
+                                                final first = _weeklyData
+                                                        .first['location']
+                                                    as GeoPoint?;
+                                                if (first != null) {
+                                                  controller.animateCamera(
+                                                    CameraUpdate.newLatLngZoom(
+                                                      LatLng(first.latitude,
+                                                          first.longitude),
+                                                      12,
+                                                    ),
+                                                  );
+                                                }
+                                              }
+                                            },
+                                            myLocationEnabled: false,
+                                            zoomControlsEnabled: true,
+                                            mapToolbarEnabled: false,
+                                          ),
+                                        ),
+                                ),
+                              ],
+                            ),
+                          ),
+                        ),
+
+                        const SizedBox(height: 32),
+
+                        // Professional Stress Level Pie Chart
+                        Card(
+                          elevation: 4,
+                          shape: RoundedRectangleBorder(
+                              borderRadius: BorderRadius.circular(16)),
+                          child: Padding(
+                            padding: const EdgeInsets.all(20),
+                            child: Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                Text('Stress Level Distribution This Week',
+                                    style: Theme.of(context)
+                                        .textTheme
+                                        .titleMedium
+                                        ?.copyWith(
+                                            fontWeight: FontWeight.bold)),
+                                const SizedBox(height: 20),
+                                SizedBox(
+                                  height: 280,
+                                  child: highStressCount +
+                                              moderateStressCount +
+                                              lowStressCount ==
+                                          0
+                                      ? const Center(
+                                          child: Text(
+                                              'No stress level data recorded',
+                                              style: TextStyle(
+                                                  color: Colors.grey)))
+                                      : PieChart(
+                                          PieChartData(
+                                            pieTouchData: PieTouchData(
+                                              touchCallback:
+                                                  (FlTouchEvent event,
+                                                      pieTouchResponse) {
+                                                // You can add tooltip logic here if desired
+                                              },
+                                            ),
+                                            borderData:
+                                                FlBorderData(show: false),
+                                            sectionsSpace: 3,
+                                            centerSpaceRadius: 50,
+                                            sections: _getStressPieSections(),
+                                          ),
+                                        ),
+                                ),
+                                const SizedBox(height: 20),
+                                _buildStressPieLegend(),
+                              ],
+                            ),
+                          ),
+                        ),
+
+                        const SizedBox(height: 32),
+
+                        // Health Recommendations
+                        Card(
+                          elevation: 4,
                           color: avgStress > 0.6
                               ? Colors.orange.shade50
                               : Colors.green.shade50,
+                          shape: RoundedRectangleBorder(
+                              borderRadius: BorderRadius.circular(16)),
                           child: Padding(
                             padding: const EdgeInsets.all(20),
                             child: Column(
@@ -425,25 +777,32 @@ class _WeeklyStressReportState extends State<WeeklyStressReport> {
                                 Text('Health Recommendations',
                                     style: Theme.of(context)
                                         .textTheme
-                                        .titleMedium),
+                                        .titleMedium
+                                        ?.copyWith(
+                                            fontWeight: FontWeight.bold)),
                                 const SizedBox(height: 12),
                                 Text(
                                   _getHealthTips(),
-                                  style: const TextStyle(height: 1.5),
+                                  style: const TextStyle(
+                                      height: 1.5, fontSize: 15),
                                 ),
                                 if (avgStress > 0.65 || highStressDays >= 4)
                                   Padding(
                                     padding: const EdgeInsets.only(top: 16),
                                     child: Row(
+                                      crossAxisAlignment:
+                                          CrossAxisAlignment.start,
                                       children: const [
                                         Icon(Icons.medical_services,
-                                            color: Colors.redAccent),
+                                            color: Colors.redAccent, size: 28),
                                         SizedBox(width: 12),
                                         Expanded(
                                           child: Text(
-                                            "If stress symptoms (anxiety, fatigue, headaches) were frequent in certain locations, speak to a doctor.",
+                                            "Frequent high stress in certain locations may indicate environmental or situational triggers. "
+                                            "Consider speaking to a healthcare professional if symptoms (anxiety, fatigue, headaches) persist.",
                                             style: TextStyle(
-                                                color: Colors.redAccent),
+                                                color: Colors.redAccent,
+                                                fontSize: 14),
                                           ),
                                         ),
                                       ],
@@ -454,64 +813,21 @@ class _WeeklyStressReportState extends State<WeeklyStressReport> {
                           ),
                         ),
 
-                        const SizedBox(height: 32),
-
-                        // Detailed Readings List
-                        const Text('All Readings',
-                            style: TextStyle(
-                                fontSize: 20, fontWeight: FontWeight.bold)),
-                        ListView.builder(
-                          shrinkWrap: true,
-                          physics: const NeverScrollableScrollPhysics(),
-                          itemCount: _weeklyData.length,
-                          itemBuilder: (context, index) {
-                            final r = _weeklyData[index];
-                            final ts = (r['createdAt'] as Timestamp?)?.toDate();
-                            final geo = r['location'] as GeoPoint?;
-                            final stress =
-                                (r['stressScore'] as num?)?.toDouble() ?? 0.0;
-
-                            return Card(
-                              margin: const EdgeInsets.symmetric(vertical: 6),
-                              child: ListTile(
-                                leading: CircleAvatar(
-                                  backgroundColor: stress > 0.7
-                                      ? Colors.red
-                                      : stress > 0.4
-                                          ? Colors.orange
-                                          : Colors.green,
-                                  child: Text(
-                                    (stress * 100).toStringAsFixed(0),
-                                    style: const TextStyle(
-                                        color: Colors.white, fontSize: 14),
-                                  ),
-                                ),
-                                title: Text(r['currentMood'] as String? ?? '—'),
-                                subtitle: Column(
-                                  crossAxisAlignment: CrossAxisAlignment.start,
-                                  children: [
-                                    Text(
-                                      ts != null
-                                          ? DateFormat('MMM dd, HH:mm')
-                                              .format(ts)
-                                          : '—',
-                                    ),
-                                    if (geo != null)
-                                      Text(
-                                        'Location: ${geo.latitude.toStringAsFixed(5)}, ${geo.longitude.toStringAsFixed(5)}',
-                                        style: const TextStyle(
-                                            fontSize: 12, color: Colors.grey),
-                                      ),
-                                  ],
-                                ),
-                              ),
-                            );
-                          },
-                        ),
+                        const SizedBox(height: 40),
                       ],
                     ),
                   ),
                 ),
+    );
+  }
+
+  Widget _statItem(String label, String value) {
+    return Column(
+      children: [
+        Text(value,
+            style: const TextStyle(fontSize: 24, fontWeight: FontWeight.bold)),
+        Text(label, style: const TextStyle(fontSize: 13, color: Colors.grey)),
+      ],
     );
   }
 }
