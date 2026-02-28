@@ -1,3 +1,4 @@
+// member2_page.dart (updated with button)
 import 'dart:async';
 import 'dart:convert';
 import 'dart:math' as math;
@@ -9,8 +10,8 @@ import 'package:provider/provider.dart';
 
 import 'thinkgear.dart';
 import '../../../../services/bluetooth_manager.dart';
-// If you have auth:
-// import '../../../../services/auth_service.dart';
+import '../../../../services/auth_service.dart';
+import 'weekly_stress_report.dart'; // ← NEW import
 
 class Member2Page extends StatefulWidget {
   const Member2Page({super.key});
@@ -402,8 +403,18 @@ class _Member2PageState extends State<Member2Page> {
     setState(() => _isSaving = true);
 
     try {
-      // Replace with real user ID from auth
-      const String userId = "abc123xyz"; // ← CHANGE THIS
+      final auth = Provider.of<AuthService>(context, listen: false);
+      final userId = auth.userId;
+
+      if (userId == null) {
+        debugPrint("No logged-in user — cannot save to Firestore");
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(content: Text("Please log in to save data")),
+          );
+        }
+        return;
+      }
 
       final String isoTimestamp = DateTime.now().toIso8601String();
 
@@ -418,16 +429,17 @@ class _Member2PageState extends State<Member2Page> {
         "poorSignalLevel": poorSignalLevel,
         "attention": attention,
         "meditation": meditation,
-        "userId": userId,
+        "userId": userId, // ← now dynamic!
         "deviceName": deviceName,
         "createdAt": FieldValue.serverTimestamp(),
-        // Location - replace with real geolocation
-        "location": const GeoPoint(7.2000, 79.8730), // Negombo example
+        "location":
+            const GeoPoint(7.2000, 79.8730), // replace with real location later
       };
 
       await _firestore.collection("stress_mood_readings").add(data);
 
-      debugPrint("Stress/Mood reading saved: $currentMood ($stressScore)");
+      debugPrint(
+          "Stress/Mood reading saved for user $userId: $currentMood ($stressScore)");
     } catch (e) {
       debugPrint("Firestore save error: $e");
       if (mounted) {
@@ -955,12 +967,9 @@ class _Member2PageState extends State<Member2Page> {
                           textAlign: TextAlign.center,
                         ),
                         const SizedBox(height: 8),
-                        Text(
+                        const Text(
                           "Live brain electrical activity • ~1.5 seconds window",
-                          style: TextStyle(
-                            fontSize: 14,
-                            color: Colors.grey.shade600,
-                          ),
+                          style: TextStyle(fontSize: 14, color: Colors.black54),
                           textAlign: TextAlign.center,
                         ),
                         const SizedBox(height: 24),
@@ -1105,6 +1114,30 @@ class _Member2PageState extends State<Member2Page> {
                   ),
                 ],
                 const SizedBox(height: 40),
+
+                // ────────────────────────────────────────────────
+                // NEW: Button for weekly report
+                // ────────────────────────────────────────────────
+                ElevatedButton.icon(
+                  onPressed: () {
+                    Navigator.push(
+                      context,
+                      MaterialPageRoute(
+                          builder: (_) => const WeeklyStressReport()),
+                    );
+                  },
+                  icon: const Icon(Icons.download),
+                  label: const Text('Download Weekly Report'),
+                  style: ElevatedButton.styleFrom(
+                    backgroundColor: Colors.indigo,
+                    foregroundColor: Colors.white,
+                    padding: const EdgeInsets.symmetric(vertical: 16),
+                    shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(12),
+                    ),
+                  ),
+                ),
+                const SizedBox(height: 20),
               ],
             ),
           ),
