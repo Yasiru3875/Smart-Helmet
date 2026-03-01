@@ -71,9 +71,12 @@ class _Member3PageState extends State<Member3Page>
 // Firestore
   final FirebaseFirestore _firestore = FirebaseFirestore.instance;
   bool _isSaving = false;
-  DateTime? _lastSavedTime;
-  final Duration _saveInterval =
-      const Duration(seconds: 1); // ← change this value to control frequency
+  
+  // Risky Events Tracking (ONLY risky events saved to Firebase)
+  String? _currentRideId;  // Generated when ride starts
+  int _riskyEventsSavedCount = 0;
+  List<Map<String, dynamic>> _riskyEventsThisRide = [];  // In-memory list for visualization
+  
   // Current GPS state
   double currentSpeed = 0.0;
   double currentLat = 0.0;
@@ -430,31 +433,32 @@ class _Member3PageState extends State<Member3Page>
     final journeyProvider =
         Provider.of<JourneyProvider>(context, listen: false);
 
-    // ─── NEW: Calculate new turn status FIRST ────────────────────────────────
+    // ─── Calculate turn status FIRST ────────────────────────────────
     double turnRate = imuData['gyroZ']!.abs();
     String newTurnStatus = "Normal";
     Color newStatusColor = Colors.green;
-    bool isRiskyThisReading = false;
+    String? eventType; // null = no risky event
 
     if (turnRate > riskyTurnThreshold) {
       newTurnStatus = "RISKY TURN!";
       newStatusColor = Colors.red;
-      isRiskyThisReading = true;
+      eventType = 'risky_turn';  // HIGH severity
       riskyTurnCount++;
     } else if (turnRate > sharpTurnThreshold) {
       newTurnStatus = "Sharp Turn";
       newStatusColor = Colors.orange;
+      eventType = 'sharp_turn';  // MODERATE severity
       sharpTurnCount++;
     }
 
-    // ─── Save to Firestore BEFORE setState (we already know if it's risky) ───
-    if (imuData['gyroZ'] != null) {
-      _saveLiveReadingIfNeeded(
+    // ─── ONLY SAVE RISKY EVENTS (not normal readings) ───────────────
+    if (eventType != null && imuData['gyroZ'] != null) {
+      _saveRiskyEventOnly(
         imuData,
         speed,
         lat,
         lng,
-        isRiskyThisReading, // ← pass the flag directly
+        eventType, // 'risky_turn' or 'sharp_turn'
       );
     }
 
@@ -494,14 +498,14 @@ class _Member3PageState extends State<Member3Page>
 
       // Provider turn events (unchanged)
       if (journeyProvider.isJourneyActive) {
-        if (isRiskyThisReading) {
+        if (eventType == 'risky_turn') {
           journeyProvider.addTurnEvent(
             severity: 'risky',
             turnRate: turnRate,
             latitude: currentLat,
             longitude: currentLng,
           );
-        } else if (turnRate > sharpTurnThreshold) {
+        } else if (eventType == 'sharp_turn') {
           journeyProvider.addTurnEvent(
             severity: 'sharp',
             turnRate: turnRate,
@@ -531,61 +535,128 @@ class _Member3PageState extends State<Member3Page>
     return degree * (pi / 180);
   }
 
-  Future<void> _saveLiveReadingIfNeeded(
+  // ============================================================
+  // START/END RIDE - Initialize and clear ride tracking
+  // ============================================================
+  void _startNewRide() {
+    _currentRideId = DateTime.now().millisecondsSinceEpoch.toString();
+    _riskyEventsSavedCount = 0;
+    _riskyEventsThisRide = [];
+    sharpTurnCount = 0;
+    riskyTurnCount = 0;
+    totalDistanceKm = 0.0;
+    debugPrint("🚀 New ride started: $_currentRideId");
+  }
+
+  void _endCurrentRide() {
+    debugPrint("🏁 Ride ended: $_currentRideId | Risky events saved: $_riskyEventsSavedCount");
+    // Events remain in _riskyEventsThisRide for visualization
+  }
+
+  // ============================================================
+  // SAVE ONLY RISKY EVENTS TO FIREBASE
+  // ============================================================
+  Future<void> _saveRiskyEventOnly(
     Map<String, double> imu,
     double speed,
     double lat,
     double lng,
-    bool isRiskyThisReading, // ← new parameter
+    String eventType, // 'risky_turn', 'sharp_turn', 'harsh_brake'
   ) async {
     if (_isSaving) return;
-
-    final now = DateTime.now();
-    final timePassed = _lastSavedTime == null ||
-        now.difference(_lastSavedTime!) >= _saveInterval;
-
-    // Save if time interval passed OR this reading is risky
-    if (!timePassed && !isRiskyThisReading) return;
+    if (_currentRideId == null) {
+      _startNewRide(); // Auto-start if not already started
+    }
 
     setState(() => _isSaving = true);
 
+    final now = DateTime.now();
+    final turnRate = imu['gyroZ']?.abs() ?? 0.0;
+
     try {
-      final data = {
+      final eventData = {
+        // Ride identification
+        "rideId": _currentRideId,
+        "eventNumber": _riskyEventsSavedCount + 1,
+        
+        // Timestamp
         "timestamp": now.toIso8601String(),
         "createdAt": FieldValue.serverTimestamp(),
+        
+        // Event classification
+        "eventType": eventType,
+        "severity": eventType == 'risky_turn' ? 'high' : 'moderate',
+        
+        // IMU data at event
         "gyroX": imu['gyroX'],
         "gyroY": imu['gyroY'],
         "gyroZ": imu['gyroZ'],
+        "turnRateDegPerSec": turnRate,
         "accelX": imu['accelX'],
         "accelY": imu['accelY'],
         "accelZ": imu['accelZ'],
-        "speedKmh": speed,
+        
+        // GPS location of event
         "latitude": lat,
         "longitude": lng,
         "location": GeoPoint(lat, lng),
-        "turnStatus":
-            currentTurnStatus, // still use latest UI value, but we know it's risky
-        "turnRateDegPerSec": imu['gyroZ']!.abs(),
+        "speedKmh": speed,
+        
+        // Running totals at this point
         "sharpTurnsTotal": sharpTurnCount,
         "riskyTurnsTotal": riskyTurnCount,
         "totalDistanceKm": totalDistanceKm,
-        "deviceName": targetDeviceName,
-        "isRiskyEvent": isRiskyThisReading, // ← more accurate
       };
 
-      await _firestore.collection("helmet_live_readings").add(data);
-
-      _lastSavedTime = now;
-      debugPrint("Live reading saved → Risky: $isRiskyThisReading");
+      // Save to Firebase 'risky_events' collection
+      final docRef = await _firestore.collection("risky_events").add(eventData);
+      
+      // Also keep in memory for end-of-ride visualization
+      _riskyEventsThisRide.add({
+        ...eventData,
+        "docId": docRef.id,
+      });
+      
+      _riskyEventsSavedCount++;
+      
+      debugPrint("🚨 RISKY EVENT #$_riskyEventsSavedCount saved → Type: $eventType | Turn: ${turnRate.toStringAsFixed(1)}°/s | ID: ${docRef.id}");
+      
     } catch (e) {
-      debugPrint("Firestore save error: $e");
+      debugPrint("❌ Firebase risky event save error: $e");
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text("Failed to save live data: $e")),
+          SnackBar(
+            content: Text("Failed to save risky event: $e"),
+            backgroundColor: Colors.red,
+          ),
         );
       }
     } finally {
       if (mounted) setState(() => _isSaving = false);
+    }
+  }
+
+  // Get all risky events for current ride (for visualization)
+  List<Map<String, dynamic>> getRiskyEventsForVisualization() {
+    return List.from(_riskyEventsThisRide);
+  }
+
+  // Load risky events from Firebase for a specific ride
+  Future<List<Map<String, dynamic>>> loadRiskyEventsForRide(String rideId) async {
+    try {
+      final snapshot = await _firestore
+          .collection("risky_events")
+          .where("rideId", isEqualTo: rideId)
+          .orderBy("timestamp")
+          .get();
+      
+      return snapshot.docs.map((doc) => {
+        ...doc.data(),
+        "docId": doc.id,
+      }).toList();
+    } catch (e) {
+      debugPrint("Error loading risky events: $e");
+      return [];
     }
   }
 
@@ -624,30 +695,56 @@ class _Member3PageState extends State<Member3Page>
                   ],
                 ),
 
-          // Saving indicator
-          if (_isSaving)
-            const Positioned(
+          // Risky Events Indicator (shows only when events detected)
+          if (_isSaving || _riskyEventsSavedCount > 0)
+            Positioned(
               bottom: 24,
               right: 24,
               child: Card(
-                color: Colors.black87,
+                color: _isSaving 
+                    ? Colors.orange[700] 
+                    : (_riskyEventsSavedCount > 0 ? Colors.red[700] : Colors.green[700]),
+                elevation: 6,
                 child: Padding(
-                  padding: EdgeInsets.symmetric(horizontal: 16, vertical: 10),
+                  padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
                   child: Row(
                     mainAxisSize: MainAxisSize.min,
                     children: [
-                      SizedBox(
-                        width: 18,
-                        height: 18,
-                        child: CircularProgressIndicator(
-                          strokeWidth: 2.5,
-                          color: Colors.white,
-                        ),
-                      ),
-                      SizedBox(width: 12),
-                      Text(
-                        "Saving...",
-                        style: TextStyle(color: Colors.white, fontSize: 13),
+                      if (_isSaving)
+                        const SizedBox(
+                          width: 18,
+                          height: 18,
+                          child: CircularProgressIndicator(
+                            strokeWidth: 2.5,
+                            color: Colors.white,
+                          ),
+                        )
+                      else
+                        const Icon(Icons.warning_amber_rounded, color: Colors.white, size: 20),
+                      const SizedBox(width: 12),
+                      Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          Text(
+                            _isSaving 
+                                ? "Saving risky event..." 
+                                : "🚨 $_riskyEventsSavedCount Risky Events",
+                            style: const TextStyle(
+                              color: Colors.white, 
+                              fontSize: 13, 
+                              fontWeight: FontWeight.bold,
+                            ),
+                          ),
+                          if (_currentRideId != null && !_isSaving)
+                            Text(
+                              "Ride: ${_currentRideId!.substring(0, 8)}...",
+                              style: TextStyle(
+                                color: Colors.white.withOpacity(0.8), 
+                                fontSize: 10,
+                              ),
+                            ),
+                        ],
                       ),
                     ],
                   ),
