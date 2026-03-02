@@ -14,6 +14,8 @@ import 'package:smart_helmet_app/services/journey_service.dart';
 import 'JourneyReportScreen.dart';
 import 'dummy_journey_data.dart';
 
+import 'package:smart_helmet_app/providers/sensor_data_provider.dart';
+
 class Member3Page extends StatefulWidget {
   final JourneyData? completedJourney; // Optional: passed when ride just ended
 
@@ -417,6 +419,9 @@ class _Member3PageState extends State<Member3Page>
       isConnected = false;
       connectionStatus = "Disconnected";
     });
+    final sensorProvider =
+        Provider.of<SensorDataProvider>(context, listen: false);
+    sensorProvider.resetRideSafety();
   }
 
   void _processIMUData({
@@ -511,6 +516,19 @@ class _Member3PageState extends State<Member3Page>
         }
       }
     });
+
+    // Inside setState or right after determining newTurnStatus
+    final sensorProvider =
+        Provider.of<SensorDataProvider>(context, listen: false);
+
+// Update ride safety based on current turn status
+    bool isCurrentlyRisky =
+        newTurnStatus == "RISKY TURN!" || newTurnStatus == "Sharp Turn";
+    sensorProvider.updateRideSafety(isCurrentlyRisky);
+
+// Optional: only mark as RISKY if risky turn (not just sharp)
+    bool isRiskyEvent = newTurnStatus == "RISKY TURN!";
+    sensorProvider.updateRideSafety(isRiskyEvent);
   }
 
   // Haversine formula to calculate distance between two GPS points in km

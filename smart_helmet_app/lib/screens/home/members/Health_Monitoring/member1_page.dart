@@ -13,6 +13,7 @@ import 'package:provider/provider.dart';
 import 'package:tflite_flutter/tflite_flutter.dart';
 import 'package:fl_chart/fl_chart.dart';
 import '../../../../services/bluetooth_manager.dart';
+import 'package:smart_helmet_app/providers/sensor_data_provider.dart';
 // If you have auth service:
 // import '../../../../services/auth_service.dart';
 
@@ -52,6 +53,10 @@ class _Member1PageState extends State<Member1Page> {
   final List<FlSpot> heartRateSpots = [];
   final List<FlSpot> temperatureSpots = [];
   double _currentX = 0.0;
+
+  // Firestore save throttling
+  DateTime? _lastSavedTime;
+  final Duration _saveInterval = const Duration(seconds: 10);
 
   // Firestore
   final FirebaseFirestore _firestore = FirebaseFirestore.instance;
@@ -117,6 +122,17 @@ class _Member1PageState extends State<Member1Page> {
       final double hr = (json['hr'] as num?)?.toDouble() ?? 0.0;
       final double temp = (json['temp'] as num?)?.toDouble() ?? 0.0;
 
+      // Inside _parseAndUpdateData or after setState
+      final sensorProvider =
+          Provider.of<SensorDataProvider>(context, listen: false);
+      sensorProvider.updateHeartRate(heartRate.toInt());
+      sensorProvider.updateTemperature(bodyTemperature);
+      sensorProvider
+          .updateDangerAlert(heartRate > 110 || bodyTemperature > 38.0);
+
+      print(
+          "Sent to provider → HR: $heartRate, Temp: $bodyTemperature, Danger: ${heartRate > 110 || bodyTemperature > 38.0}");
+
       if (mounted) {
         setState(() {
           heartRate = hr;
@@ -135,10 +151,12 @@ class _Member1PageState extends State<Member1Page> {
 
       _predictWithTFLite(hr, temp);
 
+
       // FIXED: These variables must be at CLASS level (moved from inside method)
       // Add these two lines at the TOP of _Member1PageState class:
       // DateTime? _lastSavedTime;
       // final Duration _saveInterval = const Duration(seconds: 10);
+
 
       if (hr > 0 && temp > 0) {
         final now = DateTime.now();
