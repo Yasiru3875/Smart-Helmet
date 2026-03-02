@@ -6,7 +6,9 @@ import 'package:provider/provider.dart';
 import 'package:tflite_flutter/tflite_flutter.dart';
 import 'package:fl_chart/fl_chart.dart';
 import '../../../../services/bluetooth_manager.dart';
+import 'package:geolocator/geolocator.dart';
 import 'package:smart_helmet_app/providers/sensor_data_provider.dart';
+import 'package:smart_helmet_app/providers/ride_session_provider.dart';
 // If you have auth service:
 // import '../../../../services/auth_service.dart';
 
@@ -57,6 +59,7 @@ class _Member1PageState extends State<Member1Page> {
     super.initState();
     _loadModel();
     _init();
+    _startLocationTracking(); // ← ADD THIS
   }
 
   Future<void> _loadModel() async {
@@ -105,6 +108,64 @@ class _Member1PageState extends State<Member1Page> {
         riskColor = Colors.grey;
       }),
     );
+  }
+
+  // Add near the top of the class
+  Position? _currentPosition;
+  StreamSubscription<Position>? _positionStream;
+  bool _locationServiceEnabled = false;
+  LocationPermission _permission = LocationPermission.denied;
+
+// Add this method (call it in initState)
+  Future<void> _startLocationTracking() async {
+    // Check if location services are enabled
+    _locationServiceEnabled = await Geolocator.isLocationServiceEnabled();
+    if (!_locationServiceEnabled) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('Location services are disabled')),
+        );
+      }
+      return;
+    }
+
+    // Check/request permission
+    _permission = await Geolocator.checkPermission();
+    if (_permission == LocationPermission.denied) {
+      _permission = await Geolocator.requestPermission();
+      if (_permission == LocationPermission.denied) {
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(content: Text('Location permission denied')),
+          );
+        }
+        return;
+      }
+    }
+
+    if (_permission == LocationPermission.deniedForever) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+              content: Text('Location permissions permanently denied')),
+        );
+      }
+      return;
+    }
+
+    // Start listening to position updates
+    _positionStream = Geolocator.getPositionStream(
+      locationSettings: const LocationSettings(
+        accuracy: LocationAccuracy.high,
+        distanceFilter: 10, // update every 10 meters
+      ),
+    ).listen((Position position) {
+      if (mounted) {
+        setState(() {
+          _currentPosition = position;
+        });
+      }
+    });
   }
 
   void _parseAndUpdateData(String jsonString) {
@@ -157,6 +218,13 @@ class _Member1PageState extends State<Member1Page> {
   }
 
   Future<void> _saveToFirestore(double hr, double temp) async {
+    final rideProvider =
+        Provider.of<RideSessionProvider>(context, listen: false);
+
+    // Only save if ride is active
+    if (!rideProvider.isRideActive || rideProvider.currentRideId == null) {
+      return;
+    }
     if (_isSaving) return;
     setState(() => _isSaving = true);
 
@@ -180,8 +248,20 @@ class _Member1PageState extends State<Member1Page> {
         "userId": userId,
         "deviceName": deviceName,
         "createdAt": FieldValue.serverTimestamp(), // ← most important
-        // Location (replace with real values from Geolocator or device)
-        "location": const GeoPoint(7.2000, 79.8730), // Example: Negombo approx
+        "rideId": rideProvider.currentRideId!,
+
+        // Ride metadata (copied once per ride)
+        "rideStartLocation": rideProvider.startLocation, // GeoPoint
+        "rideDestination": rideProvider.destinationName, // String
+        "rideEndLocation":
+            rideProvider.endLocation, // GeoPoint? (null until end)
+
+        // Real-time location of THIS reading
+        "currentLocation": _currentPosition != null
+            ? GeoPoint(_currentPosition!.latitude, _currentPosition!.longitude)
+            : null,
+
+        "createdAt": FieldValue.serverTimestamp(),
       };
 
       await _firestore.collection("health_readings").add(data);
