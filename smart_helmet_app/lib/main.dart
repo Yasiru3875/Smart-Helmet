@@ -10,6 +10,7 @@ import 'services/auth_service.dart';
 import 'services/bluetooth_manager.dart';
 import 'providers/journey_provider.dart';
 import 'providers/sensor_data_provider.dart'; // ← NEW: Live sensor values
+import 'providers/ride_session_provider.dart';
 
 // ────────────────────────────────────────────────
 // Screens
@@ -47,6 +48,8 @@ class SmartHelmetApp extends StatelessWidget {
 
         // NEW: Shared live sensor data (heart rate, temp, stress, alerts)
         ChangeNotifierProvider(create: (_) => SensorDataProvider()),
+
+        ChangeNotifierProvider(create: (_) => RideSessionProvider()),
       ],
       child: MaterialApp(
         debugShowCheckedModeBanner: false,
