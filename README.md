@@ -49,10 +49,16 @@ This project continues from ID 25-26J-294 (2025) under SLIIT's IT specialization
 
 ## Architecture
 
-🛠️ High-level system overview:
+🛠️ High-level conceptual diagram:
 
 <p align="center">
-  <img src="Images/architecture_diagram.png" alt="Architecture Diagram" width="600">
+  <img src="Images/Computational-diagram.png" alt="Conceptual Diagram" width="600">
+</p>
+
+🛠️ High-level sensors diagram:
+
+<p align="center">
+  <img src="Images/Sensor-diagram.png" alt="Sensors Diagram" width="600">
 </p>
 
 ### Core Components
