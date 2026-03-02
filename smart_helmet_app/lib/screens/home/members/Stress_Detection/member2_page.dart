@@ -9,6 +9,7 @@ import 'package:provider/provider.dart';
 
 import 'thinkgear.dart';
 import '../../../../services/bluetooth_manager.dart';
+import 'package:smart_helmet_app/providers/sensor_data_provider.dart';
 // If you have auth:
 // import '../../../../services/auth_service.dart';
 
@@ -336,6 +337,18 @@ class _Member2PageState extends State<Member2Page> {
     double hybridStress = (stressScore + bandStress + medStress) / 3.0;
     double hybridRelaxed = 1.0 - hybridStress;
 
+    // Inside _updateStressAndMood or after setState
+    // ─── IMPORTANT: Update provider here ───
+    final sensorProvider =
+        Provider.of<SensorDataProvider>(context, listen: false);
+    final int stressPercent = (hybridStress * 100).round().clamp(0, 100);
+
+    sensorProvider.updateStressLevel(stressPercent);
+
+    // Debug print – you should see this in console when stress updates
+    print(
+        "→ Stress updated in provider: $stressPercent%  (raw score: $hybridStress)");
+
     setState(() {
       stressScore = hybridStress;
       relaxedScore = hybridRelaxed;
@@ -367,8 +380,19 @@ class _Member2PageState extends State<Member2Page> {
       });
     }
 
-    // Save to Firestore
-    _saveToFirestoreIfNeeded(moodChanged);
+    // Throttled save to Firestore
+    // Save every 10 seconds OR when mood changes to Stressed/Relaxed
+    final now = DateTime.now();
+    final timeToSave = _lastSavedTime == null ||
+        now.difference(_lastSavedTime!) >= _saveInterval;
+
+    final importantChange = moodChanged &&
+        (candidateMood == "Stressed" || candidateMood == "Relaxed");
+
+    if (timeToSave || importantChange) {
+      _saveToFirestore();
+      _lastSavedTime = now;
+    }
 
     if (hybridStress > 0.7) {
       _stressTimer ??= Timer(stressPersistenceThreshold, () {
