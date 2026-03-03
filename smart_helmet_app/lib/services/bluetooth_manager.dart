@@ -18,6 +18,14 @@ class BluetoothManager extends ChangeNotifier {
   // Get connection status for a device
   bool isConnected(String deviceName) => _connectionStatus[deviceName] ?? false;
 
+  // Get all connected device names
+  List<String> getConnectedDevices() {
+    return _connectionStatus.entries
+        .where((entry) => entry.value == true)
+        .map((entry) => entry.key)
+        .toList();
+  }
+
   // Get data stream for a device
   Stream<List<int>>? getDataStream(String deviceName) {
     return _dataControllers[deviceName]?.stream;
