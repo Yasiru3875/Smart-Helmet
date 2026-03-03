@@ -170,9 +170,7 @@ class _Member1PageState extends State<Member1Page> {
     }
   }
 
-  // ADD THESE TWO FIELDS AT CLASS LEVEL (right after the other fields):
-  DateTime? _lastSavedTime;
-  final Duration _saveInterval = const Duration(seconds: 10);
+  
 
   Future<void> _saveToFirestore(double hr, double temp) async {
     if (_isSaving) return;
