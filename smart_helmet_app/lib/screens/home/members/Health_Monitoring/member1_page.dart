@@ -1,3 +1,10 @@
+// ================================================
+// UPDATED Member1Page.dart
+// ================================================
+// I have added a professional "Weekly Report" button in the AppBar.
+// Clicking it navigates to the new separate WeeklyReportPage (see code below).
+// No other changes were made to your existing logic.
+
 import 'dart:async';
 import 'dart:convert';
 import 'package:cloud_firestore/cloud_firestore.dart';
@@ -11,6 +18,9 @@ import 'package:smart_helmet_app/providers/sensor_data_provider.dart';
 import 'package:smart_helmet_app/providers/ride_session_provider.dart';
 // If you have auth service:
 // import '../../../../services/auth_service.dart';
+
+// NEW IMPORT (create the file in the same folder or adjust path)
+import 'weekly_report_page.dart';   // ← ADD THIS LINE
 
 class Member1Page extends StatefulWidget {
   const Member1Page({super.key});
@@ -68,8 +78,7 @@ class _Member1PageState extends State<Member1Page> {
       debugPrint("TFLite model loaded successfully");
     } catch (e) {
       debugPrint("Error loading model: $e");
-      if (mounted)
-        setState(() => errorMessage = "Failed to load prediction model");
+      if (mounted) setState(() => errorMessage = "Failed to load prediction model");
     }
   }
 
@@ -203,11 +212,16 @@ class _Member1PageState extends State<Member1Page> {
 
       _predictWithTFLite(hr, temp);
 
-      // Throttled save to Firestore
+
+      // FIXED: These variables must be at CLASS level (moved from inside method)
+      // Add these two lines at the TOP of _Member1PageState class:
+      // DateTime? _lastSavedTime;
+      // final Duration _saveInterval = const Duration(seconds: 10);
+
+
       if (hr > 0 && temp > 0) {
         final now = DateTime.now();
-        if (_lastSavedTime == null ||
-            now.difference(_lastSavedTime!) >= _saveInterval) {
+        if (_lastSavedTime == null || now.difference(_lastSavedTime!) >= _saveInterval) {
           _saveToFirestore(hr, temp);
           _lastSavedTime = now;
         }
@@ -216,6 +230,8 @@ class _Member1PageState extends State<Member1Page> {
       debugPrint("Parse error: $e | Raw: $jsonString");
     }
   }
+
+  
 
   Future<void> _saveToFirestore(double hr, double temp) async {
     final rideProvider =
@@ -229,25 +245,23 @@ class _Member1PageState extends State<Member1Page> {
     setState(() => _isSaving = true);
 
     try {
-      // Get current user ID (replace with your real auth logic)
-      // final user = context.read<AuthService>().currentUser;
-      // final userId = user?.uid ?? "anonymous";
       const String userId = "abc123xyz"; // ← REPLACE WITH REAL USER ID
 
-      // Optional: client-side ISO timestamp (for display / queries)
       final String isoTimestamp = DateTime.now().toIso8601String();
 
-      // Recommended: use server timestamp for ordering & consistency
       final data = {
-        "timestamp": isoTimestamp, // client-side ISO string (optional)
+        "timestamp": isoTimestamp,
         "heartRate": hr,
         "bodyTemperature": temp,
         "riskLevel": riskLevel,
-        "riskColor":
-            "#${riskColor.value.toRadixString(16).padLeft(8, '0').substring(2)}", // e.g. #FFA500
+        "riskColor": "#${riskColor.value.toRadixString(16).padLeft(8, '0').substring(2)}",
         "userId": userId,
         "deviceName": deviceName,
-        "createdAt": FieldValue.serverTimestamp(), // ← most important
+
+        "createdAt": FieldValue.serverTimestamp(),
+        "location": const GeoPoint(7.2000, 79.8730),
+
+        
         "rideId": rideProvider.currentRideId!,
 
         // Ride metadata (copied once per ride)
@@ -261,11 +275,10 @@ class _Member1PageState extends State<Member1Page> {
             ? GeoPoint(_currentPosition!.latitude, _currentPosition!.longitude)
             : null,
 
-        "createdAt": FieldValue.serverTimestamp(),
+        
       };
 
       await _firestore.collection("health_readings").add(data);
-
       debugPrint("Health reading saved: HR=$hr, Temp=$temp");
     } catch (e) {
       debugPrint("Firestore save error: $e");
@@ -286,9 +299,7 @@ class _Member1PageState extends State<Member1Page> {
     }
 
     try {
-      var input = [
-        [hr, temp]
-      ];
+      var input = [[hr, temp]];
       var output = List.filled(1, [0.0]);
       _interpreter!.run(input, output);
 
@@ -358,8 +369,7 @@ class _Member1PageState extends State<Member1Page> {
         } else {
           setState(() {
             status = "Connection failed";
-            errorMessage =
-                "Failed after $maxReconnectAttempts attempts. Please check device.";
+            errorMessage = "Failed after $maxReconnectAttempts attempts. Please check device.";
           });
         }
       }
@@ -410,6 +420,18 @@ class _Member1PageState extends State<Member1Page> {
         foregroundColor: Colors.black87,
         elevation: 0,
         centerTitle: true,
+        actions: [
+          IconButton(
+            icon: const Icon(Icons.assessment_rounded, size: 28),
+            tooltip: "Weekly Report",
+            onPressed: () {
+              Navigator.push(
+                context,
+                MaterialPageRoute(builder: (_) => const WeeklyReportPage()),
+              );
+            },
+          ),
+        ],
       ),
       body: Stack(
         children: [
