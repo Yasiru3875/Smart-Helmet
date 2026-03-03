@@ -97,7 +97,49 @@ class _Member2PageState extends State<Member2Page> {
       const Duration(milliseconds: waveformUpdateIntervalMs),
       (_) => _flushWaveformBuffer(),
     );
-    _startLocationTracking(); // ← ADD THIS
+    _startLocationTracking();
+    _autoConnectSensor(); // ← NEW: Auto-connect on page load
+  }
+
+  Future<void> _autoConnectSensor() async {
+    final btManager = context.read<BluetoothManager>();
+
+    // Check if already connected
+    if (btManager.isConnected(deviceName)) {
+      setState(() {
+        status = "Connected (already)";
+      });
+      _subscribeToData();
+      return;
+    }
+
+    setState(() {
+      status = "Auto-connecting $deviceName...";
+    });
+
+    try {
+      final result = await btManager.connectToDevice(deviceName);
+      if (!mounted) return;
+
+      setState(() {
+        status = result;
+      });
+
+      if (btManager.isConnected(deviceName)) {
+        _subscribeToData();
+      } else {
+        setState(() {
+          errorMessage =
+              "Auto-connect failed. Tap 'Connect' or check Bluetooth settings.";
+        });
+      }
+    } catch (e) {
+      if (!mounted) return;
+      setState(() {
+        errorMessage = "Connection error: $e";
+        status = "Connection failed";
+      });
+    }
   }
 
   Future<void> _init() async {
@@ -123,7 +165,7 @@ class _Member2PageState extends State<Member2Page> {
           errorMessage = "Weak signal – adjust headset for better contact";
           _resetToNoSignal();
         } else {
-          errorMessage = "";
+          errorMessage = null;
         }
       });
     };
@@ -595,6 +637,7 @@ class _Member2PageState extends State<Member2Page> {
     _dataSubscription?.cancel();
     _stressTimer?.cancel();
     _waveformUpdateTimer?.cancel();
+    _positionStream?.cancel();
     interpreter?.close();
     super.dispose();
   }
@@ -807,6 +850,20 @@ class _Member2PageState extends State<Member2Page> {
         ),
         duration: const Duration(milliseconds: 150),
       ),
+    );
+  }
+
+  Widget _buildConnectButton() {
+    final btManager = context.watch<BluetoothManager>();
+    final isConnected = btManager.isConnected(deviceName);
+
+    return ElevatedButton.icon(
+      icon: Icon(isConnected ? Icons.bluetooth_connected : Icons.bluetooth),
+      label: Text(isConnected ? 'Connected' : 'Connect EEG'),
+      style: ElevatedButton.styleFrom(
+        backgroundColor: isConnected ? Colors.green : Colors.blue,
+      ),
+      onPressed: isConnected ? null : _autoConnectSensor,
     );
   }
 
