@@ -51,7 +51,7 @@ class JourneyProvider with ChangeNotifier {
   void addSensorReading({
     required int heartRate,
     required double temperature,
-    required int stressLevel,
+    required int stressLevel, required double accelX, required double accelY, required double accelZ, required double gyroY, required double gyroX, required double gyroZ,
   }) {
     if (_currentJourney == null) return;
     

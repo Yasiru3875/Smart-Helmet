@@ -65,12 +65,25 @@ class _Member1PageState extends State<Member1Page> {
   bool _isSaving = false;
 
   @override
-  void initState() {
-    super.initState();
-    _loadModel();
-    _init();
-    _startLocationTracking(); // ← ADD THIS
-  }
+void initState() {
+  super.initState();
+  _loadModel();
+  _startLocationTracking();
+
+  // Important: delay connection until first frame is rendered
+  WidgetsBinding.instance.addPostFrameCallback((_) {
+    _autoConnect();
+
+    // Optional safety retry if still not connected after ~8 seconds
+    Future.delayed(const Duration(seconds: 8), () {
+      if (mounted &&
+          !context.read<BluetoothManager>().isConnected(deviceName) &&
+          heartRate == 0.0) {
+        _autoConnect(isRetry: true);
+      }
+    });
+  });
+}
 
   Future<void> _loadModel() async {
     try {
@@ -81,6 +94,78 @@ class _Member1PageState extends State<Member1Page> {
       if (mounted) setState(() => errorMessage = "Failed to load prediction model");
     }
   }
+
+  // ────────────────────────────────────────────────
+// Auto-connect + retry logic
+// ────────────────────────────────────────────────
+
+Future<void> _autoConnect({bool isRetry = false}) async {
+  final btManager = context.read<BluetoothManager>();
+
+  if (btManager.isConnected(deviceName)) {
+    if (mounted) {
+      setState(() {
+        status = "Connected (already detected)";
+        errorMessage = "";
+      });
+    }
+    _subscribeToData();
+    return;
+  }
+
+  if (!mounted) return;
+
+  setState(() {
+    status = isRetry ? "Reconnecting..." : "Auto-connecting $deviceName...";
+    errorMessage = " ";
+  });
+
+  try {
+    final result = await btManager.connectToDevice(deviceName);
+
+    if (!mounted) return;
+
+    setState(() {
+      status = result;
+    });
+
+    if (btManager.isConnected(deviceName)) {
+      reconnectAttempts = 0;
+      _subscribeToData();
+      setState(() {
+        status = "Connected • SmartWatch";
+        errorMessage = "";
+      });
+    } else {
+      _handleConnectionFailure(result);
+    }
+  } catch (e) {
+    _handleConnectionFailure("Error: $e");
+  }
+}
+
+void _handleConnectionFailure(String reason) {
+  if (reconnectAttempts < maxReconnectAttempts) {
+    reconnectAttempts++;
+    setState(() {
+      status = "Retry ${reconnectAttempts}/${maxReconnectAttempts}...";
+      errorMessage = "$reason\nTrying again in a moment...";
+    });
+    Future.delayed(const Duration(seconds: 4), () {
+      if (mounted) _autoConnect(isRetry: true);
+    });
+  } else {
+    setState(() {
+      status = "Connection failed";
+      errorMessage =
+          "Could not connect after $maxReconnectAttempts attempts.\n"
+          "Make sure:\n"
+          "• Device is powered on\n"
+          "• Bluetooth is enabled\n"
+          "• Device is paired";
+    });
+  }
+}
 
   Future<void> _init() async {
     final btManager = context.read<BluetoothManager>();
@@ -110,12 +195,27 @@ class _Member1PageState extends State<Member1Page> {
           buffer = lines.last;
         }
       },
-      onError: (e) => setState(() => errorMessage = "Stream error: $e"),
-      onDone: () => setState(() {
-        status = "Disconnected";
-        riskLevel = "Unknown";
-        riskColor = Colors.grey;
-      }),
+      onError: (e) {
+      if (mounted) {
+        setState(() => errorMessage = "Stream error: $e");
+      }
+    },
+    onDone: () {
+      if (mounted) {
+        setState(() {
+          status = "Disconnected";
+          riskLevel = "Unknown";
+          riskColor = Colors.grey;
+        });
+
+        // Auto-reconnect attempt
+        if (reconnectAttempts < maxReconnectAttempts) {
+          Future.delayed(const Duration(seconds: 3), () {
+            if (mounted) _autoConnect(isRetry: true);
+          });
+        }
+      }
+    },
     );
   }
 
@@ -446,7 +546,7 @@ class _Member1PageState extends State<Member1Page> {
                 const SizedBox(height: 16),
 
                 // Connection Controls
-                _buildConnectionControls(isConnected),
+                _buildConnectionHeader(isConnected),
 
                 const SizedBox(height: 20),
 
@@ -569,91 +669,85 @@ class _Member1PageState extends State<Member1Page> {
     );
   }
 
-  Widget _buildConnectionControls(bool isConnected) {
-    return Card(
-      elevation: 2,
-      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
-      child: Padding(
-        padding: const EdgeInsets.all(16),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.stretch,
-          children: [
-            const Text(
-              "Device Connection",
-              style: TextStyle(
-                  fontSize: 14,
-                  fontWeight: FontWeight.w600,
-                  color: Colors.black87),
-            ),
-            const SizedBox(height: 12),
-            Row(
-              children: [
-                Expanded(
-                  child: OutlinedButton.icon(
-                    onPressed: isConnected ? null : connectToDevice,
-                    icon: const Icon(Icons.bluetooth, size: 18),
-                    label: const Text("Connect"),
-                    style: OutlinedButton.styleFrom(
-                      padding: const EdgeInsets.symmetric(vertical: 12),
-                      side: BorderSide(
-                          color: isConnected
-                              ? Colors.grey.shade300
-                              : Colors.indigo),
-                      foregroundColor:
-                          isConnected ? Colors.grey : Colors.indigo,
-                      shape: RoundedRectangleBorder(
-                          borderRadius: BorderRadius.circular(8)),
-                    ),
+  // Replace _buildConnectionControls() with this
+Widget _buildConnectionHeader(bool isConnected) {
+  final btManager = context.watch<BluetoothManager>();
+  final isConnected = btManager.isConnected(deviceName);
+
+  return Card(
+    elevation: 2,
+    margin: const EdgeInsets.only(bottom: 16),
+    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+    child: Padding(
+      padding: const EdgeInsets.all(16),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              Icon(
+                isConnected
+                    ? Icons.bluetooth_connected
+                    : Icons.bluetooth_disabled,
+                color: isConnected ? Colors.green : Colors.orange,
+              ),
+              const SizedBox(width: 12),
+              Expanded(
+                child: Text(
+                  status,
+                  style: TextStyle(
+                    fontSize: 16,
+                    fontWeight: FontWeight.w600,
+                    color: isConnected ? Colors.green.shade800 : Colors.orange.shade800,
                   ),
-                ),
-                const SizedBox(width: 12),
-                Expanded(
-                  child: OutlinedButton.icon(
-                    onPressed: isConnected ? disconnectDevice : null,
-                    icon: const Icon(Icons.bluetooth_disabled, size: 18),
-                    label: const Text("Disconnect"),
-                    style: OutlinedButton.styleFrom(
-                      padding: const EdgeInsets.symmetric(vertical: 12),
-                      side: BorderSide(
-                          color:
-                              isConnected ? Colors.red : Colors.grey.shade300),
-                      foregroundColor: isConnected ? Colors.red : Colors.grey,
-                      shape: RoundedRectangleBorder(
-                          borderRadius: BorderRadius.circular(8)),
-                    ),
-                  ),
-                ),
-              ],
-            ),
-            if (errorMessage.isNotEmpty) ...[
-              const SizedBox(height: 12),
-              Container(
-                padding: const EdgeInsets.all(12),
-                decoration: BoxDecoration(
-                  color: Colors.red.shade50,
-                  borderRadius: BorderRadius.circular(8),
-                ),
-                child: Row(
-                  children: [
-                    Icon(Icons.error_outline,
-                        size: 16, color: Colors.red.shade700),
-                    const SizedBox(width: 8),
-                    Expanded(
-                      child: Text(
-                        errorMessage,
-                        style:
-                            TextStyle(color: Colors.red.shade700, fontSize: 12),
-                      ),
-                    ),
-                  ],
                 ),
               ),
             ],
+          ),
+          if (errorMessage.isNotEmpty) ...[
+            const SizedBox(height: 12),
+            Container(
+              padding: const EdgeInsets.all(12),
+              decoration: BoxDecoration(
+                color: Colors.red.shade50,
+                borderRadius: BorderRadius.circular(8),
+                border: Border.all(color: Colors.red.shade200),
+              ),
+              child: Row(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Icon(Icons.error_outline, size: 16, color: Colors.red.shade700),
+                  const SizedBox(width: 8),
+                  Expanded(
+                    child: Text(
+                      errorMessage,
+                      style: TextStyle(color: Colors.red.shade800, fontSize: 13),
+                    ),
+                  ),
+                ],
+              ),
+            ),
           ],
-        ),
+          if (!isConnected) ...[
+            const SizedBox(height: 16),
+            SizedBox(
+              width: double.infinity,
+              child: OutlinedButton.icon(
+                icon: const Icon(Icons.refresh, size: 18),
+                label: const Text("Retry Connection"),
+                onPressed: () => _autoConnect(),
+                style: OutlinedButton.styleFrom(
+                  foregroundColor: Colors.blue,
+                  side: const BorderSide(color: Colors.blue),
+                ),
+              ),
+            ),
+          ],
+        ],
       ),
-    );
-  }
+    ),
+  );
+}
 
   Widget _buildVitalCard({
     required String title,
