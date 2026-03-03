@@ -8,7 +8,8 @@ import 'package:google_maps_flutter/google_maps_flutter.dart';
 import 'package:http/http.dart' as http;
 import 'dart:convert';
 import 'package:provider/provider.dart';
-import 'package:smart_helmet_app/providers/sensor_data_provider.dart'; // ← NEW
+import 'package:smart_helmet_app/providers/sensor_data_provider.dart';
+import 'package:smart_helmet_app/providers/ride_session_provider.dart'; // ← NEW
 import 'package:smart_helmet_app/screens/home/members/Danger_Zone/member4_page.dart';
 
 const String apiKey = 'AIzaSyBbZVI_sO637CROKwc3hjMOB4ZmsL12ikw';
@@ -250,25 +251,25 @@ class _HomeDashboardState extends State<HomeDashboard> {
     _displayRoutes();
   }
 
+  // In _startJourney()
   void _startJourney() {
-    if (!_isRoutePlanned || _routes.isEmpty) {
+    if (!_isRoutePlanned || _routes.isEmpty || _currentPosition == null) {
       _showSnackBar('Please plan a route first');
       return;
     }
 
-    if (_currentPosition == null) {
-      _showSnackBar('Current location not available');
-      return;
-    }
+    final rideProvider =
+        Provider.of<RideSessionProvider>(context, listen: false);
 
+    rideProvider.startNewRide(
+      currentPosition: _currentPosition!,
+      destination: _destinationController.text.trim(),
+    );
+
+    // Proceed with journey start (switch tab, etc.)
     final selectedRoute = _routes[_selectedRouteIndex];
     final encodedPolyline = selectedRoute['overview_polyline']['points'];
     final List<LatLng> routePoints = _decodePolyline(encodedPolyline);
-
-    if (routePoints.isEmpty) {
-      _showSnackBar('Failed to decode route');
-      return;
-    }
 
     widget.onStartJourney(
       start: LatLng(_currentPosition!.latitude, _currentPosition!.longitude),
@@ -278,12 +279,20 @@ class _HomeDashboardState extends State<HomeDashboard> {
     );
 
     ScaffoldMessenger.of(context).showSnackBar(
-      const SnackBar(
-          content: Text('Journey started — switched to Danger Zone')),
+      const SnackBar(content: Text('Ride started – logging sensor data')),
     );
   }
 
+// In _endJourney()
   void _endJourney() {
+    final rideProvider =
+        Provider.of<RideSessionProvider>(context, listen: false);
+
+    rideProvider.endCurrentRide(
+      finalPosition: _currentPosition,
+      totalDistance: 0.0, // ← replace with real tracked distance if you have it
+    );
+
     widget.onEndJourney?.call();
 
     setState(() {
@@ -300,6 +309,10 @@ class _HomeDashboardState extends State<HomeDashboard> {
     });
 
     _centerOnCurrentLocation();
+
+    ScaffoldMessenger.of(context).showSnackBar(
+      const SnackBar(content: Text('Ride ended – sensor logging stopped')),
+    );
   }
 
   List<LatLng> _decodePolyline(String encoded) {

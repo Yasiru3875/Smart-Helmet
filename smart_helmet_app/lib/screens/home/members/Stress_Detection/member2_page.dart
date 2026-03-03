@@ -6,10 +6,13 @@ import 'package:flutter/material.dart';
 import 'package:tflite_flutter/tflite_flutter.dart';
 import 'package:fl_chart/fl_chart.dart';
 import 'package:provider/provider.dart';
+import 'package:geolocator/geolocator.dart';
 
 import 'thinkgear.dart';
 import '../../../../services/bluetooth_manager.dart';
 import 'package:smart_helmet_app/providers/sensor_data_provider.dart';
+
+import 'package:smart_helmet_app/providers/ride_session_provider.dart';
 // If you have auth:
 // import '../../../../services/auth_service.dart';
 
@@ -94,6 +97,49 @@ class _Member2PageState extends State<Member2Page> {
       const Duration(milliseconds: waveformUpdateIntervalMs),
       (_) => _flushWaveformBuffer(),
     );
+    _startLocationTracking();
+    _autoConnectSensor(); // ← NEW: Auto-connect on page load
+  }
+
+  Future<void> _autoConnectSensor() async {
+    final btManager = context.read<BluetoothManager>();
+
+    // Check if already connected
+    if (btManager.isConnected(deviceName)) {
+      setState(() {
+        status = "Connected (already)";
+      });
+      _subscribeToData();
+      return;
+    }
+
+    setState(() {
+      status = "Auto-connecting $deviceName...";
+    });
+
+    try {
+      final result = await btManager.connectToDevice(deviceName);
+      if (!mounted) return;
+
+      setState(() {
+        status = result;
+      });
+
+      if (btManager.isConnected(deviceName)) {
+        _subscribeToData();
+      } else {
+        setState(() {
+          errorMessage =
+              "Auto-connect failed. Tap 'Connect' or check Bluetooth settings.";
+        });
+      }
+    } catch (e) {
+      if (!mounted) return;
+      setState(() {
+        errorMessage = "Connection error: $e";
+        status = "Connection failed";
+      });
+    }
   }
 
   Future<void> _init() async {
@@ -119,7 +165,7 @@ class _Member2PageState extends State<Member2Page> {
           errorMessage = "Weak signal – adjust headset for better contact";
           _resetToNoSignal();
         } else {
-          errorMessage = "";
+          errorMessage = null;
         }
       });
     };
@@ -323,6 +369,64 @@ class _Member2PageState extends State<Member2Page> {
     });
   }
 
+  // Add near the top of the class
+  Position? _currentPosition;
+  StreamSubscription<Position>? _positionStream;
+  bool _locationServiceEnabled = false;
+  LocationPermission _permission = LocationPermission.denied;
+
+// Add this method (call it in initState)
+  Future<void> _startLocationTracking() async {
+    // Check if location services are enabled
+    _locationServiceEnabled = await Geolocator.isLocationServiceEnabled();
+    if (!_locationServiceEnabled) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('Location services are disabled')),
+        );
+      }
+      return;
+    }
+
+    // Check/request permission
+    _permission = await Geolocator.checkPermission();
+    if (_permission == LocationPermission.denied) {
+      _permission = await Geolocator.requestPermission();
+      if (_permission == LocationPermission.denied) {
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(content: Text('Location permission denied')),
+          );
+        }
+        return;
+      }
+    }
+
+    if (_permission == LocationPermission.deniedForever) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+              content: Text('Location permissions permanently denied')),
+        );
+      }
+      return;
+    }
+
+    // Start listening to position updates
+    _positionStream = Geolocator.getPositionStream(
+      locationSettings: const LocationSettings(
+        accuracy: LocationAccuracy.high,
+        distanceFilter: 10, // update every 10 meters
+      ),
+    ).listen((Position position) {
+      if (mounted) {
+        setState(() {
+          _currentPosition = position;
+        });
+      }
+    });
+  }
+
   void _updateStressAndMood() {
     if (poorSignalLevel > 50 || powerBands.every((e) => e == 0)) return;
 
@@ -422,12 +526,19 @@ class _Member2PageState extends State<Member2Page> {
   }
 
   Future<void> _saveToFirestore() async {
+    final rideProvider =
+        Provider.of<RideSessionProvider>(context, listen: false);
+
+    // Only save if ride is active
+    if (!rideProvider.isRideActive || rideProvider.currentRideId == null) {
+      return;
+    }
+
     if (_isSaving) return;
     setState(() => _isSaving = true);
 
     try {
-      // Replace with real user ID from auth
-      const String userId = "abc123xyz"; // ← CHANGE THIS
+      const String userId = "abc123xyz"; // ← REPLACE WITH REAL USER ID
 
       final String isoTimestamp = DateTime.now().toIso8601String();
 
@@ -444,14 +555,29 @@ class _Member2PageState extends State<Member2Page> {
         "meditation": meditation,
         "userId": userId,
         "deviceName": deviceName,
+        "rideId": rideProvider.currentRideId!,
+
+        // Ride metadata (copied once per ride)
+        "rideStartLocation": rideProvider.startLocation, // GeoPoint
+        "rideDestination": rideProvider.destinationName, // String
+        "rideEndLocation":
+            rideProvider.endLocation, // GeoPoint? (null until end)
+
+        // Real-time location of THIS reading
+        "currentLocation": _currentPosition != null
+            ? GeoPoint(_currentPosition!.latitude, _currentPosition!.longitude)
+            : null,
+
         "createdAt": FieldValue.serverTimestamp(),
-        // Location - replace with real geolocation
-        "location": const GeoPoint(7.2000, 79.8730), // Negombo example
       };
 
       await _firestore.collection("stress_mood_readings").add(data);
 
-      debugPrint("Stress/Mood reading saved: $currentMood ($stressScore)");
+      debugPrint(
+        "Stress reading saved | Ride: ${rideProvider.currentRideId} | "
+        "Location: ${_currentPosition?.latitude.toStringAsFixed(6) ?? 'N/A'}, "
+        "${_currentPosition?.longitude.toStringAsFixed(6) ?? 'N/A'}",
+      );
     } catch (e) {
       debugPrint("Firestore save error: $e");
       if (mounted) {
@@ -511,6 +637,7 @@ class _Member2PageState extends State<Member2Page> {
     _dataSubscription?.cancel();
     _stressTimer?.cancel();
     _waveformUpdateTimer?.cancel();
+    _positionStream?.cancel();
     interpreter?.close();
     super.dispose();
   }
@@ -723,6 +850,20 @@ class _Member2PageState extends State<Member2Page> {
         ),
         duration: const Duration(milliseconds: 150),
       ),
+    );
+  }
+
+  Widget _buildConnectButton() {
+    final btManager = context.watch<BluetoothManager>();
+    final isConnected = btManager.isConnected(deviceName);
+
+    return ElevatedButton.icon(
+      icon: Icon(isConnected ? Icons.bluetooth_connected : Icons.bluetooth),
+      label: Text(isConnected ? 'Connected' : 'Connect EEG'),
+      style: ElevatedButton.styleFrom(
+        backgroundColor: isConnected ? Colors.green : Colors.blue,
+      ),
+      onPressed: isConnected ? null : _autoConnectSensor,
     );
   }
 
