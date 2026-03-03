@@ -2,19 +2,16 @@ import 'package:flutter/material.dart';
 import 'dart:async';
 import 'dart:convert';
 import 'dart:math';
-import 'dart:typed_data';
 import 'package:cloud_firestore/cloud_firestore.dart';
-import 'package:flutter_bluetooth_serial/flutter_bluetooth_serial.dart';
-import 'package:permission_handler/permission_handler.dart';
 import 'package:provider/provider.dart';
 import 'package:intl/intl.dart';
 import 'package:smart_helmet_app/models/journey_model.dart';
 import 'package:smart_helmet_app/providers/journey_provider.dart';
+import 'package:smart_helmet_app/providers/ride_session_provider.dart';
 import 'package:smart_helmet_app/services/journey_service.dart';
+import 'package:smart_helmet_app/services/bluetooth_manager.dart';
 import 'JourneyReportScreen.dart';
 import 'dummy_journey_data.dart';
-
-import 'package:smart_helmet_app/providers/sensor_data_provider.dart';
 
 class Member3Page extends StatefulWidget {
   final JourneyData? completedJourney; // Optional: passed when ride just ended
@@ -62,20 +59,21 @@ class _Member3PageState extends State<Member3Page>
   final double sharpTurnThreshold = 100.0;
   final double riskyTurnThreshold = 150.0;
 
-  // Bluetooth Connection
-  BluetoothConnection? _connection;
-  bool isConnected = false;
-  bool isConnecting = false;
-  String connectionStatus = "Disconnected";
-  String _dataBuffer = "";
+  // Bluetooth - Uses shared BluetoothManager (connection handled in Home Page)
   static const String targetDeviceName = "SmartHelmet_ESP32";
+  StreamSubscription? _dataSubscription;
+  String _dataBuffer = "";
+  bool _hasAddedBluetoothListener = false;
 
 // Firestore
   final FirebaseFirestore _firestore = FirebaseFirestore.instance;
   bool _isSaving = false;
-  DateTime? _lastSavedTime;
-  final Duration _saveInterval =
-      const Duration(seconds: 1); // ← change this value to control frequency
+  
+  // Risky Events Tracking (ONLY risky events saved to Firebase)
+  // NOTE: rideId is now obtained from RideSessionProvider (shared across all members)
+  int _riskyEventsSavedCount = 0;
+  List<Map<String, dynamic>> _riskyEventsThisRide = [];  // In-memory list for visualization
+  
   // Current GPS state
   double currentSpeed = 0.0;
   double currentLat = 0.0;
@@ -90,7 +88,6 @@ class _Member3PageState extends State<Member3Page>
   void initState() {
     super.initState();
     _tabController = TabController(length: 2, vsync: this);
-    _requestPermissions();
     _loadJourneyHistory();
 
     // Check if a completed journey was passed (ride just ended)
@@ -98,13 +95,140 @@ class _Member3PageState extends State<Member3Page>
       _showRideSummary = true;
       _completedRide = widget.completedJourney;
     }
+
+    // Add a listener to RideSessionProvider to detect when the ride ends
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (mounted) {
+         final rideProvider = Provider.of<RideSessionProvider>(context, listen: false);
+         rideProvider.addListener(_onRideStateChanged);
+      }
+    });
+  }
+  
+  @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    // Only add listener once
+    if (!_hasAddedBluetoothListener) {
+      _hasAddedBluetoothListener = true;
+      // Subscribe to BluetoothManager changes to re-subscribe when connection state changes
+      final btManager = context.read<BluetoothManager>();
+      btManager.addListener(_onBluetoothStateChanged);
+      // Initial subscription attempt
+      _subscribeToESP32Data();
+    }
+  }
+  
+  void _onBluetoothStateChanged() {
+    // Re-subscribe when connection state changes
+    if (mounted) {
+      _subscribeToESP32Data();
+    }
   }
 
   @override
   void dispose() {
     _tabController.dispose();
-    _disconnect();
+    _dataSubscription?.cancel();
+    // Remove listener from BluetoothManager
+    try {
+      final btManager = Provider.of<BluetoothManager>(context, listen: false);
+      btManager.removeListener(_onBluetoothStateChanged);
+    } catch (_) {}
+    
+    // Remove listener from RideSessionProvider
+    try {
+      final rideProvider = Provider.of<RideSessionProvider>(context, listen: false);
+      rideProvider.removeListener(_onRideStateChanged);
+    } catch (_) {}
+    
     super.dispose();
+  }
+
+  // Detect when a ride ends
+  void _onRideStateChanged() async {
+    if (!mounted) return;
+    final rideProvider = Provider.of<RideSessionProvider>(context, listen: false);
+    final journeyProvider = Provider.of<JourneyProvider>(context, listen: false);
+
+    // If the ride was active but is now inactive, it means it just ended
+    // We also check if journeyProvider is active to only process once
+    if (!rideProvider.isRideActive && journeyProvider.isJourneyActive) {
+      debugPrint("RideSession ended. Finalizing JourneyData...");
+      final completedJourney = journeyProvider.endJourney();
+      
+      if (completedJourney != null) {
+         try {
+           // Save to Firebase
+           await _journeyService.saveJourney(completedJourney);
+           debugPrint("Saved complete Journey Data for report.");
+           
+           // Show the summary screen immediately
+           setState(() {
+              _completedRide = completedJourney;
+              _showRideSummary = true;
+           });
+           
+           // Refresh history
+           _loadJourneyHistory();
+         } catch(e) {
+           debugPrint("Error saving final Journey Data: $e");
+         }
+      }
+    }
+  }
+
+  // Subscribe to ESP32 data stream from shared BluetoothManager
+  void _subscribeToESP32Data() {
+    final btManager = context.read<BluetoothManager>();
+    
+    // Find a connected device - try specific name first, then any ESP32
+    String? deviceToUse;
+    
+    if (btManager.isConnected(targetDeviceName)) {
+      deviceToUse = targetDeviceName;
+    } else {
+      // Search for any connected device that looks like an ESP32
+      final connectedDevices = btManager.getConnectedDevices();
+      debugPrint("Connected devices: $connectedDevices");
+      
+      for (final device in connectedDevices) {
+        if (device.toLowerCase().contains('esp') || 
+            device.toLowerCase().contains('helmet') ||
+            device.toLowerCase().contains('imu')) {
+          deviceToUse = device;
+          break;
+        }
+      }
+      
+      // If still not found, try the first connected device
+      if (deviceToUse == null && connectedDevices.isNotEmpty) {
+        deviceToUse = connectedDevices.first;
+        debugPrint("Using first connected device: $deviceToUse");
+      }
+    }
+    
+    if (deviceToUse == null) {
+      debugPrint("No ESP32/IMU device connected - waiting for connection");
+      return;
+    }
+    
+    final dataStream = btManager.getDataStream(deviceToUse);
+    if (dataStream == null) {
+      debugPrint("No data stream available for $deviceToUse");
+      return;
+    }
+    
+    // Cancel existing subscription before creating new one
+    _dataSubscription?.cancel();
+    _dataSubscription = dataStream.listen(
+      (data) {
+        debugPrint("Received ${data.length} bytes from $deviceToUse");
+        _handleIncomingData(data);
+      },
+      onError: (e) => debugPrint("$deviceToUse Stream Error: $e"),
+    );
+    debugPrint("✓ Subscribed to $deviceToUse data stream");
   }
 
   // Load journey history from Firebase
@@ -126,248 +250,9 @@ class _Member3PageState extends State<Member3Page>
     }
   }
 
-  // Request Bluetooth permissions
-  Future<void> _requestPermissions() async {
-    await [
-      Permission.bluetooth,
-      Permission.bluetoothConnect,
-      Permission.bluetoothScan,
-      Permission.location,
-    ].request();
-  }
-
-  // Scan and connect to device
-  // ⚠️ UPDATED: Scan and connect with better error handling
-  Future<void> _scanAndConnect() async {
-    if (!mounted) return;
-
-    setState(() {
-      isConnecting = true;
-      connectionStatus = "Checking Bluetooth...";
-    });
-
-    try {
-      // Check if Bluetooth is enabled
-      bool? isEnabled = await FlutterBluetoothSerial.instance.isEnabled;
-
-      if (isEnabled == null || !isEnabled) {
-        if (!mounted) return;
-        setState(() {
-          connectionStatus = "Bluetooth is OFF. Please enable it.";
-          isConnecting = false;
-        });
-
-        // Show dialog to enable Bluetooth
-        bool? turnOn = await showDialog<bool>(
-          context: context,
-          builder: (context) => AlertDialog(
-            title: const Text('Bluetooth Disabled'),
-            content: const Text(
-                'Bluetooth is turned off. Would you like to enable it?'),
-            actions: [
-              TextButton(
-                onPressed: () => Navigator.pop(context, false),
-                child: const Text('Cancel'),
-              ),
-              ElevatedButton(
-                onPressed: () => Navigator.pop(context, true),
-                child: const Text('Enable'),
-              ),
-            ],
-          ),
-        );
-
-        if (turnOn == true) {
-          await FlutterBluetoothSerial.instance.requestEnable();
-          await Future.delayed(const Duration(seconds: 2));
-        } else {
-          return;
-        }
-      }
-
-      setState(() => connectionStatus = "Scanning for devices...");
-
-      // Get bonded devices
-      List<BluetoothDevice> bondedDevices = [];
-      try {
-        bondedDevices =
-            await FlutterBluetoothSerial.instance.getBondedDevices();
-        print('Found ${bondedDevices.length} paired devices'); // Debug
-      } catch (e) {
-        print('Error getting bonded devices: $e');
-        if (!mounted) return;
-        setState(() {
-          connectionStatus = "Error accessing Bluetooth: $e";
-          isConnecting = false;
-        });
-        return;
-      }
-
-      // Find target device
-      BluetoothDevice? targetDevice;
-      for (BluetoothDevice device in bondedDevices) {
-        print('Found device: ${device.name} - ${device.address}'); // Debug
-        if (device.name == targetDeviceName) {
-          targetDevice = device;
-          break;
-        }
-      }
-
-      // If not found, show device selection
-      if (targetDevice == null) {
-        if (!mounted) return;
-        targetDevice = await _showDeviceSelectionDialog(bondedDevices);
-
-        if (targetDevice == null) {
-          if (!mounted) return;
-          setState(() {
-            connectionStatus = "No device selected";
-            isConnecting = false;
-          });
-          return;
-        }
-      }
-
-      if (!mounted) return;
-      setState(
-          () => connectionStatus = "Connecting to ${targetDevice!.name}...");
-
-      print('Attempting to connect to: ${targetDevice.address}'); // Debug
-
-      // Connect with timeout
-      BluetoothConnection connection;
-      try {
-        connection = await BluetoothConnection.toAddress(targetDevice.address)
-            .timeout(const Duration(seconds: 10));
-      } catch (e) {
-        print('Connection timeout or error: $e'); // Debug
-        if (!mounted) return;
-        setState(() {
-          connectionStatus = "Connection timeout. Try again.";
-          isConnected = false;
-          isConnecting = false;
-        });
-        return;
-      }
-
-      if (!mounted) return;
-      setState(() {
-        _connection = connection;
-        isConnected = true;
-        isConnecting = false;
-        connectionStatus = "Connected ✓";
-      });
-
-      print('Successfully connected!'); // Debug
-
-      // Listen to incoming data
-      _connection!.input!.listen(
-        (Uint8List data) {
-          _handleIncomingData(data);
-        },
-        onDone: () {
-          print('Connection closed'); // Debug
-          if (mounted) {
-            setState(() {
-              isConnected = false;
-              connectionStatus = "Disconnected";
-            });
-          }
-        },
-        onError: (error) {
-          print('Connection error: $error'); // Debug
-          if (mounted) {
-            setState(() {
-              isConnected = false;
-              connectionStatus = "Connection error";
-            });
-          }
-        },
-      );
-    } catch (e) {
-      print('General connection error: $e'); // Debug
-      if (!mounted) return;
-      setState(() {
-        connectionStatus = "Failed: ${e.toString().substring(0, 50)}...";
-        isConnected = false;
-        isConnecting = false;
-      });
-    }
-  }
-
-  // Show dialog to select a Bluetooth device
-  Future<BluetoothDevice?> _showDeviceSelectionDialog(
-      List<BluetoothDevice> bondedDevices) async {
-    return showDialog<BluetoothDevice>(
-      context: context,
-      builder: (BuildContext context) {
-        return AlertDialog(
-          title: const Text('Select Bluetooth Device'),
-          content: SizedBox(
-            width: double.maxFinite,
-            height: 300,
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                const Text(
-                  'Paired Devices:',
-                  style: TextStyle(fontWeight: FontWeight.bold),
-                ),
-                const SizedBox(height: 8),
-                if (bondedDevices.isEmpty)
-                  const Padding(
-                    padding: EdgeInsets.all(16.0),
-                    child: Text(
-                      'No paired devices found.\n\n'
-                      'Please pair your ESP32 first:\n'
-                      '1. Go to Android Settings → Bluetooth\n'
-                      '2. Find "SmartHelmet_ESP32"\n'
-                      '3. Tap to pair',
-                      style: TextStyle(color: Colors.grey),
-                    ),
-                  )
-                else
-                  Expanded(
-                    child: ListView.builder(
-                      shrinkWrap: true,
-                      itemCount: bondedDevices.length,
-                      itemBuilder: (context, index) {
-                        BluetoothDevice device = bondedDevices[index];
-                        return ListTile(
-                          leading: const Icon(Icons.bluetooth),
-                          title: Text(device.name ?? 'Unknown Device'),
-                          subtitle: Text(device.address),
-                          trailing: device.name == targetDeviceName
-                              ? const Icon(Icons.star, color: Colors.amber)
-                              : null,
-                          onTap: () => Navigator.of(context).pop(device),
-                        );
-                      },
-                    ),
-                  ),
-              ],
-            ),
-          ),
-          actions: [
-            TextButton(
-              onPressed: () => Navigator.of(context).pop(null),
-              child: const Text('Cancel'),
-            ),
-            TextButton(
-              onPressed: () async {
-                // Open system Bluetooth settings
-                await FlutterBluetoothSerial.instance.openSettings();
-              },
-              child: const Text('Open Bluetooth Settings'),
-            ),
-          ],
-        );
-      },
-    );
-  }
-
-  void _handleIncomingData(Uint8List data) {
-    _dataBuffer += utf8.decode(data);
+  // Handle incoming data from ESP32 via BluetoothManager
+  void _handleIncomingData(List<int> data) {
+    _dataBuffer += String.fromCharCodes(data);
     while (_dataBuffer.contains('\n')) {
       int newlineIndex = _dataBuffer.indexOf('\n');
       String jsonString = _dataBuffer.substring(0, newlineIndex).trim();
@@ -407,23 +292,6 @@ class _Member3PageState extends State<Member3Page>
     }
   }
 
-  Future<void> _disconnect() async {
-    try {
-      await _connection?.finish();
-    } catch (e) {
-      print('Disconnect error: $e');
-    }
-    if (!mounted) return;
-    setState(() {
-      _connection = null;
-      isConnected = false;
-      connectionStatus = "Disconnected";
-    });
-    final sensorProvider =
-        Provider.of<SensorDataProvider>(context, listen: false);
-    sensorProvider.resetRideSafety();
-  }
-
   void _processIMUData({
     required Map<String, double> imuData,
     required double speed,
@@ -435,31 +303,32 @@ class _Member3PageState extends State<Member3Page>
     final journeyProvider =
         Provider.of<JourneyProvider>(context, listen: false);
 
-    // ─── NEW: Calculate new turn status FIRST ────────────────────────────────
+    // ─── Calculate turn status FIRST ────────────────────────────────
     double turnRate = imuData['gyroZ']!.abs();
     String newTurnStatus = "Normal";
     Color newStatusColor = Colors.green;
-    bool isRiskyThisReading = false;
+    String? eventType; // null = no risky event
 
     if (turnRate > riskyTurnThreshold) {
       newTurnStatus = "RISKY TURN!";
       newStatusColor = Colors.red;
-      isRiskyThisReading = true;
+      eventType = 'risky_turn';  // HIGH severity
       riskyTurnCount++;
     } else if (turnRate > sharpTurnThreshold) {
       newTurnStatus = "Sharp Turn";
       newStatusColor = Colors.orange;
+      eventType = 'sharp_turn';  // MODERATE severity
       sharpTurnCount++;
     }
 
-    // ─── Save to Firestore BEFORE setState (we already know if it's risky) ───
-    if (imuData['gyroZ'] != null) {
-      _saveLiveReadingIfNeeded(
+    // ─── ONLY SAVE RISKY EVENTS (not normal readings) ───────────────
+    if (eventType != null && imuData['gyroZ'] != null) {
+      _saveRiskyEventOnly(
         imuData,
         speed,
         lat,
         lng,
-        isRiskyThisReading, // ← pass the flag directly
+        eventType, // 'risky_turn' or 'sharp_turn'
       );
     }
 
@@ -497,16 +366,29 @@ class _Member3PageState extends State<Member3Page>
         }
       }
 
-      // Provider turn events (unchanged)
+      // Add full sensor reading (including all IMU data) to the journey
       if (journeyProvider.isJourneyActive) {
-        if (isRiskyThisReading) {
+        // We use dummy values for heartRate/temp/stress here, but they can be passed if available
+        journeyProvider.addSensorReading(
+          heartRate: 75,
+          temperature: 36.5,
+          stressLevel: 30,
+          accelX: accelX,
+          accelY: accelY,
+          accelZ: accelZ,
+          gyroX: gyroX,
+          gyroY: gyroY,
+          gyroZ: gyroZ,
+        );
+        
+        if (eventType == 'risky_turn') {
           journeyProvider.addTurnEvent(
             severity: 'risky',
             turnRate: turnRate,
             latitude: currentLat,
             longitude: currentLng,
           );
-        } else if (turnRate > sharpTurnThreshold) {
+        } else if (eventType == 'sharp_turn') {
           journeyProvider.addTurnEvent(
             severity: 'sharp',
             turnRate: turnRate,
@@ -516,19 +398,6 @@ class _Member3PageState extends State<Member3Page>
         }
       }
     });
-
-    // Inside setState or right after determining newTurnStatus
-    final sensorProvider =
-        Provider.of<SensorDataProvider>(context, listen: false);
-
-// Update ride safety based on current turn status
-    bool isCurrentlyRisky =
-        newTurnStatus == "RISKY TURN!" || newTurnStatus == "Sharp Turn";
-    sensorProvider.updateRideSafety(isCurrentlyRisky);
-
-// Optional: only mark as RISKY if risky turn (not just sharp)
-    bool isRiskyEvent = newTurnStatus == "RISKY TURN!";
-    sensorProvider.updateRideSafety(isRiskyEvent);
   }
 
   // Haversine formula to calculate distance between two GPS points in km
@@ -549,61 +418,130 @@ class _Member3PageState extends State<Member3Page>
     return degree * (pi / 180);
   }
 
-  Future<void> _saveLiveReadingIfNeeded(
+  // ============================================================
+  // RIDE TRACKING - Uses shared RideSessionProvider
+  // ============================================================
+  // NOTE: Ride start/end is now managed by RideSessionProvider
+  // This ensures all members (Member 1, 2, 3) share the same rideId
+  
+  void _resetRideCounters() {
+    _riskyEventsSavedCount = 0;
+    _riskyEventsThisRide = [];
+    sharpTurnCount = 0;
+    riskyTurnCount = 0;
+    totalDistanceKm = 0.0;
+  }
+
+  // ============================================================
+  // SAVE ONLY RISKY EVENTS TO FIREBASE
+  // ============================================================
+  Future<void> _saveRiskyEventOnly(
     Map<String, double> imu,
     double speed,
     double lat,
     double lng,
-    bool isRiskyThisReading, // ← new parameter
+    String eventType, // 'risky_turn', 'sharp_turn', 'harsh_brake'
   ) async {
+    // Get shared rideId from RideSessionProvider
+    final rideProvider = Provider.of<RideSessionProvider>(context, listen: false);
+    
+    // Only save if ride is active and rideId exists
+    if (!rideProvider.isRideActive || rideProvider.currentRideId == null) {
+      debugPrint("⚠️ Risky event detected but no active ride - not saving");
+      return;
+    }
+    
     if (_isSaving) return;
-
-    final now = DateTime.now();
-    final timePassed = _lastSavedTime == null ||
-        now.difference(_lastSavedTime!) >= _saveInterval;
-
-    // Save if time interval passed OR this reading is risky
-    if (!timePassed && !isRiskyThisReading) return;
 
     setState(() => _isSaving = true);
 
+    final now = DateTime.now();
+    final turnRate = imu['gyroZ']?.abs() ?? 0.0;
+
     try {
-      final data = {
+      final eventData = {
+        // Ride identification (using shared rideId from provider)
+        "rideId": rideProvider.currentRideId,
+        "eventNumber": _riskyEventsSavedCount + 1,
+        
+        // Timestamp
         "timestamp": now.toIso8601String(),
         "createdAt": FieldValue.serverTimestamp(),
+        
+        // Event classification
+        "eventType": eventType,
+        "severity": eventType == 'risky_turn' ? 'high' : 'moderate',
+        
+        // IMU data at event
         "gyroX": imu['gyroX'],
         "gyroY": imu['gyroY'],
         "gyroZ": imu['gyroZ'],
+        "turnRateDegPerSec": turnRate,
         "accelX": imu['accelX'],
         "accelY": imu['accelY'],
         "accelZ": imu['accelZ'],
-        "speedKmh": speed,
+        
+        // GPS location of event
         "latitude": lat,
         "longitude": lng,
         "location": GeoPoint(lat, lng),
-        "turnStatus":
-            currentTurnStatus, // still use latest UI value, but we know it's risky
-        "turnRateDegPerSec": imu['gyroZ']!.abs(),
+        "speedKmh": speed,
+        
+        // Running totals at this point
         "sharpTurnsTotal": sharpTurnCount,
         "riskyTurnsTotal": riskyTurnCount,
         "totalDistanceKm": totalDistanceKm,
-        "deviceName": targetDeviceName,
-        "isRiskyEvent": isRiskyThisReading, // ← more accurate
       };
 
-      await _firestore.collection("helmet_live_readings").add(data);
-
-      _lastSavedTime = now;
-      debugPrint("Live reading saved → Risky: $isRiskyThisReading");
+      // Save to Firebase 'risky_events' collection
+      final docRef = await _firestore.collection("risky_events").add(eventData);
+      
+      // Also keep in memory for end-of-ride visualization
+      _riskyEventsThisRide.add({
+        ...eventData,
+        "docId": docRef.id,
+      });
+      
+      _riskyEventsSavedCount++;
+      
+      debugPrint("🚨 RISKY EVENT #$_riskyEventsSavedCount saved → Type: $eventType | Turn: ${turnRate.toStringAsFixed(1)}°/s | ID: ${docRef.id}");
+      
     } catch (e) {
-      debugPrint("Firestore save error: $e");
+      debugPrint("❌ Firebase risky event save error: $e");
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text("Failed to save live data: $e")),
+          SnackBar(
+            content: Text("Failed to save risky event: $e"),
+            backgroundColor: Colors.red,
+          ),
         );
       }
     } finally {
       if (mounted) setState(() => _isSaving = false);
+    }
+  }
+
+  // Get all risky events for current ride (for visualization)
+  List<Map<String, dynamic>> getRiskyEventsForVisualization() {
+    return List.from(_riskyEventsThisRide);
+  }
+
+  // Load risky events from Firebase for a specific ride
+  Future<List<Map<String, dynamic>>> loadRiskyEventsForRide(String rideId) async {
+    try {
+      final snapshot = await _firestore
+          .collection("risky_events")
+          .where("rideId", isEqualTo: rideId)
+          .orderBy("timestamp")
+          .get();
+      
+      return snapshot.docs.map((doc) => {
+        ...doc.data(),
+        "docId": doc.id,
+      }).toList();
+    } catch (e) {
+      debugPrint("Error loading risky events: $e");
+      return [];
     }
   }
 
@@ -621,13 +559,32 @@ class _Member3PageState extends State<Member3Page>
           ],
         ),
         actions: [
-          if (_tabController.index == 1)
-            IconButton(
-              icon: Icon(
-                  isConnected ? Icons.bluetooth_connected : Icons.bluetooth),
-              onPressed: isConnected ? _disconnect : _scanAndConnect,
-              tooltip: isConnected ? 'Disconnect' : 'Connect',
-            ),
+          // Connection status indicator in AppBar (read-only, connect from Home)
+          Consumer<BluetoothManager>(
+            builder: (context, btManager, child) {
+              // Check for any connected device
+              final connectedDevices = btManager.getConnectedDevices();
+              final isConnected = connectedDevices.isNotEmpty;
+              return IconButton(
+                icon: Icon(
+                    isConnected ? Icons.bluetooth_connected : Icons.bluetooth_disabled),
+                color: isConnected ? Colors.green : Colors.white70,
+                onPressed: () {
+                  ScaffoldMessenger.of(context).showSnackBar(
+                    SnackBar(
+                      content: Text(
+                        isConnected 
+                            ? 'Connected to: ${connectedDevices.join(", ")}' 
+                            : 'Not connected. Connect from Home page.',
+                      ),
+                      duration: const Duration(seconds: 2),
+                    ),
+                  );
+                },
+                tooltip: isConnected ? 'Connected ✓' : 'Not Connected',
+              );
+            },
+          ),
         ],
       ),
       body: Stack(
@@ -642,30 +599,60 @@ class _Member3PageState extends State<Member3Page>
                   ],
                 ),
 
-          // Saving indicator
-          if (_isSaving)
-            const Positioned(
+          // Risky Events Indicator (shows only when events detected)
+          if (_isSaving || _riskyEventsSavedCount > 0)
+            Positioned(
               bottom: 24,
               right: 24,
               child: Card(
-                color: Colors.black87,
+                color: _isSaving 
+                    ? Colors.orange[700] 
+                    : (_riskyEventsSavedCount > 0 ? Colors.red[700] : Colors.green[700]),
+                elevation: 6,
                 child: Padding(
-                  padding: EdgeInsets.symmetric(horizontal: 16, vertical: 10),
+                  padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
                   child: Row(
                     mainAxisSize: MainAxisSize.min,
                     children: [
-                      SizedBox(
-                        width: 18,
-                        height: 18,
-                        child: CircularProgressIndicator(
-                          strokeWidth: 2.5,
-                          color: Colors.white,
-                        ),
-                      ),
-                      SizedBox(width: 12),
-                      Text(
-                        "Saving...",
-                        style: TextStyle(color: Colors.white, fontSize: 13),
+                      if (_isSaving)
+                        const SizedBox(
+                          width: 18,
+                          height: 18,
+                          child: CircularProgressIndicator(
+                            strokeWidth: 2.5,
+                            color: Colors.white,
+                          ),
+                        )
+                      else
+                        const Icon(Icons.warning_amber_rounded, color: Colors.white, size: 20),
+                      const SizedBox(width: 12),
+                      Consumer<RideSessionProvider>(
+                        builder: (context, rideProvider, child) {
+                          return Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            mainAxisSize: MainAxisSize.min,
+                            children: [
+                              Text(
+                                _isSaving 
+                                    ? "Saving risky event..." 
+                                    : "🚨 $_riskyEventsSavedCount Risky Events",
+                                style: const TextStyle(
+                                  color: Colors.white, 
+                                  fontSize: 13, 
+                                  fontWeight: FontWeight.bold,
+                                ),
+                              ),
+                              if (rideProvider.currentRideId != null && !_isSaving)
+                                Text(
+                                  "Ride: ${rideProvider.currentRideId!.substring(0, min(8, rideProvider.currentRideId!.length))}...",
+                                  style: TextStyle(
+                                    color: Colors.white.withOpacity(0.8), 
+                                    fontSize: 10,
+                                  ),
+                                ),
+                            ],
+                          );
+                        },
                       ),
                     ],
                   ),
@@ -862,39 +849,7 @@ class _Member3PageState extends State<Member3Page>
           ),
           const SizedBox(height: 24),
 
-          // Action Buttons
-          Row(
-            children: [
-              Expanded(
-                child: OutlinedButton.icon(
-                  onPressed: () {
-                    setState(() {
-                      _showRideSummary = false;
-                      _completedRide = null;
-                    });
-                  },
-                  icon: const Icon(Icons.history),
-                  label: const Text('View All Journeys'),
-                  style: OutlinedButton.styleFrom(
-                    padding: const EdgeInsets.symmetric(vertical: 14),
-                  ),
-                ),
-              ),
-              const SizedBox(width: 12),
-              Expanded(
-                child: ElevatedButton.icon(
-                  onPressed: () => Navigator.of(context).pop(),
-                  icon: const Icon(Icons.home),
-                  label: const Text('Back to Home'),
-                  style: ElevatedButton.styleFrom(
-                    backgroundColor: Colors.blue[700],
-                    foregroundColor: Colors.white,
-                    padding: const EdgeInsets.symmetric(vertical: 14),
-                  ),
-                ),
-              ),
-            ],
-          ),
+          _buildSummaryActions(journey),
         ],
       ),
     );
@@ -917,6 +872,65 @@ class _Member3PageState extends State<Member3Page>
           ],
         ),
       ],
+    );
+  }
+
+  // Update Ride Summary Actions
+  Widget _buildSummaryActions(JourneyData journey) {
+    return Column(
+      children: [
+        // View Detailed Report Button
+        SizedBox(
+          width: double.infinity,
+          child: ElevatedButton.icon(
+            onPressed: () {
+               _showJourneyDetails(journey);
+            },
+            icon: const Icon(Icons.analytics),
+            label: const Text('View Detailed Report'),
+            style: ElevatedButton.styleFrom(
+              backgroundColor: const Color(0xFF2A2D35), // Dark sleek color matching the report screen
+              foregroundColor: Colors.white,
+              padding: const EdgeInsets.symmetric(vertical: 16),
+              elevation: 4,
+            ),
+          ),
+        ),
+        const SizedBox(height: 16),
+        // Action Buttons
+        Row(
+          children: [
+            Expanded(
+              child: OutlinedButton.icon(
+                onPressed: () {
+                  setState(() {
+                    _showRideSummary = false;
+                    _completedRide = null;
+                  });
+                },
+                icon: const Icon(Icons.history),
+                label: const Text('All Journeys'),
+                style: OutlinedButton.styleFrom(
+                  padding: const EdgeInsets.symmetric(vertical: 14),
+                ),
+              ),
+            ),
+            const SizedBox(width: 12),
+            Expanded(
+              child: ElevatedButton.icon(
+                onPressed: () => Navigator.of(context).pop(), // Pop to go back to previous dashboard state
+                icon: const Icon(Icons.home),
+                label: const Text('Back to Home'),
+                style: ElevatedButton.styleFrom(
+                  backgroundColor: Colors.blue[700],
+                  foregroundColor: Colors.white,
+                  padding: const EdgeInsets.symmetric(vertical: 14),
+                ),
+              ),
+            ),
+          ],
+        ),
+      ]
     );
   }
 
@@ -1271,69 +1285,100 @@ class _Member3PageState extends State<Member3Page>
 
   // Keep all existing build methods for live monitoring
   Widget _buildConnectionCard() {
-    return Card(
-      color: isConnected ? Colors.green[50] : Colors.grey[100],
-      elevation: 4,
-      child: Padding(
-        padding: const EdgeInsets.all(16),
-        child: Column(
-          children: [
-            Row(
-              mainAxisAlignment: MainAxisAlignment.spaceBetween,
+    return Consumer<BluetoothManager>(
+      builder: (context, btManager, child) {
+        // Check for specific device or any connected device
+        final connectedDevices = btManager.getConnectedDevices();
+        String? connectedDevice;
+        
+        if (btManager.isConnected(targetDeviceName)) {
+          connectedDevice = targetDeviceName;
+        } else {
+          for (final device in connectedDevices) {
+            if (device.toLowerCase().contains('esp') || 
+                device.toLowerCase().contains('helmet') ||
+                device.toLowerCase().contains('imu')) {
+              connectedDevice = device;
+              break;
+            }
+          }
+          if (connectedDevice == null && connectedDevices.isNotEmpty) {
+            connectedDevice = connectedDevices.first;
+          }
+        }
+        
+        final isConnected = connectedDevice != null;
+        
+        return Card(
+          color: isConnected ? Colors.green[50] : Colors.grey[100],
+          elevation: 4,
+          child: Padding(
+            padding: const EdgeInsets.all(16),
+            child: Column(
               children: [
-                Flexible(
-                  child: Row(
-                    children: [
-                      Icon(
-                        isConnected
-                            ? Icons.bluetooth_connected
-                            : Icons.bluetooth_disabled,
-                        color: isConnected ? Colors.green : Colors.grey,
-                        size: 28,
-                      ),
-                      const SizedBox(width: 12),
-                      Flexible(
-                        child: Column(
-                          crossAxisAlignment: CrossAxisAlignment.start,
-                          children: [
-                            const Text('ESP32 Connection',
-                                style: TextStyle(
-                                    fontSize: 16, fontWeight: FontWeight.bold)),
-                            Text(
-                              connectionStatus,
-                              style: TextStyle(
-                                  fontSize: 14,
-                                  color: isConnected
-                                      ? Colors.green
-                                      : Colors.grey[700]),
-                              overflow: TextOverflow.ellipsis,
+                Row(
+                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                  children: [
+                    Flexible(
+                      child: Row(
+                        children: [
+                          Icon(
+                            isConnected
+                                ? Icons.bluetooth_connected
+                                : Icons.bluetooth_disabled,
+                            color: isConnected ? Colors.green : Colors.grey,
+                            size: 28,
+                          ),
+                          const SizedBox(width: 12),
+                          Flexible(
+                            child: Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                const Text('ESP32/IMU Connection',
+                                    style: TextStyle(
+                                        fontSize: 16, fontWeight: FontWeight.bold)),
+                                Text(
+                                  isConnected 
+                                      ? 'Connected to: $connectedDevice' 
+                                      : 'Not connected',
+                                  style: TextStyle(
+                                      fontSize: 14,
+                                      color: isConnected
+                                          ? Colors.green
+                                          : Colors.grey[700]),
+                                  overflow: TextOverflow.ellipsis,
+                                ),
+                              ],
                             ),
-                          ],
+                          ),
+                        ],
+                      ),
+                    ),
+                    if (!isConnected)
+                      OutlinedButton.icon(
+                        onPressed: () {
+                          ScaffoldMessenger.of(context).showSnackBar(
+                            const SnackBar(
+                              content: Text('Please connect to ESP32 from the Home page'),
+                              duration: Duration(seconds: 2),
+                            ),
+                          );
+                        },
+                        icon: const Icon(Icons.info_outline, size: 18),
+                        label: const Text('Connect from Home'),
+                        style: OutlinedButton.styleFrom(
+                          foregroundColor: Colors.blue,
                         ),
                       ),
-                    ],
-                  ),
+                    if (isConnected)
+                      const Icon(Icons.check_circle, color: Colors.green, size: 28),
+                  ],
                 ),
-                if (!isConnected && !isConnecting)
-                  ElevatedButton.icon(
-                    onPressed: _scanAndConnect,
-                    icon: const Icon(Icons.search, size: 18),
-                    label: const Text('Connect'),
-                    style: ElevatedButton.styleFrom(
-                      backgroundColor: Colors.blue,
-                      foregroundColor: Colors.white,
-                    ),
-                  ),
-                if (isConnecting)
-                  const SizedBox(
-                      width: 20,
-                      height: 20,
-                      child: CircularProgressIndicator(strokeWidth: 2)),
               ],
             ),
-          ],
-        ),
-      ),
+          ),
+        );
+      },
     );
   }
 
