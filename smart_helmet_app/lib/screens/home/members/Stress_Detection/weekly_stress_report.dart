@@ -24,6 +24,15 @@ class _WeeklyStressReportState extends State<WeeklyStressReport> {
   bool _isLoading = true;
   String _error = '';
 
+  // User details
+  String? _userName;
+  int? _age;
+  String? _gender;
+  double? _heightCm;
+  double? _weightKg;
+  double? _bmi;
+  String _bmiCategory = '';
+
   // Stats
   double avgStress = 0.0;
   int highStressDays = 0;
@@ -64,6 +73,35 @@ class _WeeklyStressReportState extends State<WeeklyStressReport> {
     }
 
     try {
+      // Fetch user profile
+      final userDoc = await _firestore.collection('users').doc(userId).get();
+      if (!userDoc.exists) {
+        setState(() {
+          _error = "User profile not found.";
+          _isLoading = false;
+        });
+        return;
+      }
+
+      _userName = userDoc['userName'] as String?;
+      _age = userDoc['age'] as int?;
+      _gender = userDoc['gender'] as String?;
+      _heightCm = (userDoc['heightCm'] as num?)?.toDouble();
+      _weightKg = (userDoc['weightKg'] as num?)?.toDouble();
+
+      if (_heightCm != null && _weightKg != null && _heightCm! > 0) {
+        _bmi = _weightKg! / ((_heightCm! / 100) * (_heightCm! / 100));
+        if (_bmi! < 18.5) {
+          _bmiCategory = 'Underweight';
+        } else if (_bmi! < 25) {
+          _bmiCategory = 'Normal';
+        } else if (_bmi! < 30) {
+          _bmiCategory = 'Overweight';
+        } else {
+          _bmiCategory = 'Obese';
+        }
+      }
+
       final now = DateTime.now();
       final sevenDaysAgo = now.subtract(const Duration(days: 7));
 
@@ -146,7 +184,7 @@ class _WeeklyStressReportState extends State<WeeklyStressReport> {
     _markers.clear();
 
     for (var reading in _weeklyData) {
-      final geo = reading['location'] as GeoPoint?;
+      final geo = reading['currentLocation'] as GeoPoint?;
       if (geo == null) continue;
 
       final lat = geo.latitude;
@@ -177,7 +215,7 @@ class _WeeklyStressReportState extends State<WeeklyStressReport> {
     }
 
     if (_weeklyData.isNotEmpty && _mapController != null) {
-      final first = _weeklyData.first['location'] as GeoPoint?;
+      final first = _weeklyData.first['currentLocation'] as GeoPoint?;
       if (first != null) {
         _mapController!.animateCamera(
           CameraUpdate.newLatLngZoom(
@@ -188,8 +226,11 @@ class _WeeklyStressReportState extends State<WeeklyStressReport> {
   }
 
   List<FlSpot> _getDailyStressSpots() {
-    return _dailyAverages.asMap().entries.map((e) {
-      return FlSpot(e.key.toDouble(), e.value.value);
+    return _dailyAverages.asMap().entries.map((entry) {
+      return FlSpot(
+        entry.key.toDouble(), // index → x
+        entry.value.value, // MapEntry.value → y (double)
+      );
     }).toList();
   }
 
@@ -289,8 +330,55 @@ class _WeeklyStressReportState extends State<WeeklyStressReport> {
     );
   }
 
+  List<BarChartGroupData> _getMoodBarGroups() {
+    final stressed = moodDistribution['Stressed'] ?? 0;
+    final neutral = moodDistribution['Neutral'] ?? 0;
+    final relaxed = moodDistribution['Relaxed'] ?? 0;
+
+    return [
+      BarChartGroupData(
+        x: 0,
+        barRods: [
+          BarChartRodData(
+            toY: stressed.toDouble(),
+            color: Colors.redAccent,
+            width: 40,
+            borderRadius: BorderRadius.circular(4),
+          ),
+        ],
+      ),
+      BarChartGroupData(
+        x: 1,
+        barRods: [
+          BarChartRodData(
+            toY: neutral.toDouble(),
+            color: Colors.orangeAccent,
+            width: 40,
+            borderRadius: BorderRadius.circular(4),
+          ),
+        ],
+      ),
+      BarChartGroupData(
+        x: 2,
+        barRods: [
+          BarChartRodData(
+            toY: relaxed.toDouble(),
+            color: Colors.greenAccent,
+            width: 40,
+            borderRadius: BorderRadius.circular(4),
+          ),
+        ],
+      ),
+    ];
+  }
+
   Future<void> _generateAndDownloadPdf() async {
     final pdf = pw.Document();
+
+    final now = DateTime.now();
+    final sevenDaysAgo = now.subtract(const Duration(days: 7));
+    final dateRange =
+        '${DateFormat('MMM dd, yyyy').format(sevenDaysAgo)} - ${DateFormat('MMM dd, yyyy').format(now)}';
 
     pdf.addPage(
       pw.MultiPage(
@@ -302,16 +390,31 @@ class _WeeklyStressReportState extends State<WeeklyStressReport> {
                 style:
                     pw.TextStyle(fontSize: 24, fontWeight: pw.FontWeight.bold)),
           ),
+          pw.SizedBox(height: 8),
+          pw.Text(
+              'Personalized Report for: ${_userName ?? 'User'} (${_age ?? ''} years, ${_gender ?? ''})',
+              style:
+                  pw.TextStyle(fontSize: 16, color: pdf_lib.PdfColors.grey800)),
+          pw.Text('Date Range: $dateRange',
+              style:
+                  pw.TextStyle(fontSize: 14, color: pdf_lib.PdfColors.grey600)),
+          pw.SizedBox(height: 16),
+          pw.Text('Profile Summary:',
+              style:
+                  pw.TextStyle(fontSize: 18, fontWeight: pw.FontWeight.bold)),
+          pw.Bullet(text: 'Height: ${_heightCm?.toStringAsFixed(0) ?? '—'} cm'),
+          pw.Bullet(text: 'Weight: ${_weightKg?.toStringAsFixed(0) ?? '—'} kg'),
+          pw.Bullet(
+              text:
+                  'BMI: ${_bmi?.toStringAsFixed(1) ?? '—'} (${_bmiCategory})'),
           pw.SizedBox(height: 20),
-          pw.Text('Personal Report • Last 7 Days',
-              style: pw.TextStyle(fontSize: 16)),
-          pw.SizedBox(height: 20),
-          pw.Text('Summary:',
+          pw.Text('Stress & Mood Summary:',
               style:
                   pw.TextStyle(fontSize: 18, fontWeight: pw.FontWeight.bold)),
           pw.Bullet(
               text: 'Average Stress Level: ${avgStress.toStringAsFixed(2)}'),
-          pw.Bullet(text: 'High Stress Days: $highStressDays'),
+          pw.Bullet(text: 'High Stress Days: $highStressDays / 7'),
+          pw.Bullet(text: 'Total Readings: ${_weeklyData.length}'),
           pw.SizedBox(height: 16),
           pw.Text('Stress Level Distribution:',
               style:
@@ -319,13 +422,20 @@ class _WeeklyStressReportState extends State<WeeklyStressReport> {
           pw.Bullet(text: 'High (>70%): $highStressCount readings'),
           pw.Bullet(text: 'Moderate (40–70%): $moderateStressCount readings'),
           pw.Bullet(text: 'Low/Relaxed (≤40%): $lowStressCount readings'),
+          pw.SizedBox(height: 16),
+          pw.Text('Mood Distribution:',
+              style:
+                  pw.TextStyle(fontSize: 16, fontWeight: pw.FontWeight.bold)),
+          pw.Bullet(text: 'Stressed: ${moodDistribution['Stressed']} readings'),
+          pw.Bullet(text: 'Neutral: ${moodDistribution['Neutral']} readings'),
+          pw.Bullet(text: 'Relaxed: ${moodDistribution['Relaxed']} readings'),
           pw.SizedBox(height: 20),
           pw.Text('Key Locations & Stress Zones:',
               style:
                   pw.TextStyle(fontSize: 16, fontWeight: pw.FontWeight.bold)),
           pw.SizedBox(height: 8),
           ..._weeklyData.map((r) {
-            final geo = r['location'] as GeoPoint?;
+            final geo = r['currentLocation'] as GeoPoint?;
             final stress = (r['stressScore'] as num?)?.toDouble() ?? 0.0;
             final mood = r['currentMood'] as String? ?? '—';
             final time = (r['timestamp'] as String?)?.substring(0, 19) ?? '—';
@@ -334,7 +444,7 @@ class _WeeklyStressReportState extends State<WeeklyStressReport> {
             );
           }),
           pw.SizedBox(height: 20),
-          pw.Text('Health Recommendations:',
+          pw.Text('Personalized Health Recommendations:',
               style:
                   pw.TextStyle(fontSize: 18, fontWeight: pw.FontWeight.bold)),
           pw.Paragraph(text: _getHealthTips()),
@@ -350,20 +460,50 @@ class _WeeklyStressReportState extends State<WeeklyStressReport> {
   }
 
   String _getHealthTips() {
+    String baseTips = '';
     if (avgStress > 0.65 || highStressDays >= 4 || highStressCount > 10) {
-      return "Your stress levels were significantly elevated this week, particularly in certain locations. "
+      baseTips =
+          "Your stress levels were significantly elevated this week, particularly in certain locations. "
           "Persistent high stress can impact physical and mental health. Consider consulting a healthcare professional "
           "if symptoms like anxiety, fatigue, headaches, or sleep disturbances continue. "
           "Immediate steps: practice 4-7-8 breathing in high-stress zones, take short walks, and prioritize recovery.";
     } else if (avgStress > 0.4) {
-      return "Moderate stress levels detected — you're managing it reasonably well. "
+      baseTips =
+          "Moderate stress levels detected — you're managing it reasonably well. "
           "To shift toward more relaxed states: incorporate 5–10 minutes of mindfulness daily, "
           "stay hydrated, reduce screen time before bed, and use calm locations for breaks.";
     } else {
-      return "Outstanding! Your week was dominated by low stress and relaxation. "
+      baseTips =
+          "Outstanding! Your week was dominated by low stress and relaxation. "
           "This balance supports strong mental resilience. Continue your healthy routines — "
           "they're clearly working very effectively for you.";
     }
+
+    // Incorporate BMI
+    String bmiAdvice = '';
+    if (_bmi != null) {
+      if (_bmi! < 18.5) {
+        bmiAdvice =
+            "\n\nBMI Note: Your BMI indicates underweight. Consider a balanced diet with more calories and strength training to support overall health.";
+      } else if (_bmi! >= 25) {
+        bmiAdvice =
+            "\n\nBMI Note: Your BMI indicates overweight. Incorporate regular exercise and a nutrient-rich diet to manage weight and reduce stress risks.";
+      } else {
+        bmiAdvice =
+            "\n\nBMI Note: Your BMI is in the normal range — great job maintaining a healthy weight!";
+      }
+    }
+
+    // Age/gender specific (general)
+    String demoAdvice = '';
+    if (_age != null && _gender != null) {
+      if (_age! < 30 && _gender == 'Male') {
+        demoAdvice =
+            "\nAs a young adult male, focus on building healthy habits like regular physical activity to manage stress long-term.";
+      } // Add more if needed for other demographics
+    }
+
+    return baseTips + bmiAdvice + demoAdvice;
   }
 
   @override
@@ -414,6 +554,61 @@ class _WeeklyStressReportState extends State<WeeklyStressReport> {
                     child: Column(
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
+                        // User Profile Card
+                        Card(
+                          elevation: 4,
+                          shape: RoundedRectangleBorder(
+                              borderRadius: BorderRadius.circular(16)),
+                          child: Padding(
+                            padding: const EdgeInsets.all(20),
+                            child: Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                Text('Your Profile',
+                                    style: Theme.of(context)
+                                        .textTheme
+                                        .titleLarge
+                                        ?.copyWith(
+                                            fontWeight: FontWeight.bold)),
+                                const SizedBox(height: 16),
+                                Text(
+                                  'Name: ${_userName ?? '—'}',
+                                  style: const TextStyle(fontSize: 16),
+                                ),
+                                Text(
+                                  'Age: ${_age ?? '—'}',
+                                  style: const TextStyle(fontSize: 16),
+                                ),
+                                Text(
+                                  'Gender: ${_gender ?? '—'}',
+                                  style: const TextStyle(fontSize: 16),
+                                ),
+                                Text(
+                                  'Height: ${_heightCm?.toStringAsFixed(0) ?? '—'} cm',
+                                  style: const TextStyle(fontSize: 16),
+                                ),
+                                Text(
+                                  'Weight: ${_weightKg?.toStringAsFixed(0) ?? '—'} kg',
+                                  style: const TextStyle(fontSize: 16),
+                                ),
+                                if (_bmi != null)
+                                  Text(
+                                    'BMI: ${_bmi!.toStringAsFixed(1)} ($_bmiCategory)',
+                                    style: TextStyle(
+                                      fontSize: 16,
+                                      color: _bmiCategory == 'Normal'
+                                          ? Colors.green
+                                          : Colors.orange,
+                                      fontWeight: FontWeight.bold,
+                                    ),
+                                  ),
+                              ],
+                            ),
+                          ),
+                        ),
+
+                        const SizedBox(height: 24),
+
                         // Summary Card
                         Card(
                           elevation: 4,
@@ -638,6 +833,146 @@ class _WeeklyStressReportState extends State<WeeklyStressReport> {
 
                         const SizedBox(height: 32),
 
+                        // Mood Distribution Bar Chart
+                        Card(
+                          elevation: 4,
+                          shape: RoundedRectangleBorder(
+                              borderRadius: BorderRadius.circular(16)),
+                          child: Padding(
+                            padding: const EdgeInsets.all(20),
+                            child: Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                Text('Mood Distribution This Week',
+                                    style: Theme.of(context)
+                                        .textTheme
+                                        .titleMedium
+                                        ?.copyWith(
+                                            fontWeight: FontWeight.bold)),
+                                const SizedBox(height: 20),
+                                SizedBox(
+                                  height: 280,
+                                  child: moodDistribution.values
+                                          .every((v) => v == 0)
+                                      ? const Center(
+                                          child: Text('No mood data recorded',
+                                              style: TextStyle(
+                                                  color: Colors.grey)))
+                                      : BarChart(
+                                          BarChartData(
+                                            alignment:
+                                                BarChartAlignment.spaceEvenly,
+                                            maxY: moodDistribution.values
+                                                    .reduce(
+                                                        (a, b) => a > b ? a : b)
+                                                    .toDouble() +
+                                                2, // Padding for labels
+                                            barTouchData: BarTouchData(
+                                              enabled: true,
+                                              touchTooltipData:
+                                                  BarTouchTooltipData(
+                                                getTooltipColor: (group) =>
+                                                    Colors.black
+                                                        .withOpacity(0.8),
+                                                getTooltipItem: (group,
+                                                    groupIndex, rod, rodIndex) {
+                                                  String label = '';
+                                                  switch (group.x) {
+                                                    case 0:
+                                                      label = 'Stressed';
+                                                      break;
+                                                    case 1:
+                                                      label = 'Neutral';
+                                                      break;
+                                                    case 2:
+                                                      label = 'Relaxed';
+                                                      break;
+                                                  }
+                                                  return BarTooltipItem(
+                                                    '$label\n${rod.toY.toInt()} readings',
+                                                    const TextStyle(
+                                                        color: Colors.white),
+                                                  );
+                                                },
+                                              ),
+                                            ),
+                                            titlesData: FlTitlesData(
+                                              show: true,
+                                              bottomTitles: AxisTitles(
+                                                sideTitles: SideTitles(
+                                                  showTitles: true,
+                                                  reservedSize: 40,
+                                                  getTitlesWidget:
+                                                      (value, meta) {
+                                                    switch (value.toInt()) {
+                                                      case 0:
+                                                        return const Text(
+                                                            'Stressed',
+                                                            style: TextStyle(
+                                                                fontSize: 14));
+                                                      case 1:
+                                                        return const Text(
+                                                            'Neutral',
+                                                            style: TextStyle(
+                                                                fontSize: 14));
+                                                      case 2:
+                                                        return const Text(
+                                                            'Relaxed',
+                                                            style: TextStyle(
+                                                                fontSize: 14));
+                                                      default:
+                                                        return const Text('');
+                                                    }
+                                                  },
+                                                ),
+                                              ),
+                                              leftTitles: AxisTitles(
+                                                sideTitles: SideTitles(
+                                                  showTitles: true,
+                                                  reservedSize: 40,
+                                                  interval: 1,
+                                                  getTitlesWidget:
+                                                      (value, meta) => Text(
+                                                          value
+                                                              .toInt()
+                                                              .toString(),
+                                                          style:
+                                                              const TextStyle(
+                                                                  fontSize:
+                                                                      12)),
+                                                ),
+                                              ),
+                                              topTitles: const AxisTitles(
+                                                  sideTitles: SideTitles(
+                                                      showTitles: false)),
+                                              rightTitles: const AxisTitles(
+                                                  sideTitles: SideTitles(
+                                                      showTitles: false)),
+                                            ),
+                                            gridData: FlGridData(
+                                              show: true,
+                                              drawVerticalLine: false,
+                                              horizontalInterval: 1,
+                                              getDrawingHorizontalLine:
+                                                  (value) => FlLine(
+                                                color: Colors.grey
+                                                    .withOpacity(0.2),
+                                                strokeWidth: 1,
+                                              ),
+                                            ),
+                                            borderData:
+                                                FlBorderData(show: false),
+                                            barGroups: _getMoodBarGroups(),
+                                          ),
+                                        ),
+                                ),
+                              ],
+                            ),
+                          ),
+                        ),
+
+                        const SizedBox(height: 32),
+
                         // Locations Map
                         Card(
                           elevation: 4,
@@ -680,8 +1015,8 @@ class _WeeklyStressReportState extends State<WeeklyStressReport> {
                                             onMapCreated: (controller) {
                                               _mapController = controller;
                                               if (_weeklyData.isNotEmpty) {
-                                                final first = _weeklyData
-                                                        .first['location']
+                                                final first = _weeklyData.first[
+                                                        'currentLocation']
                                                     as GeoPoint?;
                                                 if (first != null) {
                                                   controller.animateCamera(
@@ -774,7 +1109,7 @@ class _WeeklyStressReportState extends State<WeeklyStressReport> {
                             child: Column(
                               crossAxisAlignment: CrossAxisAlignment.start,
                               children: [
-                                Text('Health Recommendations',
+                                Text('Personalized Health Recommendations',
                                     style: Theme.of(context)
                                         .textTheme
                                         .titleMedium

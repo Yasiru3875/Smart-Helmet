@@ -41,6 +41,12 @@ class _Member2PageState extends State<Member2Page> {
   double relaxedScore = 0.0;
   String currentMood = "No Signal";
   String moodEmoji = "📡";
+  Color moodColor = Colors.grey;
+
+  double fatigueScore = 0.0;
+  String fatigueLevel = "No Signal";
+  String fatigueEmoji = "📡";
+  Color fatigueColor = Colors.grey;
 
   int poorSignalLevel = 200;
 
@@ -256,14 +262,17 @@ class _Member2PageState extends State<Member2Page> {
     setState(() {
       currentMood = "No Signal";
       moodEmoji = "📡";
-      stressScore = 0.0;
-      relaxedScore = 0.0;
-      attention = 0;
-      meditation = 0;
+      moodColor = Colors.grey;
+
+      fatigueLevel = "No Signal";
+      fatigueEmoji = "📡";
+      fatigueColor = Colors.grey;
+
+      fatigueScore = stressScore = relaxedScore = 0.0;
+      attention = meditation = 0;
       powerBands = List.filled(8, 0.0);
       eegBands.updateAll((key, value) => 0.0);
-      arousalLevel = 0.0;
-      valenceLevel = 0.0;
+      arousalLevel = valenceLevel = 0.0;
       frustrationState = "Neutral";
       frustrationEmoji = "😐";
       showRestAlert = false;
@@ -411,22 +420,23 @@ class _Member2PageState extends State<Member2Page> {
 
 // Add this method (call it in initState)
   Future<void> _startLocationTracking() async {
-    // Check if location services are enabled
-    _locationServiceEnabled = await Geolocator.isLocationServiceEnabled();
-    if (!_locationServiceEnabled) {
+    bool serviceEnabled = await Geolocator.isLocationServiceEnabled();
+    if (!serviceEnabled) {
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('Location services are disabled')),
+          const SnackBar(
+            content: Text('Please enable location services'),
+            duration: Duration(seconds: 6),
+          ),
         );
       }
       return;
     }
 
-    // Check/request permission
-    _permission = await Geolocator.checkPermission();
-    if (_permission == LocationPermission.denied) {
-      _permission = await Geolocator.requestPermission();
-      if (_permission == LocationPermission.denied) {
+    LocationPermission permission = await Geolocator.checkPermission();
+    if (permission == LocationPermission.denied) {
+      permission = await Geolocator.requestPermission();
+      if (permission == LocationPermission.denied) {
         if (mounted) {
           ScaffoldMessenger.of(context).showSnackBar(
             const SnackBar(content: Text('Location permission denied')),
@@ -436,33 +446,55 @@ class _Member2PageState extends State<Member2Page> {
       }
     }
 
-    if (_permission == LocationPermission.deniedForever) {
+    if (permission == LocationPermission.deniedForever) {
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(
-              content: Text('Location permissions permanently denied')),
+          SnackBar(
+            content: const Text(
+                'Location permission permanently denied – open app settings'),
+            action: SnackBarAction(
+              label: 'Open Settings',
+              onPressed: () => Geolocator.openAppSettings(),
+            ),
+          ),
         );
       }
       return;
     }
 
-    // Start listening to position updates
+    // Start stream with slightly more forgiving settings for faster first fix
     _positionStream = Geolocator.getPositionStream(
       locationSettings: const LocationSettings(
-        accuracy: LocationAccuracy.high,
-        distanceFilter: 10, // update every 10 meters
+        accuracy: LocationAccuracy.medium, // ← changed from high
+        distanceFilter: 8,
+        timeLimit: Duration(seconds: 8), // help get first fix faster
       ),
-    ).listen((Position position) {
-      if (mounted) {
-        setState(() {
-          _currentPosition = position;
-        });
-      }
-    });
+    ).listen(
+      (Position pos) {
+        print("Position update → ${pos.latitude.toStringAsFixed(6)}, "
+            "${pos.longitude.toStringAsFixed(6)} • acc: ${pos.accuracy}m");
+        if (mounted) setState(() => _currentPosition = pos);
+      },
+      onError: (e) => print("Position stream error: $e"),
+    );
+
+    // Optional: get one initial position right away (faster first save)
+    try {
+      final initial = await Geolocator.getCurrentPosition(
+        desiredAccuracy: LocationAccuracy.medium,
+        timeLimit: const Duration(seconds: 6),
+      );
+      if (mounted) setState(() => _currentPosition = initial);
+    } catch (e) {
+      print("Initial position fetch failed: $e");
+    }
   }
 
   void _updateStressAndMood() {
-    if (poorSignalLevel > 50 || powerBands.every((e) => e == 0)) return;
+    if (poorSignalLevel > 50 || powerBands.every((e) => e == 0)) {
+      Provider.of<EmotionProvider>(context, listen: false).resetOnNoSignal();
+      return;
+    }
 
     double alpha = powerBands[2] + powerBands[3] + 1e-6;
     double beta = powerBands[4] + powerBands[5];
@@ -472,84 +504,109 @@ class _Member2PageState extends State<Member2Page> {
     bandStress = bandStress.clamp(0.0, 5.0) / 5.0;
 
     double medStress = 1.0 - (meditation / 100.0).clamp(0.0, 1.0);
-    double hybridStress = (stressScore + bandStress + medStress) / 3.0;
+
+    double signalQuality = (200 - poorSignalLevel).clamp(0, 200) / 200.0;
+    signalQuality = math.pow(signalQuality, 1.5).toDouble();
+
+    double trustedStress = stressScore * signalQuality;
+    double hybridStress = (trustedStress + bandStress + medStress) / 3.0;
     double hybridRelaxed = 1.0 - hybridStress;
 
-    // Inside _updateStressAndMood or after setState
-    // ─── IMPORTANT: Update provider here ───
     final sensorProvider =
         Provider.of<SensorDataProvider>(context, listen: false);
     final int stressPercent = (hybridStress * 100).round().clamp(0, 100);
-
     sensorProvider.updateStressLevel(stressPercent);
 
-    // Debug print – you should see this in console when stress updates
-    print(
-        "→ Stress updated in provider: $stressPercent%  (raw score: $hybridStress)");
+    // ─── Multi-level stress ──────────────────────────────────────────────────
+    String newStressLevel;
+    String newStressEmoji;
+    Color stressLevelColor;
+
+    if (hybridStress <= 0.25) {
+      newStressLevel = "Very Relaxed";
+      newStressEmoji = "😌";
+      stressLevelColor = Colors.green[800]!;
+    } else if (hybridStress <= 0.45) {
+      newStressLevel = "Relaxed";
+      newStressEmoji = "🙂";
+      stressLevelColor = Colors.green[400]!;
+    } else if (hybridStress <= 0.65) {
+      newStressLevel = "Neutral";
+      newStressEmoji = "😐";
+      stressLevelColor = Colors.yellow[800]!;
+    } else if (hybridStress <= 0.80) {
+      newStressLevel = "Elevated";
+      newStressEmoji = "😟";
+      stressLevelColor = Colors.orange[700]!;
+    } else {
+      newStressLevel = "High Stress";
+      newStressEmoji = "😰";
+      stressLevelColor = Colors.red[700]!;
+    }
+
+    bool stressLevelChanged = newStressLevel != currentMood;
+
+    // ─── Fatigue calculation ─────────────────────────────────────────────────
+    double thetaPower = eegBands['Theta']!;
+    double deltaPower = eegBands['Delta']!;
+    double betaPower = eegBands['Beta']!;
+    double thetaBetaRatio = (thetaPower + 1e-6) / (betaPower + 1e-6);
+    double deltaBetaRatio = (deltaPower + 1e-6) / (betaPower + 1e-6);
+
+    double attentionDrop = (100 - attention) / 100.0;
+
+    double fatigueRaw = 0.0;
+    fatigueRaw += 0.40 * (thetaBetaRatio / 5.0).clamp(0.0, 1.0);
+    fatigueRaw += 0.25 * (deltaBetaRatio / 3.0).clamp(0.0, 1.0);
+    fatigueRaw += 0.35 * attentionDrop.clamp(0.0, 1.0);
+
+    fatigueScore = fatigueRaw * signalQuality;
+
+    String newFatigueLevel;
+    String newFatigueEmoji;
+    Color fatigueLevelColor;
+
+    if (fatigueScore <= 0.25) {
+      newFatigueLevel = "Alert";
+      newFatigueEmoji = "⚡";
+      fatigueLevelColor = Colors.green[700]!;
+    } else if (fatigueScore <= 0.45) {
+      newFatigueLevel = "Mild Fatigue";
+      newFatigueEmoji = "🥱";
+      fatigueLevelColor = Colors.yellow[800]!;
+    } else if (fatigueScore <= 0.65) {
+      newFatigueLevel = "Moderate Fatigue";
+      newFatigueEmoji = "😴";
+      fatigueLevelColor = Colors.orange[700]!;
+    } else {
+      newFatigueLevel = "High Fatigue";
+      newFatigueEmoji = "☠️";
+      fatigueLevelColor = Colors.red[800]!;
+    }
+
+    final emotionProvider =
+        Provider.of<EmotionProvider>(context, listen: false);
+
+    emotionProvider.updateStress(
+      emotion: newStressLevel,
+      emoji: newStressEmoji,
+      color: stressLevelColor,
+    );
 
     setState(() {
+      currentMood = newStressLevel;
+      moodEmoji = newStressEmoji;
+      moodColor = stressLevelColor;
+
+      fatigueLevel = newFatigueLevel;
+      fatigueEmoji = newFatigueEmoji;
+      fatigueColor = fatigueLevelColor;
+
       stressScore = hybridStress;
       relaxedScore = hybridRelaxed;
     });
 
-    String candidateMood;
-    String candidateEmoji;
-
-    if (hybridStress > moodThresholdHigh ||
-        (_previousMood == "Stressed" && hybridStress > moodThresholdLow)) {
-      candidateMood = "Stressed";
-      candidateEmoji = "😰";
-    } else if (hybridRelaxed > moodThresholdHigh ||
-        (_previousMood == "Relaxed" && hybridRelaxed > moodThresholdLow)) {
-      candidateMood = "Relaxed";
-      candidateEmoji = "🧘‍♂️";
-    } else {
-      candidateMood = "Neutral";
-      candidateEmoji = "😐";
-    }
-
-    bool moodChanged = candidateMood != currentMood;
-
-    if (moodChanged) {
-      setState(() {
-        currentMood = candidateMood;
-        moodEmoji = candidateEmoji;
-        _previousMood = candidateMood;
-      });
-    }
-
-    // ────────────────────────────────────────────────
-    //  ADD THIS BLOCK → Update shared EmotionProvider
-    // ────────────────────────────────────────────────
-    final emotionProvider = Provider.of<EmotionProvider>(
-      context,
-      listen: false,
-    );
-
-    // Use the same values you're already showing in Member2Page
-    // (or map them differently if you want more granular names in Member1)
-    emotionProvider.updateEmotion(
-      candidateMood, // "Stressed", "Relaxed", "Neutral"
-      candidateEmoji, // "😰", "🧘‍♂️", "😐"
-    );
-
-    // Optional: debug print to confirm it's working
-    print("Emotion → Member1Page: $candidateMood ${candidateEmoji}");
-
-    // Throttled save to Firestore
-    // Save every 10 seconds OR when mood changes to Stressed/Relaxed
-    final now = DateTime.now();
-    final timeToSave = _lastSavedTime == null ||
-        now.difference(_lastSavedTime!) >= _saveInterval;
-
-    final importantChange = moodChanged &&
-        (candidateMood == "Stressed" || candidateMood == "Relaxed");
-
-    if (timeToSave || importantChange) {
-      _saveToFirestore();
-      _lastSavedTime = now;
-    }
-
+    // Persistence alert (now uses hybridStress > 0.7)
     if (hybridStress > 0.7) {
       _stressTimer ??= Timer(stressPersistenceThreshold, () {
         if (mounted) setState(() => showRestAlert = true);
@@ -558,6 +615,19 @@ class _Member2PageState extends State<Member2Page> {
       _stressTimer?.cancel();
       _stressTimer = null;
       if (mounted) setState(() => showRestAlert = false);
+    }
+
+    // Firestore save
+    final now = DateTime.now();
+    final timeToSave = _lastSavedTime == null ||
+        now.difference(_lastSavedTime!) >= _saveInterval;
+
+    final importantChange = stressLevelChanged &&
+        (newStressLevel == "High Stress" || newStressLevel == "Very Relaxed");
+
+    if (timeToSave || importantChange) {
+      _saveToFirestore();
+      _lastSavedTime = now;
     }
   }
 
@@ -731,16 +801,35 @@ class _Member2PageState extends State<Member2Page> {
     return Colors.orange;
   }
 
-  String _getMoodMessage() {
+  String _getStressMessage() {
     switch (currentMood) {
-      case "Stressed":
-        return "High mental load detected.\nTake a deep breath, step away, or try a quick meditation.";
+      case "Very Relaxed":
+        return "Deep calm detected.\nIdeal mental state – enjoy the ride.";
       case "Relaxed":
-        return "You're in a calm and focused state.\nPerfect for learning, creativity, or rest.";
+        return "Calm and focused.\nPerfect for safe, steady riding.";
       case "Neutral":
-        return "Your mind is balanced.\nNormal cognitive activity detected.";
+        return "Balanced mental activity.\nNormal and stable.";
+      case "Elevated":
+        return "Mild tension rising.\nTake slow breaths, stay aware.";
+      case "High Stress":
+        return "High mental load detected.\nConsider pulling over if it persists.";
       default:
         return "Establishing connection with brain signals...";
+    }
+  }
+
+  String _getFatigueMessage() {
+    switch (fatigueLevel) {
+      case "Alert":
+        return "Fully alert and sharp.\nSafe to continue riding.";
+      case "Mild Fatigue":
+        return "Slight tiredness detected.\nStay hydrated, maintain focus.";
+      case "Moderate Fatigue":
+        return "Moderate fatigue building.\nPlan a short break in the next 20–30 min.";
+      case "High Fatigue":
+        return "High drowsiness risk!\nPull over safely as soon as possible.";
+      default:
+        return "Waiting for stable signal...";
     }
   }
 
@@ -957,7 +1046,7 @@ class _Member2PageState extends State<Member2Page> {
 
     return Scaffold(
       appBar: AppBar(
-        title: const Text("EEG Stress & Mood Detection"),
+        title: const Text("EEG Stress & Fatigue Monitor"),
         backgroundColor: Colors.deepPurple,
         foregroundColor: Colors.white,
         elevation: 4,
@@ -969,7 +1058,7 @@ class _Member2PageState extends State<Member2Page> {
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.stretch,
               children: [
-                // Replace this part in build() → inside the first Card
+                // Connection status card (unchanged)
                 Card(
                   elevation: 6,
                   shape: RoundedRectangleBorder(
@@ -978,7 +1067,6 @@ class _Member2PageState extends State<Member2Page> {
                     padding: const EdgeInsets.all(20),
                     child: Column(
                       children: [
-                        // Status row
                         Row(
                           mainAxisAlignment: MainAxisAlignment.center,
                           children: [
@@ -998,7 +1086,6 @@ class _Member2PageState extends State<Member2Page> {
                             ),
                           ],
                         ),
-
                         if (errorMessage != null &&
                             errorMessage!.isNotEmpty) ...[
                           const SizedBox(height: 16),
@@ -1027,13 +1114,8 @@ class _Member2PageState extends State<Member2Page> {
                             ),
                           ),
                         ],
-
                         const SizedBox(height: 16),
-
-                        // Optional: small retry button (useful during development)
-                        if (!context
-                            .watch<BluetoothManager>()
-                            .isConnected(deviceName))
+                        if (!isConnected)
                           OutlinedButton.icon(
                             icon: const Icon(Icons.refresh, size: 18),
                             label: const Text("Retry connection"),
@@ -1043,23 +1125,23 @@ class _Member2PageState extends State<Member2Page> {
                     ),
                   ),
                 ),
+
                 const SizedBox(height: 30),
+
+                // Stress Card (updated with dynamic color)
                 Card(
                   elevation: 10,
                   shape: RoundedRectangleBorder(
-                    borderRadius: BorderRadius.circular(24),
-                  ),
+                      borderRadius: BorderRadius.circular(24)),
                   child: Container(
                     padding: const EdgeInsets.symmetric(
-                      vertical: 40,
-                      horizontal: 20,
-                    ),
+                        vertical: 40, horizontal: 20),
                     decoration: BoxDecoration(
                       borderRadius: BorderRadius.circular(24),
                       gradient: LinearGradient(
                         colors: [
-                          _getStressColor().withOpacity(0.25),
-                          _getStressColor().withOpacity(0.05),
+                          moodColor.withOpacity(0.25),
+                          moodColor.withOpacity(0.05),
                         ],
                         begin: Alignment.topLeft,
                         end: Alignment.bottomRight,
@@ -1074,25 +1156,73 @@ class _Member2PageState extends State<Member2Page> {
                           style: TextStyle(
                             fontSize: 34,
                             fontWeight: FontWeight.w900,
-                            color: _getStressColor(),
+                            color: moodColor,
                             letterSpacing: 1.2,
                           ),
                         ),
                         const SizedBox(height: 16),
                         Text(
                           hasGoodSignal
-                              ? _getMoodMessage()
+                              ? _getStressMessage()
                               : "Waiting for stable brain signal...",
                           textAlign: TextAlign.center,
                           style: const TextStyle(
-                            fontSize: 16,
-                            color: Colors.black87,
-                          ),
+                              fontSize: 16, color: Colors.black87),
                         ),
                       ],
                     ),
                   ),
                 ),
+
+                const SizedBox(height: 30),
+
+                // // ─── NEW: Fatigue Card ────────────────────────────────────────────────
+                // Card(
+                //   elevation: 10,
+                //   shape: RoundedRectangleBorder(
+                //       borderRadius: BorderRadius.circular(24)),
+                //   child: Container(
+                //     padding: const EdgeInsets.symmetric(
+                //         vertical: 40, horizontal: 20),
+                //     decoration: BoxDecoration(
+                //       borderRadius: BorderRadius.circular(24),
+                //       gradient: LinearGradient(
+                //         colors: [
+                //           fatigueColor.withOpacity(0.25),
+                //           fatigueColor.withOpacity(0.05),
+                //         ],
+                //         begin: Alignment.topLeft,
+                //         end: Alignment.bottomRight,
+                //       ),
+                //     ),
+                //     child: Column(
+                //       children: [
+                //         Text(fatigueEmoji,
+                //             style: const TextStyle(fontSize: 90)),
+                //         const SizedBox(height: 20),
+                //         Text(
+                //           fatigueLevel,
+                //           style: TextStyle(
+                //             fontSize: 34,
+                //             fontWeight: FontWeight.w900,
+                //             color: fatigueColor,
+                //             letterSpacing: 1.2,
+                //           ),
+                //         ),
+                //         const SizedBox(height: 16),
+                //         Text(
+                //           hasGoodSignal
+                //               ? _getFatigueMessage()
+                //               : "Waiting for stable brain signal...",
+                //           textAlign: TextAlign.center,
+                //           style: const TextStyle(
+                //               fontSize: 16, color: Colors.black87),
+                //         ),
+                //       ],
+                //     ),
+                //   ),
+                // ),
+
                 const SizedBox(height: 30),
                 Card(
                   elevation: 6,
@@ -1299,8 +1429,7 @@ class _Member2PageState extends State<Member2Page> {
                     elevation: 8,
                     color: Colors.red.shade50,
                     shape: RoundedRectangleBorder(
-                      borderRadius: BorderRadius.circular(16),
-                    ),
+                        borderRadius: BorderRadius.circular(16)),
                     child: Padding(
                       padding: const EdgeInsets.all(16),
                       child: Row(
@@ -1310,7 +1439,8 @@ class _Member2PageState extends State<Member2Page> {
                           const SizedBox(width: 12),
                           const Expanded(
                             child: Text(
-                              "High stress detected for too long!\nFor safety, pull over and rest before continuing your ride.",
+                              "High stress / fatigue detected for too long!\n"
+                              "For safety, pull over and rest before continuing your ride.",
                               style: TextStyle(
                                 color: Colors.red,
                                 fontSize: 16,
@@ -1323,6 +1453,7 @@ class _Member2PageState extends State<Member2Page> {
                     ),
                   ),
                 ],
+
                 const SizedBox(height: 40),
 
                 // ────────────────────────────────────────────────

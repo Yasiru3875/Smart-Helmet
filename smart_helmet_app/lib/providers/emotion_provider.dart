@@ -3,32 +3,79 @@ import 'package:flutter/material.dart';
 class EmotionState {
   final String emotion;
   final String emoji;
+  final Color color;
 
   EmotionState({
-    this.emotion = "Neutral",
-    this.emoji = "😐",
+    this.emotion = "No Signal",
+    this.emoji = "📡",
+    this.color = Colors.grey,
   });
 
-  EmotionState copyWith({String? emotion, String? emoji}) {
+  EmotionState copyWith({
+    String? emotion,
+    String? emoji,
+    Color? color,
+  }) {
     return EmotionState(
       emotion: emotion ?? this.emotion,
       emoji: emoji ?? this.emoji,
+      color: color ?? this.color,
     );
   }
 }
 
 class EmotionProvider with ChangeNotifier {
-  EmotionState _state = EmotionState();
+  // Stress / Mood state
+  EmotionState _stressState = EmotionState();
 
-  EmotionState get state => _state;
+  // Fatigue state
+  EmotionState _fatigueState = EmotionState();
 
-  void updateEmotion(String emotion, String emoji) {
-    _state = _state.copyWith(emotion: emotion, emoji: emoji);
+  // Getters
+  EmotionState get stressState => _stressState;
+  EmotionState get fatigueState => _fatigueState;
+
+  // Update stress/mood
+  void updateStress({
+    required String emotion,
+    required String emoji,
+    required Color color,
+  }) {
+    _stressState = _stressState.copyWith(
+      emotion: emotion,
+      emoji: emoji,
+      color: color,
+    );
     notifyListeners();
   }
 
+  // Update fatigue
+  void updateFatigue({
+    required String emotion,
+    required String emoji,
+    required Color color,
+  }) {
+    _fatigueState = _fatigueState.copyWith(
+      emotion: emotion,
+      emoji: emoji,
+      color: color,
+    );
+    notifyListeners();
+  }
+
+  // Reset everything
   void reset() {
-    _state = EmotionState();
+    _stressState = EmotionState();
+    _fatigueState = EmotionState();
+    notifyListeners();
+  }
+
+  // Optional: combined reset when signal is lost
+  void resetOnNoSignal() {
+    _stressState =
+        EmotionState(emotion: "No Signal", emoji: "📡", color: Colors.grey);
+    _fatigueState =
+        EmotionState(emotion: "No Signal", emoji: "📡", color: Colors.grey);
     notifyListeners();
   }
 }
