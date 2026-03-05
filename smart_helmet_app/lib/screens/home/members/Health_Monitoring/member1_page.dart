@@ -16,11 +16,12 @@ import '../../../../services/bluetooth_manager.dart';
 import 'package:geolocator/geolocator.dart';
 import 'package:smart_helmet_app/providers/sensor_data_provider.dart';
 import 'package:smart_helmet_app/providers/ride_session_provider.dart';
+import 'package:smart_helmet_app/providers/emotion_provider.dart';
 // If you have auth service:
 // import '../../../../services/auth_service.dart';
 
 // NEW IMPORT (create the file in the same folder or adjust path)
-import 'weekly_report_page.dart';   // ← ADD THIS LINE
+import 'weekly_report_page.dart'; // ← ADD THIS LINE
 
 class Member1Page extends StatefulWidget {
   const Member1Page({super.key});
@@ -65,25 +66,22 @@ class _Member1PageState extends State<Member1Page> {
   bool _isSaving = false;
 
   @override
-void initState() {
-  super.initState();
-  _loadModel();
-  _startLocationTracking();
+  void initState() {
+    super.initState();
+    _loadModel();
+    _startLocationTracking();
 
-  // Important: delay connection until first frame is rendered
-  WidgetsBinding.instance.addPostFrameCallback((_) {
-    _autoConnect();
-
-    // Optional safety retry if still not connected after ~8 seconds
-    Future.delayed(const Duration(seconds: 8), () {
-      if (mounted &&
-          !context.read<BluetoothManager>().isConnected(deviceName) &&
-          heartRate == 0.0) {
-        _autoConnect(isRetry: true);
-      }
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      _autoConnect();
+      Future.delayed(const Duration(seconds: 8), () {
+        if (mounted &&
+            !context.read<BluetoothManager>().isConnected(deviceName) &&
+            heartRate == 0.0) {
+          _autoConnect(isRetry: true);
+        }
+      });
     });
-  });
-}
+  }
 
   Future<void> _loadModel() async {
     try {
@@ -91,7 +89,8 @@ void initState() {
       debugPrint("TFLite model loaded successfully");
     } catch (e) {
       debugPrint("Error loading model: $e");
-      if (mounted) setState(() => errorMessage = "Failed to load prediction model");
+      if (mounted)
+        setState(() => errorMessage = "Failed to load prediction model");
     }
   }
 
@@ -99,73 +98,73 @@ void initState() {
 // Auto-connect + retry logic
 // ────────────────────────────────────────────────
 
-Future<void> _autoConnect({bool isRetry = false}) async {
-  final btManager = context.read<BluetoothManager>();
+  Future<void> _autoConnect({bool isRetry = false}) async {
+    final btManager = context.read<BluetoothManager>();
 
-  if (btManager.isConnected(deviceName)) {
-    if (mounted) {
-      setState(() {
-        status = "Connected (already detected)";
-        errorMessage = "";
-      });
+    if (btManager.isConnected(deviceName)) {
+      if (mounted) {
+        setState(() {
+          status = "Connected (already detected)";
+          errorMessage = "";
+        });
+      }
+      _subscribeToData();
+      return;
     }
-    _subscribeToData();
-    return;
-  }
-
-  if (!mounted) return;
-
-  setState(() {
-    status = isRetry ? "Reconnecting..." : "Auto-connecting $deviceName...";
-    errorMessage = " ";
-  });
-
-  try {
-    final result = await btManager.connectToDevice(deviceName);
 
     if (!mounted) return;
 
     setState(() {
-      status = result;
+      status = isRetry ? "Reconnecting..." : "Auto-connecting $deviceName...";
+      errorMessage = " ";
     });
 
-    if (btManager.isConnected(deviceName)) {
-      reconnectAttempts = 0;
-      _subscribeToData();
+    try {
+      final result = await btManager.connectToDevice(deviceName);
+
+      if (!mounted) return;
+
       setState(() {
-        status = "Connected • SmartWatch";
-        errorMessage = "";
+        status = result;
+      });
+
+      if (btManager.isConnected(deviceName)) {
+        reconnectAttempts = 0;
+        _subscribeToData();
+        setState(() {
+          status = "Connected • SmartWatch";
+          errorMessage = "";
+        });
+      } else {
+        _handleConnectionFailure(result);
+      }
+    } catch (e) {
+      _handleConnectionFailure("Error: $e");
+    }
+  }
+
+  void _handleConnectionFailure(String reason) {
+    if (reconnectAttempts < maxReconnectAttempts) {
+      reconnectAttempts++;
+      setState(() {
+        status = "Retry ${reconnectAttempts}/${maxReconnectAttempts}...";
+        errorMessage = "$reason\nTrying again in a moment...";
+      });
+      Future.delayed(const Duration(seconds: 4), () {
+        if (mounted) _autoConnect(isRetry: true);
       });
     } else {
-      _handleConnectionFailure(result);
+      setState(() {
+        status = "Connection failed";
+        errorMessage =
+            "Could not connect after $maxReconnectAttempts attempts.\n"
+            "Make sure:\n"
+            "• Device is powered on\n"
+            "• Bluetooth is enabled\n"
+            "• Device is paired";
+      });
     }
-  } catch (e) {
-    _handleConnectionFailure("Error: $e");
   }
-}
-
-void _handleConnectionFailure(String reason) {
-  if (reconnectAttempts < maxReconnectAttempts) {
-    reconnectAttempts++;
-    setState(() {
-      status = "Retry ${reconnectAttempts}/${maxReconnectAttempts}...";
-      errorMessage = "$reason\nTrying again in a moment...";
-    });
-    Future.delayed(const Duration(seconds: 4), () {
-      if (mounted) _autoConnect(isRetry: true);
-    });
-  } else {
-    setState(() {
-      status = "Connection failed";
-      errorMessage =
-          "Could not connect after $maxReconnectAttempts attempts.\n"
-          "Make sure:\n"
-          "• Device is powered on\n"
-          "• Bluetooth is enabled\n"
-          "• Device is paired";
-    });
-  }
-}
 
   Future<void> _init() async {
     final btManager = context.read<BluetoothManager>();
@@ -196,26 +195,26 @@ void _handleConnectionFailure(String reason) {
         }
       },
       onError: (e) {
-      if (mounted) {
-        setState(() => errorMessage = "Stream error: $e");
-      }
-    },
-    onDone: () {
-      if (mounted) {
-        setState(() {
-          status = "Disconnected";
-          riskLevel = "Unknown";
-          riskColor = Colors.grey;
-        });
-
-        // Auto-reconnect attempt
-        if (reconnectAttempts < maxReconnectAttempts) {
-          Future.delayed(const Duration(seconds: 3), () {
-            if (mounted) _autoConnect(isRetry: true);
-          });
+        if (mounted) {
+          setState(() => errorMessage = "Stream error: $e");
         }
-      }
-    },
+      },
+      onDone: () {
+        if (mounted) {
+          setState(() {
+            status = "Disconnected";
+            riskLevel = "Unknown";
+            riskColor = Colors.grey;
+          });
+
+          // Auto-reconnect attempt
+          if (reconnectAttempts < maxReconnectAttempts) {
+            Future.delayed(const Duration(seconds: 3), () {
+              if (mounted) _autoConnect(isRetry: true);
+            });
+          }
+        }
+      },
     );
   }
 
@@ -312,16 +311,15 @@ void _handleConnectionFailure(String reason) {
 
       _predictWithTFLite(hr, temp);
 
-
       // FIXED: These variables must be at CLASS level (moved from inside method)
       // Add these two lines at the TOP of _Member1PageState class:
       // DateTime? _lastSavedTime;
       // final Duration _saveInterval = const Duration(seconds: 10);
 
-
       if (hr > 0 && temp > 0) {
         final now = DateTime.now();
-        if (_lastSavedTime == null || now.difference(_lastSavedTime!) >= _saveInterval) {
+        if (_lastSavedTime == null ||
+            now.difference(_lastSavedTime!) >= _saveInterval) {
           _saveToFirestore(hr, temp);
           _lastSavedTime = now;
         }
@@ -330,8 +328,6 @@ void _handleConnectionFailure(String reason) {
       debugPrint("Parse error: $e | Raw: $jsonString");
     }
   }
-
-  
 
   Future<void> _saveToFirestore(double hr, double temp) async {
     final rideProvider =
@@ -354,14 +350,14 @@ void _handleConnectionFailure(String reason) {
         "heartRate": hr,
         "bodyTemperature": temp,
         "riskLevel": riskLevel,
-        "riskColor": "#${riskColor.value.toRadixString(16).padLeft(8, '0').substring(2)}",
+        "riskColor":
+            "#${riskColor.value.toRadixString(16).padLeft(8, '0').substring(2)}",
         "userId": userId,
         "deviceName": deviceName,
 
         "createdAt": FieldValue.serverTimestamp(),
         "location": const GeoPoint(7.2000, 79.8730),
 
-        
         "rideId": rideProvider.currentRideId!,
 
         // Ride metadata (copied once per ride)
@@ -374,8 +370,6 @@ void _handleConnectionFailure(String reason) {
         "currentLocation": _currentPosition != null
             ? GeoPoint(_currentPosition!.latitude, _currentPosition!.longitude)
             : null,
-
-        
       };
 
       await _firestore.collection("health_readings").add(data);
@@ -399,7 +393,9 @@ void _handleConnectionFailure(String reason) {
     }
 
     try {
-      var input = [[hr, temp]];
+      var input = [
+        [hr, temp]
+      ];
       var output = List.filled(1, [0.0]);
       _interpreter!.run(input, output);
 
@@ -469,7 +465,8 @@ void _handleConnectionFailure(String reason) {
         } else {
           setState(() {
             status = "Connection failed";
-            errorMessage = "Failed after $maxReconnectAttempts attempts. Please check device.";
+            errorMessage =
+                "Failed after $maxReconnectAttempts attempts. Please check device.";
           });
         }
       }
@@ -509,6 +506,11 @@ void _handleConnectionFailure(String reason) {
     final btManager = context.watch<BluetoothManager>();
     final isConnected = btManager.isConnected(deviceName);
 
+    // ─── Read real emotional state from provider ───
+    final emotionProvider = context.watch<EmotionProvider>();
+    final currentEmotion = emotionProvider.state.emotion;
+    final currentEmoji = emotionProvider.state.emoji;
+
     return Scaffold(
       backgroundColor: Colors.grey[50],
       appBar: AppBar(
@@ -540,17 +542,11 @@ void _handleConnectionFailure(String reason) {
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.stretch,
               children: [
-                // Connection Status Bar
                 _buildConnectionStatus(isConnected),
-
                 const SizedBox(height: 16),
-
-                // Connection Controls
                 _buildConnectionHeader(isConnected),
-
                 const SizedBox(height: 20),
 
-                // Vital Signs Cards
                 Row(
                   children: [
                     Expanded(
@@ -579,26 +575,18 @@ void _handleConnectionFailure(String reason) {
                 ),
 
                 const SizedBox(height: 20),
-
-                // Risk Assessment Card
                 _buildRiskAssessment(),
-
                 const SizedBox(height: 20),
 
-                // Emotional State Card
-                _buildEmotionalState(isConnected),
+                // Updated: now uses real emotion from provider
+                _buildEmotionalState(isConnected, currentEmotion, currentEmoji),
 
                 const SizedBox(height: 20),
-
-                // Live Vitals Chart
                 _buildVitalsChart(),
-
                 const SizedBox(height: 40),
               ],
             ),
           ),
-
-          // Optional: small saving indicator
           if (_isSaving)
             const Positioned(
               bottom: 24,
@@ -614,15 +602,11 @@ void _handleConnectionFailure(String reason) {
                         width: 16,
                         height: 16,
                         child: CircularProgressIndicator(
-                          strokeWidth: 2.5,
-                          color: Colors.white,
-                        ),
+                            strokeWidth: 2.5, color: Colors.white),
                       ),
                       SizedBox(width: 12),
-                      Text(
-                        "Saving reading...",
-                        style: TextStyle(color: Colors.white, fontSize: 13),
-                      ),
+                      Text("Saving reading...",
+                          style: TextStyle(color: Colors.white, fontSize: 13)),
                     ],
                   ),
                 ),
@@ -670,84 +654,88 @@ void _handleConnectionFailure(String reason) {
   }
 
   // Replace _buildConnectionControls() with this
-Widget _buildConnectionHeader(bool isConnected) {
-  final btManager = context.watch<BluetoothManager>();
-  final isConnected = btManager.isConnected(deviceName);
+  Widget _buildConnectionHeader(bool isConnected) {
+    final btManager = context.watch<BluetoothManager>();
+    final isConnected = btManager.isConnected(deviceName);
 
-  return Card(
-    elevation: 2,
-    margin: const EdgeInsets.only(bottom: 16),
-    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
-    child: Padding(
-      padding: const EdgeInsets.all(16),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Row(
-            children: [
-              Icon(
-                isConnected
-                    ? Icons.bluetooth_connected
-                    : Icons.bluetooth_disabled,
-                color: isConnected ? Colors.green : Colors.orange,
+    return Card(
+      elevation: 2,
+      margin: const EdgeInsets.only(bottom: 16),
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+      child: Padding(
+        padding: const EdgeInsets.all(16),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Row(
+              children: [
+                Icon(
+                  isConnected
+                      ? Icons.bluetooth_connected
+                      : Icons.bluetooth_disabled,
+                  color: isConnected ? Colors.green : Colors.orange,
+                ),
+                const SizedBox(width: 12),
+                Expanded(
+                  child: Text(
+                    status,
+                    style: TextStyle(
+                      fontSize: 16,
+                      fontWeight: FontWeight.w600,
+                      color: isConnected
+                          ? Colors.green.shade800
+                          : Colors.orange.shade800,
+                    ),
+                  ),
+                ),
+              ],
+            ),
+            if (errorMessage.isNotEmpty) ...[
+              const SizedBox(height: 12),
+              Container(
+                padding: const EdgeInsets.all(12),
+                decoration: BoxDecoration(
+                  color: Colors.red.shade50,
+                  borderRadius: BorderRadius.circular(8),
+                  border: Border.all(color: Colors.red.shade200),
+                ),
+                child: Row(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Icon(Icons.error_outline,
+                        size: 16, color: Colors.red.shade700),
+                    const SizedBox(width: 8),
+                    Expanded(
+                      child: Text(
+                        errorMessage,
+                        style:
+                            TextStyle(color: Colors.red.shade800, fontSize: 13),
+                      ),
+                    ),
+                  ],
+                ),
               ),
-              const SizedBox(width: 12),
-              Expanded(
-                child: Text(
-                  status,
-                  style: TextStyle(
-                    fontSize: 16,
-                    fontWeight: FontWeight.w600,
-                    color: isConnected ? Colors.green.shade800 : Colors.orange.shade800,
+            ],
+            if (!isConnected) ...[
+              const SizedBox(height: 16),
+              SizedBox(
+                width: double.infinity,
+                child: OutlinedButton.icon(
+                  icon: const Icon(Icons.refresh, size: 18),
+                  label: const Text("Retry Connection"),
+                  onPressed: () => _autoConnect(),
+                  style: OutlinedButton.styleFrom(
+                    foregroundColor: Colors.blue,
+                    side: const BorderSide(color: Colors.blue),
                   ),
                 ),
               ),
             ],
-          ),
-          if (errorMessage.isNotEmpty) ...[
-            const SizedBox(height: 12),
-            Container(
-              padding: const EdgeInsets.all(12),
-              decoration: BoxDecoration(
-                color: Colors.red.shade50,
-                borderRadius: BorderRadius.circular(8),
-                border: Border.all(color: Colors.red.shade200),
-              ),
-              child: Row(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Icon(Icons.error_outline, size: 16, color: Colors.red.shade700),
-                  const SizedBox(width: 8),
-                  Expanded(
-                    child: Text(
-                      errorMessage,
-                      style: TextStyle(color: Colors.red.shade800, fontSize: 13),
-                    ),
-                  ),
-                ],
-              ),
-            ),
           ],
-          if (!isConnected) ...[
-            const SizedBox(height: 16),
-            SizedBox(
-              width: double.infinity,
-              child: OutlinedButton.icon(
-                icon: const Icon(Icons.refresh, size: 18),
-                label: const Text("Retry Connection"),
-                onPressed: () => _autoConnect(),
-                style: OutlinedButton.styleFrom(
-                  foregroundColor: Colors.blue,
-                  side: const BorderSide(color: Colors.blue),
-                ),
-              ),
-            ),
-          ],
-        ],
+        ),
       ),
-    ),
-  );
-}
+    );
+  }
 
   Widget _buildVitalCard({
     required String title,
@@ -867,7 +855,7 @@ Widget _buildConnectionHeader(bool isConnected) {
     );
   }
 
-  Widget _buildEmotionalState(bool isConnected) {
+  Widget _buildEmotionalState(bool isConnected, String emotion, String emoji) {
     return Card(
       elevation: 2,
       shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
@@ -880,10 +868,13 @@ Widget _buildConnectionHeader(bool isConnected) {
               style: TextStyle(fontSize: 16, fontWeight: FontWeight.w600),
             ),
             const SizedBox(height: 16),
-            Text(frustrationEmoji, style: const TextStyle(fontSize: 64)),
+            Text(
+              emoji,
+              style: const TextStyle(fontSize: 64),
+            ),
             const SizedBox(height: 12),
             Text(
-              frustrationState,
+              emotion,
               style: const TextStyle(
                 fontSize: 20,
                 fontWeight: FontWeight.w600,
@@ -894,7 +885,7 @@ Widget _buildConnectionHeader(bool isConnected) {
             Text(
               isConnected
                   ? "Analyzing real-time signals..."
-                  : "Connect device to detect emotional state",
+                  : "Connect EEG device to detect emotional state",
               style: const TextStyle(fontSize: 12, color: Colors.black38),
               textAlign: TextAlign.center,
             ),

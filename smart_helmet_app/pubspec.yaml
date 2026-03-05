@@ -61,6 +61,7 @@ flutter:
     - assets/icons/g-logo.png
     - assets/model.tflite
     - assets/icons/dev_team.png
+    - assets/eeg_stress_model_float32.tflite
 
 flutter_icons:
   android: true
