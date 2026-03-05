@@ -51,6 +51,7 @@ class AuthService with ChangeNotifier {
       if (user == null) return 'Registration failed – no user returned';
 
       await _firestore.collection('users').doc(user.uid).set({
+        'userName': username,
         'email': email,
         'createdAt': FieldValue.serverTimestamp(),
         'age': age,
