@@ -1,12 +1,15 @@
-// home_dashboard.dart
+// home_dashboard.dart (FULL UPDATED VERSION)
 
 import 'dart:async';
-import 'dart:math';
+import 'dart:math' as math;
 import 'package:flutter/material.dart';
 import 'package:geolocator/geolocator.dart';
 import 'package:google_maps_flutter/google_maps_flutter.dart';
 import 'package:http/http.dart' as http;
 import 'dart:convert';
+import 'package:provider/provider.dart';
+import 'package:smart_helmet_app/providers/sensor_data_provider.dart';
+import 'package:smart_helmet_app/providers/ride_session_provider.dart'; // ← NEW
 import 'package:smart_helmet_app/screens/home/members/Danger_Zone/member4_page.dart';
 
 const String apiKey = 'AIzaSyBbZVI_sO637CROKwc3hjMOB4ZmsL12ikw';
@@ -19,10 +22,7 @@ class HomeDashboard extends StatefulWidget {
     required String destinationName,
   }) onStartJourney;
 
-  // NEW: Callback to end journey from parent
   final VoidCallback? onEndJourney;
-
-  // NEW: To know if journey is active (controlled by parent)
   final bool isJourneyActive;
 
   const HomeDashboard({
@@ -48,19 +48,12 @@ class _HomeDashboardState extends State<HomeDashboard> {
   BitmapDescriptor? _motorcycleIcon;
 
   bool _isRoutePlanned = false;
-  bool _isJourneyStarted = false; // Local state synced with parent
+  bool _isJourneyStarted = false;
+
+  List<dynamic> _placeSuggestions = [];
 
   List<LatLng> _routePoints = [];
 
-  Timer? _sensorTimer;
-  Timer? _locationTimer;
-
-  int heartRate = 78;
-  double temperature = 36.8;
-  int stressLevel = 32;
-  bool dangerAlert = false;
-
-  List<dynamic> _placeSuggestions = [];
   Timer? _debounceTimer;
 
   List<Map<String, dynamic>> _routes = [];
@@ -73,7 +66,6 @@ class _HomeDashboardState extends State<HomeDashboard> {
     _getCurrentLocationAndSetup();
     _destinationController.addListener(_onDestinationChanged);
 
-    // Sync with parent
     _isJourneyStarted = widget.isJourneyActive;
   }
 
@@ -118,7 +110,8 @@ class _HomeDashboardState extends State<HomeDashboard> {
     }
 
     Position pos = await Geolocator.getCurrentPosition(
-        desiredAccuracy: LocationAccuracy.high);
+      desiredAccuracy: LocationAccuracy.high,
+    );
     setState(() => _currentPosition = pos);
     _addCurrentLocationMarker(pos);
   }
@@ -236,10 +229,12 @@ class _HomeDashboardState extends State<HomeDashboard> {
           ));
 
           final bounds = LatLngBounds(
-            southwest: LatLng(min(_currentPosition!.latitude, dest.latitude),
-                min(_currentPosition!.longitude, dest.longitude)),
-            northeast: LatLng(max(_currentPosition!.latitude, dest.latitude),
-                max(_currentPosition!.longitude, dest.longitude)),
+            southwest: LatLng(
+                math.min(_currentPosition!.latitude, dest.latitude),
+                math.min(_currentPosition!.longitude, dest.longitude)),
+            northeast: LatLng(
+                math.max(_currentPosition!.latitude, dest.latitude),
+                math.max(_currentPosition!.longitude, dest.longitude)),
           );
           _mapController
               ?.animateCamera(CameraUpdate.newLatLngBounds(bounds, 100));
@@ -256,42 +251,26 @@ class _HomeDashboardState extends State<HomeDashboard> {
     _displayRoutes();
   }
 
+  // In _startJourney()
   void _startJourney() {
-    if (!_isRoutePlanned || _routes.isEmpty) {
+    if (!_isRoutePlanned || _routes.isEmpty || _currentPosition == null) {
       _showSnackBar('Please plan a route first');
       return;
     }
 
-    if (_currentPosition == null) {
-      _showSnackBar('Current location not available');
-      return;
-    }
+    final rideProvider =
+        Provider.of<RideSessionProvider>(context, listen: false);
 
-    // Get the selected route
+    rideProvider.startNewRide(
+      currentPosition: _currentPosition!,
+      destination: _destinationController.text.trim(),
+    );
+
+    // Proceed with journey start (switch tab, etc.)
     final selectedRoute = _routes[_selectedRouteIndex];
     final encodedPolyline = selectedRoute['overview_polyline']['points'];
     final List<LatLng> routePoints = _decodePolyline(encodedPolyline);
 
-    if (routePoints.isEmpty) {
-      _showSnackBar('Failed to decode route');
-      return;
-    }
-
-    // // Navigate to Member4Page with full route data
-    // Navigator.push(
-    //   context,
-    //   MaterialPageRoute(
-    //     builder: (context) => Member4Page(
-    //       predefinedStart:
-    //           LatLng(_currentPosition!.latitude, _currentPosition!.longitude),
-    //       predefinedEnd: routePoints.last,
-    //       predefinedRoute: routePoints, // ← This is crucial!
-    //       destinationName: _destinationController.text.trim(),
-    //       isJourneyActive: true, // Starts live sensors and updates
-    //     ),
-    //   ),
-    // );
-    // Just notify parent — no push!
     widget.onStartJourney(
       start: LatLng(_currentPosition!.latitude, _currentPosition!.longitude),
       end: routePoints.last,
@@ -299,14 +278,21 @@ class _HomeDashboardState extends State<HomeDashboard> {
       destinationName: _destinationController.text.trim(),
     );
 
-    // Optional: visual feedback
     ScaffoldMessenger.of(context).showSnackBar(
-      const SnackBar(
-          content: Text('Journey started — switched to Danger Zone')),
+      const SnackBar(content: Text('Ride started – logging sensor data')),
     );
   }
 
+// In _endJourney()
   void _endJourney() {
+    final rideProvider =
+        Provider.of<RideSessionProvider>(context, listen: false);
+
+    rideProvider.endCurrentRide(
+      finalPosition: _currentPosition,
+      totalDistance: 0.0, // ← replace with real tracked distance if you have it
+    );
+
     widget.onEndJourney?.call();
 
     setState(() {
@@ -315,14 +301,18 @@ class _HomeDashboardState extends State<HomeDashboard> {
       _polylines.clear();
       _markers.removeWhere((m) =>
           m.markerId.value == 'destination' ||
-          m.markerId.value == 'current_location'); // or keep current marker
+          m.markerId.value == 'current_location');
       _routePoints = [];
       _destinationController.clear();
       _routes = [];
       _placeSuggestions = [];
     });
 
-    _centerOnCurrentLocation(); // ← reset view to current location
+    _centerOnCurrentLocation();
+
+    ScaffoldMessenger.of(context).showSnackBar(
+      const SnackBar(content: Text('Ride ended – sensor logging stopped')),
+    );
   }
 
   List<LatLng> _decodePolyline(String encoded) {
@@ -355,16 +345,6 @@ class _HomeDashboardState extends State<HomeDashboard> {
     return points;
   }
 
-  @override
-  void dispose() {
-    _debounceTimer?.cancel();
-    _destinationController.removeListener(_onDestinationChanged);
-    _locationTimer?.cancel();
-    _sensorTimer?.cancel();
-    _destinationController.dispose();
-    super.dispose();
-  }
-
   void _centerOnCurrentLocation() async {
     if (_currentPosition == null || _mapController == null) {
       _showSnackBar('Current location not available');
@@ -382,7 +362,6 @@ class _HomeDashboardState extends State<HomeDashboard> {
       ),
     );
 
-    // Optional: update marker rotation if needed
     _addCurrentLocationMarker(_currentPosition!);
   }
 
@@ -395,24 +374,35 @@ class _HomeDashboardState extends State<HomeDashboard> {
       _isRoutePlanned = false;
       _polylines.clear();
       _markers.removeWhere((m) => m.markerId.value == 'destination');
-
-      // Optional: also stop showing any journey-related UI if not started
-      // (but since journey not started yet, usually not needed)
     });
 
-    // Center map on current location
     _centerOnCurrentLocation();
   }
 
   Widget _buildSensorItem(IconData icon, String value, Color color) {
-    return Column(children: [
-      Icon(icon, size: 26, color: color),
-      const SizedBox(height: 4),
-      Text(value,
+    return Column(
+      children: [
+        Icon(icon, size: 26, color: color),
+        const SizedBox(height: 4),
+        Text(
+          value,
           style: const TextStyle(
-              color: Colors.white, fontSize: 11, fontWeight: FontWeight.bold),
-          textAlign: TextAlign.center),
-    ]);
+            color: Colors.white,
+            fontSize: 11,
+            fontWeight: FontWeight.bold,
+          ),
+          textAlign: TextAlign.center,
+        ),
+      ],
+    );
+  }
+
+  @override
+  void dispose() {
+    _debounceTimer?.cancel();
+    _destinationController.removeListener(_onDestinationChanged);
+    _destinationController.dispose();
+    super.dispose();
   }
 
   @override
@@ -420,6 +410,16 @@ class _HomeDashboardState extends State<HomeDashboard> {
     final screenWidth = MediaQuery.of(context).size.width;
     final buttonPadding = screenWidth < 400 ? 24.0 : 40.0;
     final buttonFontSize = screenWidth < 400 ? 16.0 : 18.0;
+
+    // Listen to live sensor data
+    final sensor = Provider.of<SensorDataProvider>(context);
+
+    final hrColor = sensor.heartRate > 100 ? Colors.red : Colors.pinkAccent;
+    final tempColor = sensor.temperature > 37.5 ? Colors.orange : Colors.cyan;
+    final stressColor =
+        sensor.stressLevel > 65 ? Colors.deepOrange : Colors.amber;
+    final alertColor = sensor.dangerAlert ? Colors.red : Colors.green;
+    final alertText = sensor.dangerAlert ? 'ALERT' : 'SAFE';
 
     return Scaffold(
       body: _currentPosition == null
@@ -442,7 +442,6 @@ class _HomeDashboardState extends State<HomeDashboard> {
                     ),
                     onMapCreated: (controller) {
                       _mapController = controller;
-                      // Optional: center immediately after map is ready
                       if (_currentPosition != null) {
                         _centerOnCurrentLocation();
                       }
@@ -459,10 +458,9 @@ class _HomeDashboardState extends State<HomeDashboard> {
                     padding: const EdgeInsets.only(top: 120, bottom: 90),
                   ),
 
-                  // Floating "My Location" button
                   Positioned(
                     right: 16,
-                    bottom: 140, // Adjust if sensor bar height changes
+                    bottom: 140,
                     child: FloatingActionButton(
                       mini: true,
                       backgroundColor: Colors.white,
@@ -474,7 +472,6 @@ class _HomeDashboardState extends State<HomeDashboard> {
                     ),
                   ),
 
-                  // Search + controls panel
                   Positioned(
                     top: 0,
                     left: 0,
@@ -498,28 +495,22 @@ class _HomeDashboardState extends State<HomeDashboard> {
                           child: Column(
                             mainAxisSize: MainAxisSize.min,
                             children: [
-                              // Search field with dynamic suffix icon
                               TextField(
                                 controller: _destinationController,
                                 textInputAction: TextInputAction.go,
                                 onSubmitted: (_) => _planRoute(),
                                 decoration: InputDecoration(
                                   hintText: 'Search destination',
-                                  prefixIcon: const Icon(
-                                    Icons.search,
-                                    color: Colors.indigo,
-                                  ),
-                                  suffixIcon: _destinationController
-                                          .text.isNotEmpty
-                                      ? IconButton(
-                                          icon: const Icon(
-                                            Icons.clear,
-                                            color: Colors.grey,
-                                          ),
-                                          onPressed:
-                                              _resetMapAndSearch, // ← full reset + center
-                                        )
-                                      : null, // hide directions icon when empty (cleaner UX)
+                                  prefixIcon: const Icon(Icons.search,
+                                      color: Colors.indigo),
+                                  suffixIcon:
+                                      _destinationController.text.isNotEmpty
+                                          ? IconButton(
+                                              icon: const Icon(Icons.clear,
+                                                  color: Colors.grey),
+                                              onPressed: _resetMapAndSearch,
+                                            )
+                                          : null,
                                   filled: true,
                                   fillColor: Colors.grey[50],
                                   border: OutlineInputBorder(
@@ -527,12 +518,9 @@ class _HomeDashboardState extends State<HomeDashboard> {
                                     borderSide: BorderSide.none,
                                   ),
                                   contentPadding: const EdgeInsets.symmetric(
-                                    vertical: 0,
-                                    horizontal: 12,
-                                  ),
+                                      vertical: 0, horizontal: 12),
                                 ),
                               ),
-
                               if (_placeSuggestions.isNotEmpty)
                                 Container(
                                   constraints:
@@ -570,10 +558,7 @@ class _HomeDashboardState extends State<HomeDashboard> {
                                     },
                                   ),
                                 ),
-
                               const SizedBox(height: 16),
-
-                              // START / END buttons
                               Row(
                                 mainAxisAlignment: MainAxisAlignment.center,
                                 children: [
@@ -598,8 +583,8 @@ class _HomeDashboardState extends State<HomeDashboard> {
                                         vertical: 14,
                                       ),
                                       shape: RoundedRectangleBorder(
-                                        borderRadius: BorderRadius.circular(30),
-                                      ),
+                                          borderRadius:
+                                              BorderRadius.circular(30)),
                                     ),
                                   ),
                                   const SizedBox(width: 16),
@@ -620,13 +605,12 @@ class _HomeDashboardState extends State<HomeDashboard> {
                                         vertical: 14,
                                       ),
                                       shape: RoundedRectangleBorder(
-                                        borderRadius: BorderRadius.circular(30),
-                                      ),
+                                          borderRadius:
+                                              BorderRadius.circular(30)),
                                     ),
                                   ),
                                 ],
                               ),
-
                               if (_routes.isNotEmpty) ...[
                                 const SizedBox(height: 12),
                                 SizedBox(
@@ -663,7 +647,6 @@ class _HomeDashboardState extends State<HomeDashboard> {
                     ),
                   ),
 
-                  // Journey active indicator
                   if (_isJourneyStarted)
                     Positioned(
                       top: MediaQuery.of(context).padding.top + 140,
@@ -672,14 +655,12 @@ class _HomeDashboardState extends State<HomeDashboard> {
                       child: Center(
                         child: Container(
                           padding: const EdgeInsets.symmetric(
-                            horizontal: 20,
-                            vertical: 12,
-                          ),
+                              horizontal: 20, vertical: 12),
                           decoration: BoxDecoration(
                             color: Colors.blue[900],
                             borderRadius: BorderRadius.circular(30),
                             boxShadow: const [
-                              BoxShadow(color: Colors.black38, blurRadius: 8),
+                              BoxShadow(color: Colors.black38, blurRadius: 8)
                             ],
                           ),
                           child: const Row(
@@ -702,7 +683,11 @@ class _HomeDashboardState extends State<HomeDashboard> {
                       ),
                     ),
 
-                  // Bottom sensor bar
+                  // ────────────────────────────────────────────────
+                  // BOTTOM SENSOR BAR – NOW SHOWS LIVE DATA
+                  // ────────────────────────────────────────────────
+                  // ... inside build method ...
+
                   Positioned(
                     bottom: 0,
                     left: 0,
@@ -712,44 +697,59 @@ class _HomeDashboardState extends State<HomeDashboard> {
                       decoration: BoxDecoration(
                         color: Colors.black87,
                         borderRadius: const BorderRadius.vertical(
-                          top: Radius.circular(20),
-                        ),
+                            top: Radius.circular(20)),
                         boxShadow: const [
                           BoxShadow(
-                            color: Colors.black38,
-                            blurRadius: 8,
-                            offset: Offset(0, -2),
-                          ),
+                              color: Colors.black38,
+                              blurRadius: 8,
+                              offset: Offset(0, -2)),
                         ],
                       ),
                       child: SafeArea(
                         top: false,
-                        child: Row(
-                          mainAxisAlignment: MainAxisAlignment.spaceEvenly,
-                          children: [
-                            _buildSensorItem(
-                              Icons.favorite,
-                              '$heartRate bpm',
-                              heartRate > 100 ? Colors.red : Colors.pinkAccent,
-                            ),
-                            _buildSensorItem(
-                              Icons.thermostat,
-                              '${temperature.toStringAsFixed(1)}°C',
-                              temperature > 37.5 ? Colors.orange : Colors.cyan,
-                            ),
-                            _buildSensorItem(
-                              Icons.psychology,
-                              '$stressLevel%',
-                              stressLevel > 65
-                                  ? Colors.deepOrange
-                                  : Colors.amber,
-                            ),
-                            _buildSensorItem(
-                              dangerAlert ? Icons.warning_amber : Icons.shield,
-                              dangerAlert ? 'ALERT' : 'SAFE',
-                              dangerAlert ? Colors.red : Colors.green,
-                            ),
-                          ],
+                        child: Consumer<SensorDataProvider>(
+                          builder: (context, sensor, child) {
+                            final hrColor = sensor.heartRate > 100
+                                ? Colors.red
+                                : Colors.pinkAccent;
+                            final tempColor = sensor.temperature > 37.5
+                                ? Colors.orange
+                                : Colors.cyan;
+                            final stressColor = sensor.stressLevel > 65
+                                ? Colors.deepOrange
+                                : Colors.amber;
+                            final alertColor =
+                                sensor.dangerAlert ? Colors.red : Colors.green;
+                            final alertText =
+                                sensor.dangerAlert ? 'ALERT' : 'SAFE';
+
+                            return Row(
+                              mainAxisAlignment: MainAxisAlignment.spaceEvenly,
+                              children: [
+                                _buildSensorItem(Icons.favorite,
+                                    '${sensor.heartRate} bpm', hrColor),
+                                _buildSensorItem(
+                                  Icons.thermostat,
+                                  '${sensor.temperature.toStringAsFixed(1)}°C',
+                                  tempColor,
+                                ),
+                                _buildSensorItem(
+                                  Icons.psychology,
+                                  '${sensor.stressLevel}%',
+                                  stressColor,
+                                ),
+                                _buildSensorItem(
+                                  sensor.isRideRisky
+                                      ? Icons.warning
+                                      : Icons.verified_user,
+                                  sensor.isRideRisky ? 'RISKY' : 'SAFE',
+                                  sensor.isRideRisky
+                                      ? Colors.redAccent[700]!
+                                      : Colors.green[700]!,
+                                ),
+                              ],
+                            );
+                          },
                         ),
                       ),
                     ),

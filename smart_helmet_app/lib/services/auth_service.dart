@@ -1,10 +1,12 @@
-// services/auth_service.dart
+import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:google_sign_in/google_sign_in.dart';
 
 class AuthService with ChangeNotifier {
   final FirebaseAuth _auth = FirebaseAuth.instance;
+  final FirebaseFirestore _firestore = FirebaseFirestore.instance;
   final GoogleSignIn _googleSignIn = GoogleSignIn(
     scopes: ['email'],
   );
@@ -18,61 +20,100 @@ class AuthService with ChangeNotifier {
   bool get isLoggedIn => currentUser != null;
 
   // Email/Password Sign In
+
+  // ── Email/Password Sign In ───────────────────────────────────────────────
+
   Future<String?> signIn(String email, String password) async {
     try {
-      await _auth.signInWithEmailAndPassword(email: email, password: password);
+      await _auth.signInWithEmailAndPassword(
+        email: email.trim(),
+        password: password.trim(),
+      );
       return null;
     } on FirebaseAuthException catch (e) {
       return e.message ?? 'Sign in failed';
     } catch (e) {
+      debugPrint('Sign-in error: $e');
       return 'Sign in failed';
     }
   }
 
-  // Email/Password Register
-  Future<String?> register(String email, String password) async {
+  // ── Email/Password Registration + Save profile to Firestore ──────────────
+  Future<String?> register({
+    required String username,
+    required String email,
+    required String password,
+    required int age,
+    required String gender,
+    required double heightCm,
+    required double weightKg,
+  }) async {
     try {
-      await _auth.createUserWithEmailAndPassword(
-          email: email, password: password);
-      return null;
+      final credential = await _auth.createUserWithEmailAndPassword(
+        email: email,
+        password: password,
+      );
+
+      final user = credential.user;
+      if (user == null) return 'Registration failed – no user returned';
+
+      await _firestore.collection('users').doc(user.uid).set({
+        'userName': username,
+        'email': email,
+        'createdAt': FieldValue.serverTimestamp(),
+        'age': age,
+        'gender': gender,
+        'heightCm': heightCm,
+        'weightKg': weightKg,
+      });
+
+      return null; // ← success = null error
     } on FirebaseAuthException catch (e) {
-      return e.message ?? 'Registration failed';
+      return e.message ?? 'Authentication failed';
+    } on FirebaseException catch (e) {
+      return e.message ?? 'Database error';
     } catch (e) {
-      return 'Registration failed';
+      return 'Unexpected error: $e';
     }
   }
 
-  // Google Sign-In
+  // ── Google Sign-In ───────────────────────────────────────────────────────
   Future<String?> signInWithGoogle() async {
     try {
-      // Trigger the Google Sign In flow
       final GoogleSignInAccount? googleUser = await _googleSignIn.signIn();
       if (googleUser == null) {
         return 'Google sign in cancelled';
       }
 
-      // Obtain the auth details from the request
       final GoogleSignInAuthentication googleAuth =
           await googleUser.authentication;
 
-      // Create a new credential
       final credential = GoogleAuthProvider.credential(
         accessToken: googleAuth.accessToken,
         idToken: googleAuth.idToken,
       );
 
-      // Sign in to Firebase with the Google credential
       await _auth.signInWithCredential(credential);
+
+      // Optional: If this is a new user, you could create a Firestore doc here too
+      // But most apps handle it via an auth state listener + onCreate trigger
+
       return null;
     } on FirebaseAuthException catch (e) {
       return e.message ?? 'Google sign in failed';
     } catch (e) {
-      return 'Google sign in failed: ${e.toString()}';
+      debugPrint('Google sign-in error: $e');
+      return 'Google sign in failed';
     }
   }
 
+  // ── Sign Out ─────────────────────────────────────────────────────────────
   Future<void> signOut() async {
-    await _googleSignIn.signOut();
-    await _auth.signOut();
+    try {
+      await _googleSignIn.signOut();
+      await _auth.signOut();
+    } catch (e) {
+      debugPrint('Sign out error: $e');
+    }
   }
 }

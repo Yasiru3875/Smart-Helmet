@@ -30,6 +30,7 @@ dependencies:
   flutter_bluetooth_serial: ^0.4.0
 
   permission_handler: ^11.3.1
+  collection: ^1.18.0
 
   cupertino_icons: ^1.0.8
   firebase_database: ^11.3.10
@@ -38,6 +39,11 @@ dependencies:
 
   flutter_staggered_animations: ^1.1.1
   percent_indicator: ^4.2.3
+  path_provider: ^2.1.2
+  pdf: ^3.10.8
+  printing: ^5.12.0
+  screenshot: ^3.0.0
+  share_plus: ^7.2.1
 
   pdf: ^3.11.1 # required for creating PDF documents
   printing: ^5.13.3 # required for preview/share/print PDF
@@ -58,6 +64,7 @@ flutter:
     - assets/icons/g-logo.png
     - assets/model.tflite
     - assets/icons/dev_team.png
+    - assets/eeg_stress_model_float32.tflite
 
 flutter_icons:
   android: true

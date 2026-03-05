@@ -1,7 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_bluetooth_serial/flutter_bluetooth_serial.dart';
 
-import 'bluetooth_manager.dart'; // ← make sure this file is also imported correctly
+import 'bluetooth_manager.dart'; // Your BluetoothManager class
 
 class BluetoothConnectDialog extends StatefulWidget {
   final BluetoothManager manager;
@@ -15,90 +15,195 @@ class BluetoothConnectDialog extends StatefulWidget {
 class _BluetoothConnectDialogState extends State<BluetoothConnectDialog> {
   List<BluetoothDevice> _bondedDevices = [];
   bool _isLoading = true;
-  String _statusMessage = '';
+  String _overallStatus = 'Scanning for your sensors...';
+
+  // Only these devices are relevant
+  final List<String> _targetDevices = [
+    "SmartHelmet_ESP32",
+    "SmartWatch_ESP32",
+    "HR-S0C1913",
+  ];
+
+  // Track real-time status for each target device
+  final Map<String, String> _deviceStatus = {};
 
   @override
   void initState() {
     super.initState();
-    _loadBondedDevices();
+    _loadPairedDevices().then((_) {
+      _autoConnectTargets();
+    });
   }
 
-  Future<void> _loadBondedDevices() async {
+  Future<void> _loadPairedDevices() async {
     try {
-      final devices = await FlutterBluetoothSerial.instance.getBondedDevices();
+      final allPaired =
+          await FlutterBluetoothSerial.instance.getBondedDevices();
       if (!mounted) return;
+
+      // Filter only devices that match our targets
+      final matched = allPaired.where((d) {
+        final nameLower = (d.name ?? '').toLowerCase().trim();
+        return _targetDevices.any((t) {
+          final tLower = t.toLowerCase();
+          return nameLower.contains(tLower) ||
+              nameLower.startsWith(tLower) ||
+              nameLower
+                  .replaceAll(' ', '')
+                  .contains(tLower.replaceAll(' ', ''));
+        });
+      }).toList();
+
       setState(() {
-        _bondedDevices = devices;
+        _bondedDevices = matched;
         _isLoading = false;
       });
+
+      // Debug print - very useful!
+      print("=== DETECTED TARGET DEVICES ===");
+      if (matched.isEmpty) {
+        print("→ None of the target devices were found");
+      } else {
+        for (var d in matched) {
+          print(" - ${d.name ?? 'Unnamed'} (${d.address})");
+        }
+      }
+      print("==============================");
     } catch (e) {
       if (!mounted) return;
       setState(() {
-        _statusMessage = 'Error loading devices: $e';
+        _overallStatus = 'Error loading devices: $e';
         _isLoading = false;
       });
     }
   }
 
-  Future<void> _connectToAll() async {
-    if (_bondedDevices.isEmpty) return;
-
-    if (!mounted) return;
-    setState(() => _statusMessage = 'Connecting to all devices...');
-
-    int successCount = 0;
-    int failCount = 0;
-
-    for (final device in _bondedDevices) {
-      final deviceName = device.name ?? device.address;
-      // Optional: filter only helmet-like devices
-      // if (!deviceName.contains('Helmet') && !deviceName.contains('ESP')) continue;
-
-      final result = await widget.manager.connectToDevice(deviceName);
-      if (result.toLowerCase().contains('connected')) {
-        successCount++;
-      } else {
-        failCount++;
-      }
+  Future<void> _autoConnectTargets({bool isRetry = false}) async {
+    if (_bondedDevices.isEmpty) {
+      setState(() {
+        _overallStatus = 'No matching sensors found.\n\n'
+            'Make sure:\n'
+            '• Devices are powered on\n'
+            '• Paired in phone Bluetooth settings\n'
+            '• Names include: SmartHelmet_ESP32, SmartWatch_ESP32, HR-S0C1913';
+      });
+      return;
     }
 
-    if (!mounted) return;
     setState(() {
-      _statusMessage =
-          'Connected: $successCount | Failed: $failCount\nTap outside to close.';
+      _overallStatus = '${isRetry ? 'Re-' : 'A'}uto-connecting sensors...';
+      _deviceStatus.clear(); // reset per-device status
+    });
+
+    int success = 0;
+
+    for (final target in _targetDevices) {
+      // Try to find matching device
+      BluetoothDevice? targetDevice;
+      for (var d in _bondedDevices) {
+        final nameLower = (d.name ?? '').toLowerCase().trim();
+        final targetLower = target.toLowerCase();
+        if (nameLower.contains(targetLower) ||
+            nameLower.startsWith(targetLower) ||
+            nameLower
+                .replaceAll(' ', '')
+                .contains(targetLower.replaceAll(' ', ''))) {
+          targetDevice = d;
+          break;
+        }
+      }
+
+      if (targetDevice == null) {
+        setState(() {
+          _deviceStatus[target] = '✗ Not found';
+          _overallStatus += '\n✗ $target → not detected';
+        });
+        continue;
+      }
+
+      final displayName = targetDevice.name ?? targetDevice.address;
+
+      setState(() {
+        _deviceStatus[target] = 'Connecting...';
+        _overallStatus += '\n→ Trying $displayName...';
+      });
+
+      try {
+        final result = await widget.manager.connectToDevice(displayName);
+        final isSuccess = result.toLowerCase().contains('connected');
+
+        setState(() {
+          _deviceStatus[target] = isSuccess ? '✓ Connected' : '✗ $result';
+          _overallStatus +=
+              '\n${isSuccess ? '✓' : '✗'} $displayName → ${isSuccess ? 'Connected' : result}';
+        });
+
+        if (isSuccess) success++;
+      } catch (e) {
+        setState(() {
+          _deviceStatus[target] = '✗ Error';
+          _overallStatus += '\n✗ $displayName → Error: $e';
+        });
+      }
+
+      // Important: delay between connections
+      await Future.delayed(const Duration(milliseconds: 1500));
+    }
+
+    setState(() {
+      _overallStatus +=
+          '\n\nFinished: $success/${_targetDevices.length} connected successfully.\n'
+          'Close dialog or tap "Retry All" to try again.';
     });
   }
 
   @override
   Widget build(BuildContext context) {
     return AlertDialog(
-      title: const Text('Bluetooth Devices'),
+      title: const Text('Your Sensors'),
       content: SizedBox(
         width: double.maxFinite,
-        height: 360,
+        height: 480,
         child: _isLoading
             ? const Center(child: CircularProgressIndicator())
             : Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  if (_statusMessage.isNotEmpty)
-                    Padding(
-                      padding: const EdgeInsets.only(bottom: 12),
-                      child: Text(
-                        _statusMessage,
-                        style: TextStyle(
-                          color: _statusMessage.contains('Connected')
-                              ? Colors.green[700]
-                              : Colors.red[700],
-                        ),
+                  // Status summary
+                  Padding(
+                    padding: const EdgeInsets.only(bottom: 16),
+                    child: Text(
+                      _overallStatus,
+                      style: TextStyle(
+                        fontSize: 14,
+                        height: 1.4,
+                        color: _overallStatus.contains('✓') ||
+                                _overallStatus.contains('Connected')
+                            ? Colors.green[800]
+                            : _overallStatus.contains('✗') ||
+                                    _overallStatus.contains('Error')
+                                ? Colors.red[800]
+                                : Colors.blue[800],
                       ),
                     ),
+                  ),
+
+                  // If no devices found → show instructions
                   if (_bondedDevices.isEmpty && !_isLoading)
-                    const Text(
-                      'No paired devices found.\n'
-                      'Please pair your helmet device in phone Bluetooth settings first.',
-                      style: TextStyle(color: Colors.grey),
+                    const Padding(
+                      padding: EdgeInsets.all(16),
+                      child: Text(
+                        'None of your sensors were detected.\n\n'
+                        'Steps to fix:\n'
+                        '1. Turn on all sensors\n'
+                        '2. Go to phone Settings → Bluetooth\n'
+                        '3. Pair: SmartHelmet_ESP32, SmartWatch_ESP32, HR-S0C1913\n'
+                        '4. Restart Bluetooth or phone if needed',
+                        style: TextStyle(color: Colors.grey, fontSize: 14),
+                      ),
                     ),
+
+                  // List of only your expected devices
                   Expanded(
                     child: ListView.builder(
                       itemCount: _bondedDevices.length,
@@ -107,6 +212,14 @@ class _BluetoothConnectDialogState extends State<BluetoothConnectDialog> {
                         final name =
                             device.name ?? 'Unknown (${device.address})';
                         final isConnected = widget.manager.isConnected(name);
+                        final statusText = _deviceStatus.entries
+                            .firstWhere(
+                              (e) => name
+                                  .toLowerCase()
+                                  .contains(e.key.toLowerCase()),
+                              orElse: () => MapEntry('', ''),
+                            )
+                            .value;
 
                         return ListTile(
                           leading: Icon(
@@ -116,7 +229,16 @@ class _BluetoothConnectDialogState extends State<BluetoothConnectDialog> {
                             color: isConnected ? Colors.green : Colors.grey,
                           ),
                           title: Text(name),
-                          subtitle: Text(device.address),
+                          subtitle: Text(
+                            statusText.isNotEmpty ? statusText : device.address,
+                            style: TextStyle(
+                              color: statusText.contains('✓')
+                                  ? Colors.green
+                                  : statusText.contains('✗')
+                                      ? Colors.red
+                                      : null,
+                            ),
+                          ),
                           trailing: isConnected
                               ? IconButton(
                                   icon: const Icon(Icons.link_off,
@@ -142,12 +264,12 @@ class _BluetoothConnectDialogState extends State<BluetoothConnectDialog> {
         if (!_isLoading && _bondedDevices.isNotEmpty)
           ElevatedButton.icon(
             icon: const Icon(Icons.sync),
-            label: const Text('Connect All'),
+            label: const Text('Retry All'),
             style: ElevatedButton.styleFrom(
               backgroundColor: Colors.indigo,
               foregroundColor: Colors.white,
             ),
-            onPressed: _connectToAll,
+            onPressed: () => _autoConnectTargets(isRetry: true),
           ),
       ],
     );

@@ -7,11 +7,20 @@ import 'package:flutter/material.dart';
 import 'package:tflite_flutter/tflite_flutter.dart';
 import 'package:fl_chart/fl_chart.dart';
 import 'package:provider/provider.dart';
+import 'package:geolocator/geolocator.dart';
 
 import 'thinkgear.dart';
 import '../../../../services/bluetooth_manager.dart';
+
 import '../../../../services/auth_service.dart';
 import 'weekly_stress_report.dart'; // ← NEW import
+
+import 'package:smart_helmet_app/providers/sensor_data_provider.dart';
+
+import 'package:smart_helmet_app/providers/ride_session_provider.dart';
+import 'package:smart_helmet_app/providers/emotion_provider.dart';
+// If you have auth:
+// import '../../../../services/auth_service.dart';
 
 class Member2Page extends StatefulWidget {
   const Member2Page({super.key});
@@ -74,7 +83,7 @@ class _Member2PageState extends State<Member2Page> {
   StreamSubscription? _dataSubscription;
 
   final List<double> modelWindow = [];
-  final int modelWindowSize = 32;
+  final int modelWindowSize = 64;
 
   // ────────────────────────────────────────────────
   // Firestore integration
@@ -89,11 +98,77 @@ class _Member2PageState extends State<Member2Page> {
   @override
   void initState() {
     super.initState();
-    _init();
+    _init(); // model + listeners
+    _startLocationTracking();
+
+    // Auto connect flow
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      _autoConnectSensor();
+
+      // Optional: retry once after 6 seconds if still not connected
+      Future.delayed(const Duration(seconds: 6), () {
+        if (mounted &&
+            !context.read<BluetoothManager>().isConnected(deviceName) &&
+            poorSignalLevel == 200) {
+          _autoConnectSensor(isRetry: true);
+        }
+      });
+    });
+
     _waveformUpdateTimer = Timer.periodic(
       const Duration(milliseconds: waveformUpdateIntervalMs),
       (_) => _flushWaveformBuffer(),
     );
+  }
+
+  Future<void> _autoConnectSensor({bool isRetry = false}) async {
+    final btManager = context.read<BluetoothManager>();
+
+    // Already connected → just subscribe
+    if (btManager.isConnected(deviceName)) {
+      if (mounted) {
+        setState(() => status = "Connected (already)");
+      }
+      _subscribeToData();
+      return;
+    }
+
+    if (!mounted) return;
+
+    setState(() {
+      status = "${isRetry ? 'Re-' : 'A'}uto-connecting $deviceName...";
+      errorMessage = null;
+    });
+
+    try {
+      final result = await btManager.connectToDevice(deviceName);
+
+      if (!mounted) return;
+
+      setState(() {
+        status = result;
+      });
+
+      if (btManager.isConnected(deviceName)) {
+        _subscribeToData();
+        setState(() {
+          status = "Connected • $deviceName";
+          errorMessage = null;
+        });
+      } else {
+        setState(() {
+          errorMessage =
+              "Connection failed → $result\nMake sure device is on and paired.";
+        });
+      }
+    } catch (e) {
+      if (!mounted) return;
+      setState(() {
+        status = "Connection error";
+        errorMessage =
+            "Error: $e\nCheck Bluetooth • Is $deviceName powered on?";
+      });
+    }
   }
 
   Future<void> _init() async {
@@ -119,7 +194,7 @@ class _Member2PageState extends State<Member2Page> {
           errorMessage = "Weak signal – adjust headset for better contact";
           _resetToNoSignal();
         } else {
-          errorMessage = "";
+          errorMessage = null;
         }
       });
     };
@@ -162,12 +237,10 @@ class _Member2PageState extends State<Member2Page> {
   Future<void> _loadModel() async {
     try {
       interpreter = await Interpreter.fromAsset(
-        "assets/eeg_stress_model_final.tflite",
+        'assets/models/eeg_stress_model_float32.tflite',
       );
       debugPrint("EEG Stress Model Loaded Successfully");
-      if (mounted) {
-        setState(() => errorMessage = null);
-      }
+      if (mounted) setState(() => errorMessage = null);
     } catch (e) {
       debugPrint("Model load failed: $e");
       if (mounted) {
@@ -228,12 +301,19 @@ class _Member2PageState extends State<Member2Page> {
     if (interpreter == null || !mounted || poorSignalLevel > 50) return;
 
     try {
-      var input = [inputWindow];
-      var shapedInput = [input];
+      // 1. Convert flat List<double> (length 64) → List<List<double>> (64 × 1)
+      List<List<double>> sequence = inputWindow.map((e) => [e]).toList();
+
+      // 2. Add batch dimension → List<List<List<double>>> with shape [1, 64, 1]
+      List<List<List<double>>> shapedInput = [sequence];
+
+      // Prepare output buffer [1, 2]
       var output = List.generate(1, (_) => List.filled(2, 0.0));
 
+      // Run inference
       interpreter!.run(shapedInput, output);
 
+      // Softmax over logits
       final relaxLogit = output[0][0];
       final stressLogit = output[0][1];
       final expRelax = math.exp(relaxLogit);
@@ -323,6 +403,64 @@ class _Member2PageState extends State<Member2Page> {
     });
   }
 
+  // Add near the top of the class
+  Position? _currentPosition;
+  StreamSubscription<Position>? _positionStream;
+  bool _locationServiceEnabled = false;
+  LocationPermission _permission = LocationPermission.denied;
+
+// Add this method (call it in initState)
+  Future<void> _startLocationTracking() async {
+    // Check if location services are enabled
+    _locationServiceEnabled = await Geolocator.isLocationServiceEnabled();
+    if (!_locationServiceEnabled) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('Location services are disabled')),
+        );
+      }
+      return;
+    }
+
+    // Check/request permission
+    _permission = await Geolocator.checkPermission();
+    if (_permission == LocationPermission.denied) {
+      _permission = await Geolocator.requestPermission();
+      if (_permission == LocationPermission.denied) {
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(content: Text('Location permission denied')),
+          );
+        }
+        return;
+      }
+    }
+
+    if (_permission == LocationPermission.deniedForever) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+              content: Text('Location permissions permanently denied')),
+        );
+      }
+      return;
+    }
+
+    // Start listening to position updates
+    _positionStream = Geolocator.getPositionStream(
+      locationSettings: const LocationSettings(
+        accuracy: LocationAccuracy.high,
+        distanceFilter: 10, // update every 10 meters
+      ),
+    ).listen((Position position) {
+      if (mounted) {
+        setState(() {
+          _currentPosition = position;
+        });
+      }
+    });
+  }
+
   void _updateStressAndMood() {
     if (poorSignalLevel > 50 || powerBands.every((e) => e == 0)) return;
 
@@ -336,6 +474,18 @@ class _Member2PageState extends State<Member2Page> {
     double medStress = 1.0 - (meditation / 100.0).clamp(0.0, 1.0);
     double hybridStress = (stressScore + bandStress + medStress) / 3.0;
     double hybridRelaxed = 1.0 - hybridStress;
+
+    // Inside _updateStressAndMood or after setState
+    // ─── IMPORTANT: Update provider here ───
+    final sensorProvider =
+        Provider.of<SensorDataProvider>(context, listen: false);
+    final int stressPercent = (hybridStress * 100).round().clamp(0, 100);
+
+    sensorProvider.updateStressLevel(stressPercent);
+
+    // Debug print – you should see this in console when stress updates
+    print(
+        "→ Stress updated in provider: $stressPercent%  (raw score: $hybridStress)");
 
     setState(() {
       stressScore = hybridStress;
@@ -368,8 +518,37 @@ class _Member2PageState extends State<Member2Page> {
       });
     }
 
-    // Save to Firestore
-    _saveToFirestoreIfNeeded(moodChanged);
+    // ────────────────────────────────────────────────
+    //  ADD THIS BLOCK → Update shared EmotionProvider
+    // ────────────────────────────────────────────────
+    final emotionProvider = Provider.of<EmotionProvider>(
+      context,
+      listen: false,
+    );
+
+    // Use the same values you're already showing in Member2Page
+    // (or map them differently if you want more granular names in Member1)
+    emotionProvider.updateEmotion(
+      candidateMood, // "Stressed", "Relaxed", "Neutral"
+      candidateEmoji, // "😰", "🧘‍♂️", "😐"
+    );
+
+    // Optional: debug print to confirm it's working
+    print("Emotion → Member1Page: $candidateMood ${candidateEmoji}");
+
+    // Throttled save to Firestore
+    // Save every 10 seconds OR when mood changes to Stressed/Relaxed
+    final now = DateTime.now();
+    final timeToSave = _lastSavedTime == null ||
+        now.difference(_lastSavedTime!) >= _saveInterval;
+
+    final importantChange = moodChanged &&
+        (candidateMood == "Stressed" || candidateMood == "Relaxed");
+
+    if (timeToSave || importantChange) {
+      _saveToFirestore();
+      _lastSavedTime = now;
+    }
 
     if (hybridStress > 0.7) {
       _stressTimer ??= Timer(stressPersistenceThreshold, () {
@@ -399,6 +578,14 @@ class _Member2PageState extends State<Member2Page> {
   }
 
   Future<void> _saveToFirestore() async {
+    final rideProvider =
+        Provider.of<RideSessionProvider>(context, listen: false);
+
+    // Only save if ride is active
+    if (!rideProvider.isRideActive || rideProvider.currentRideId == null) {
+      return;
+    }
+
     if (_isSaving) return;
     setState(() => _isSaving = true);
 
@@ -431,15 +618,32 @@ class _Member2PageState extends State<Member2Page> {
         "meditation": meditation,
         "userId": userId, // ← now dynamic!
         "deviceName": deviceName,
+        "rideId": rideProvider.currentRideId!,
+
+        // Ride metadata (copied once per ride)
+        "rideStartLocation": rideProvider.startLocation, // GeoPoint
+        "rideDestination": rideProvider.destinationName, // String
+        "rideEndLocation":
+            rideProvider.endLocation, // GeoPoint? (null until end)
+
+        // Real-time location of THIS reading
+        "currentLocation": _currentPosition != null
+            ? GeoPoint(_currentPosition!.latitude, _currentPosition!.longitude)
+            : null,
+
         "createdAt": FieldValue.serverTimestamp(),
-        "location":
-            const GeoPoint(7.2000, 79.8730), // replace with real location later
+
+        // "location":
+        //     const GeoPoint(7.2000, 79.8730), // replace with real location later
       };
 
       await _firestore.collection("stress_mood_readings").add(data);
 
       debugPrint(
-          "Stress/Mood reading saved for user $userId: $currentMood ($stressScore)");
+          "Stress/Mood reading saved for user $userId: $currentMood ($stressScore) | "
+          "Ride: ${rideProvider.currentRideId} | "
+          "Location: ${_currentPosition?.latitude.toStringAsFixed(6) ?? 'N/A'}, "
+          "${_currentPosition?.longitude.toStringAsFixed(6) ?? 'N/A'}");
     } catch (e) {
       debugPrint("Firestore save error: $e");
       if (mounted) {
@@ -499,6 +703,7 @@ class _Member2PageState extends State<Member2Page> {
     _dataSubscription?.cancel();
     _stressTimer?.cancel();
     _waveformUpdateTimer?.cancel();
+    _positionStream?.cancel();
     interpreter?.close();
     super.dispose();
   }
@@ -508,6 +713,22 @@ class _Member2PageState extends State<Member2Page> {
     if (stressScore > 0.7) return Colors.red;
     if (stressScore > 0.4) return Colors.orange;
     return Colors.green;
+  }
+
+  IconData _getConnectionIcon() {
+    final bm = context.watch<BluetoothManager>();
+    if (bm.isConnected(deviceName)) return Icons.bluetooth_connected;
+    if (status.contains("Connecting")) return Icons.bluetooth_searching;
+    return Icons.bluetooth_disabled;
+  }
+
+  Color _getConnectionColor() {
+    final bm = context.watch<BluetoothManager>();
+    if (bm.isConnected(deviceName)) return Colors.green;
+    if (status.contains("Connecting")) return Colors.blue;
+    if (status.contains("failed") || status.contains("Error"))
+      return Colors.red;
+    return Colors.orange;
   }
 
   String _getMoodMessage() {
@@ -714,6 +935,20 @@ class _Member2PageState extends State<Member2Page> {
     );
   }
 
+  Widget _buildConnectButton() {
+    final btManager = context.watch<BluetoothManager>();
+    final isConnected = btManager.isConnected(deviceName);
+
+    return ElevatedButton.icon(
+      icon: Icon(isConnected ? Icons.bluetooth_connected : Icons.bluetooth),
+      label: Text(isConnected ? 'Connected' : 'Connect EEG'),
+      style: ElevatedButton.styleFrom(
+        backgroundColor: isConnected ? Colors.green : Colors.blue,
+      ),
+      onPressed: isConnected ? null : _autoConnectSensor,
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     final btManager = context.watch<BluetoothManager>();
@@ -734,73 +969,39 @@ class _Member2PageState extends State<Member2Page> {
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.stretch,
               children: [
+                // Replace this part in build() → inside the first Card
                 Card(
                   elevation: 6,
                   shape: RoundedRectangleBorder(
-                    borderRadius: BorderRadius.circular(16),
-                  ),
+                      borderRadius: BorderRadius.circular(16)),
                   child: Padding(
                     padding: const EdgeInsets.all(20),
                     child: Column(
                       children: [
-                        Row(
-                          mainAxisAlignment: MainAxisAlignment.center,
-                          children: [
-                            Expanded(
-                              child: ElevatedButton.icon(
-                                onPressed: isConnected ? null : connectToEEG,
-                                icon: const Icon(Icons.sensors),
-                                label: const Text("Connect EEG"),
-                                style: ElevatedButton.styleFrom(
-                                  backgroundColor: Colors.deepPurple,
-                                  foregroundColor: Colors.white,
-                                  padding:
-                                      const EdgeInsets.symmetric(vertical: 14),
-                                ),
-                              ),
-                            ),
-                            const SizedBox(width: 12),
-                            Expanded(
-                              child: ElevatedButton.icon(
-                                onPressed: isConnected ? disconnectEEG : null,
-                                icon: const Icon(Icons.bluetooth_disabled),
-                                label: const Text("Disconnect"),
-                                style: ElevatedButton.styleFrom(
-                                  backgroundColor: Colors.redAccent,
-                                  foregroundColor: Colors.white,
-                                  padding:
-                                      const EdgeInsets.symmetric(vertical: 14),
-                                ),
-                              ),
-                            ),
-                          ],
-                        ),
-                        const SizedBox(height: 16),
+                        // Status row
                         Row(
                           mainAxisAlignment: MainAxisAlignment.center,
                           children: [
                             Icon(
-                              isConnected
-                                  ? Icons.circle
-                                  : Icons.circle_outlined,
-                              color: isConnected ? Colors.green : Colors.orange,
-                              size: 18,
+                              _getConnectionIcon(),
+                              color: _getConnectionColor(),
+                              size: 28,
                             ),
-                            const SizedBox(width: 10),
+                            const SizedBox(width: 12),
                             Text(
                               status,
                               style: TextStyle(
                                 fontSize: 18,
                                 fontWeight: FontWeight.bold,
-                                color:
-                                    isConnected ? Colors.green : Colors.orange,
+                                color: _getConnectionColor(),
                               ),
                             ),
                           ],
                         ),
+
                         if (errorMessage != null &&
                             errorMessage!.isNotEmpty) ...[
-                          const SizedBox(height: 12),
+                          const SizedBox(height: 16),
                           Container(
                             padding: const EdgeInsets.all(14),
                             decoration: BoxDecoration(
@@ -810,18 +1011,15 @@ class _Member2PageState extends State<Member2Page> {
                             ),
                             child: Row(
                               children: [
-                                const Icon(
-                                  Icons.warning_amber,
-                                  color: Colors.orange,
-                                ),
-                                const SizedBox(width: 10),
+                                const Icon(Icons.warning_amber,
+                                    color: Colors.orange),
+                                const SizedBox(width: 12),
                                 Expanded(
                                   child: Text(
                                     errorMessage!,
                                     style: TextStyle(
-                                      color: Colors.orange.shade800,
-                                      fontSize: 14,
-                                    ),
+                                        color: Colors.orange.shade800,
+                                        fontSize: 14),
                                     textAlign: TextAlign.center,
                                   ),
                                 ),
@@ -829,6 +1027,18 @@ class _Member2PageState extends State<Member2Page> {
                             ),
                           ),
                         ],
+
+                        const SizedBox(height: 16),
+
+                        // Optional: small retry button (useful during development)
+                        if (!context
+                            .watch<BluetoothManager>()
+                            .isConnected(deviceName))
+                          OutlinedButton.icon(
+                            icon: const Icon(Icons.refresh, size: 18),
+                            label: const Text("Retry connection"),
+                            onPressed: _autoConnectSensor,
+                          ),
                       ],
                     ),
                   ),
