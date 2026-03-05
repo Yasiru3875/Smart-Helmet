@@ -68,12 +68,13 @@ class _Member3PageState extends State<Member3Page>
 // Firestore
   final FirebaseFirestore _firestore = FirebaseFirestore.instance;
   bool _isSaving = false;
-  
+
   // Risky Events Tracking (ONLY risky events saved to Firebase)
   // NOTE: rideId is now obtained from RideSessionProvider (shared across all members)
   int _riskyEventsSavedCount = 0;
-  List<Map<String, dynamic>> _riskyEventsThisRide = [];  // In-memory list for visualization
-  
+  List<Map<String, dynamic>> _riskyEventsThisRide =
+      []; // In-memory list for visualization
+
   // Current GPS state
   double currentSpeed = 0.0;
   double currentLat = 0.0;
@@ -99,12 +100,13 @@ class _Member3PageState extends State<Member3Page>
     // Add a listener to RideSessionProvider to detect when the ride ends
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (mounted) {
-         final rideProvider = Provider.of<RideSessionProvider>(context, listen: false);
-         rideProvider.addListener(_onRideStateChanged);
+        final rideProvider =
+            Provider.of<RideSessionProvider>(context, listen: false);
+        rideProvider.addListener(_onRideStateChanged);
       }
     });
   }
-  
+
   @override
   void didChangeDependencies() {
     super.didChangeDependencies();
@@ -118,7 +120,7 @@ class _Member3PageState extends State<Member3Page>
       _subscribeToESP32Data();
     }
   }
-  
+
   void _onBluetoothStateChanged() {
     // Re-subscribe when connection state changes
     if (mounted) {
@@ -135,45 +137,48 @@ class _Member3PageState extends State<Member3Page>
       final btManager = Provider.of<BluetoothManager>(context, listen: false);
       btManager.removeListener(_onBluetoothStateChanged);
     } catch (_) {}
-    
+
     // Remove listener from RideSessionProvider
     try {
-      final rideProvider = Provider.of<RideSessionProvider>(context, listen: false);
+      final rideProvider =
+          Provider.of<RideSessionProvider>(context, listen: false);
       rideProvider.removeListener(_onRideStateChanged);
     } catch (_) {}
-    
+
     super.dispose();
   }
 
   // Detect when a ride ends
   void _onRideStateChanged() async {
     if (!mounted) return;
-    final rideProvider = Provider.of<RideSessionProvider>(context, listen: false);
-    final journeyProvider = Provider.of<JourneyProvider>(context, listen: false);
+    final rideProvider =
+        Provider.of<RideSessionProvider>(context, listen: false);
+    final journeyProvider =
+        Provider.of<JourneyProvider>(context, listen: false);
 
     // If the ride was active but is now inactive, it means it just ended
     // We also check if journeyProvider is active to only process once
     if (!rideProvider.isRideActive && journeyProvider.isJourneyActive) {
       debugPrint("RideSession ended. Finalizing JourneyData...");
       final completedJourney = journeyProvider.endJourney();
-      
+
       if (completedJourney != null) {
-         try {
-           // Save to Firebase
-           await _journeyService.saveJourney(completedJourney);
-           debugPrint("Saved complete Journey Data for report.");
-           
-           // Show the summary screen immediately
-           setState(() {
-              _completedRide = completedJourney;
-              _showRideSummary = true;
-           });
-           
-           // Refresh history
-           _loadJourneyHistory();
-         } catch(e) {
-           debugPrint("Error saving final Journey Data: $e");
-         }
+        try {
+          // Save to Firebase
+          await _journeyService.saveJourney(completedJourney);
+          debugPrint("Saved complete Journey Data for report.");
+
+          // Show the summary screen immediately
+          setState(() {
+            _completedRide = completedJourney;
+            _showRideSummary = true;
+          });
+
+          // Refresh history
+          _loadJourneyHistory();
+        } catch (e) {
+          debugPrint("Error saving final Journey Data: $e");
+        }
       }
     }
   }
@@ -181,44 +186,44 @@ class _Member3PageState extends State<Member3Page>
   // Subscribe to ESP32 data stream from shared BluetoothManager
   void _subscribeToESP32Data() {
     final btManager = context.read<BluetoothManager>();
-    
+
     // Find a connected device - try specific name first, then any ESP32
     String? deviceToUse;
-    
+
     if (btManager.isConnected(targetDeviceName)) {
       deviceToUse = targetDeviceName;
     } else {
       // Search for any connected device that looks like an ESP32
       final connectedDevices = btManager.getConnectedDevices();
       debugPrint("Connected devices: $connectedDevices");
-      
+
       for (final device in connectedDevices) {
-        if (device.toLowerCase().contains('esp') || 
+        if (device.toLowerCase().contains('esp') ||
             device.toLowerCase().contains('helmet') ||
             device.toLowerCase().contains('imu')) {
           deviceToUse = device;
           break;
         }
       }
-      
+
       // If still not found, try the first connected device
       if (deviceToUse == null && connectedDevices.isNotEmpty) {
         deviceToUse = connectedDevices.first;
         debugPrint("Using first connected device: $deviceToUse");
       }
     }
-    
+
     if (deviceToUse == null) {
       debugPrint("No ESP32/IMU device connected - waiting for connection");
       return;
     }
-    
+
     final dataStream = btManager.getDataStream(deviceToUse);
     if (dataStream == null) {
       debugPrint("No data stream available for $deviceToUse");
       return;
     }
-    
+
     // Cancel existing subscription before creating new one
     _dataSubscription?.cancel();
     _dataSubscription = dataStream.listen(
@@ -312,12 +317,12 @@ class _Member3PageState extends State<Member3Page>
     if (turnRate > riskyTurnThreshold) {
       newTurnStatus = "RISKY TURN!";
       newStatusColor = Colors.red;
-      eventType = 'risky_turn';  // HIGH severity
+      eventType = 'risky_turn'; // HIGH severity
       riskyTurnCount++;
     } else if (turnRate > sharpTurnThreshold) {
       newTurnStatus = "Sharp Turn";
       newStatusColor = Colors.orange;
-      eventType = 'sharp_turn';  // MODERATE severity
+      eventType = 'sharp_turn'; // MODERATE severity
       sharpTurnCount++;
     }
 
@@ -380,7 +385,7 @@ class _Member3PageState extends State<Member3Page>
           gyroY: gyroY,
           gyroZ: gyroZ,
         );
-        
+
         if (eventType == 'risky_turn') {
           journeyProvider.addTurnEvent(
             severity: 'risky',
@@ -423,7 +428,7 @@ class _Member3PageState extends State<Member3Page>
   // ============================================================
   // NOTE: Ride start/end is now managed by RideSessionProvider
   // This ensures all members (Member 1, 2, 3) share the same rideId
-  
+
   void _resetRideCounters() {
     _riskyEventsSavedCount = 0;
     _riskyEventsThisRide = [];
@@ -443,14 +448,15 @@ class _Member3PageState extends State<Member3Page>
     String eventType, // 'risky_turn', 'sharp_turn', 'harsh_brake'
   ) async {
     // Get shared rideId from RideSessionProvider
-    final rideProvider = Provider.of<RideSessionProvider>(context, listen: false);
-    
+    final rideProvider =
+        Provider.of<RideSessionProvider>(context, listen: false);
+
     // Only save if ride is active and rideId exists
     if (!rideProvider.isRideActive || rideProvider.currentRideId == null) {
       debugPrint("⚠️ Risky event detected but no active ride - not saving");
       return;
     }
-    
+
     if (_isSaving) return;
 
     setState(() => _isSaving = true);
@@ -463,15 +469,15 @@ class _Member3PageState extends State<Member3Page>
         // Ride identification (using shared rideId from provider)
         "rideId": rideProvider.currentRideId,
         "eventNumber": _riskyEventsSavedCount + 1,
-        
+
         // Timestamp
         "timestamp": now.toIso8601String(),
         "createdAt": FieldValue.serverTimestamp(),
-        
+
         // Event classification
         "eventType": eventType,
         "severity": eventType == 'risky_turn' ? 'high' : 'moderate',
-        
+
         // IMU data at event
         "gyroX": imu['gyroX'],
         "gyroY": imu['gyroY'],
@@ -480,13 +486,13 @@ class _Member3PageState extends State<Member3Page>
         "accelX": imu['accelX'],
         "accelY": imu['accelY'],
         "accelZ": imu['accelZ'],
-        
+
         // GPS location of event
         "latitude": lat,
         "longitude": lng,
         "location": GeoPoint(lat, lng),
         "speedKmh": speed,
-        
+
         // Running totals at this point
         "sharpTurnsTotal": sharpTurnCount,
         "riskyTurnsTotal": riskyTurnCount,
@@ -495,17 +501,17 @@ class _Member3PageState extends State<Member3Page>
 
       // Save to Firebase 'risky_events' collection
       final docRef = await _firestore.collection("risky_events").add(eventData);
-      
+
       // Also keep in memory for end-of-ride visualization
       _riskyEventsThisRide.add({
         ...eventData,
         "docId": docRef.id,
       });
-      
+
       _riskyEventsSavedCount++;
-      
-      debugPrint("🚨 RISKY EVENT #$_riskyEventsSavedCount saved → Type: $eventType | Turn: ${turnRate.toStringAsFixed(1)}°/s | ID: ${docRef.id}");
-      
+
+      debugPrint(
+          "🚨 RISKY EVENT #$_riskyEventsSavedCount saved → Type: $eventType | Turn: ${turnRate.toStringAsFixed(1)}°/s | ID: ${docRef.id}");
     } catch (e) {
       debugPrint("❌ Firebase risky event save error: $e");
       if (mounted) {
@@ -527,18 +533,21 @@ class _Member3PageState extends State<Member3Page>
   }
 
   // Load risky events from Firebase for a specific ride
-  Future<List<Map<String, dynamic>>> loadRiskyEventsForRide(String rideId) async {
+  Future<List<Map<String, dynamic>>> loadRiskyEventsForRide(
+      String rideId) async {
     try {
       final snapshot = await _firestore
           .collection("risky_events")
           .where("rideId", isEqualTo: rideId)
           .orderBy("timestamp")
           .get();
-      
-      return snapshot.docs.map((doc) => {
-        ...doc.data(),
-        "docId": doc.id,
-      }).toList();
+
+      return snapshot.docs
+          .map((doc) => {
+                ...doc.data(),
+                "docId": doc.id,
+              })
+          .toList();
     } catch (e) {
       debugPrint("Error loading risky events: $e");
       return [];
@@ -566,15 +575,16 @@ class _Member3PageState extends State<Member3Page>
               final connectedDevices = btManager.getConnectedDevices();
               final isConnected = connectedDevices.isNotEmpty;
               return IconButton(
-                icon: Icon(
-                    isConnected ? Icons.bluetooth_connected : Icons.bluetooth_disabled),
+                icon: Icon(isConnected
+                    ? Icons.bluetooth_connected
+                    : Icons.bluetooth_disabled),
                 color: isConnected ? Colors.green : Colors.white70,
                 onPressed: () {
                   ScaffoldMessenger.of(context).showSnackBar(
                     SnackBar(
                       content: Text(
-                        isConnected 
-                            ? 'Connected to: ${connectedDevices.join(", ")}' 
+                        isConnected
+                            ? 'Connected to: ${connectedDevices.join(", ")}'
                             : 'Not connected. Connect from Home page.',
                       ),
                       duration: const Duration(seconds: 2),
@@ -605,12 +615,15 @@ class _Member3PageState extends State<Member3Page>
               bottom: 24,
               right: 24,
               child: Card(
-                color: _isSaving 
-                    ? Colors.orange[700] 
-                    : (_riskyEventsSavedCount > 0 ? Colors.red[700] : Colors.green[700]),
+                color: _isSaving
+                    ? Colors.orange[700]
+                    : (_riskyEventsSavedCount > 0
+                        ? Colors.red[700]
+                        : Colors.green[700]),
                 elevation: 6,
                 child: Padding(
-                  padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+                  padding:
+                      const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
                   child: Row(
                     mainAxisSize: MainAxisSize.min,
                     children: [
@@ -624,7 +637,8 @@ class _Member3PageState extends State<Member3Page>
                           ),
                         )
                       else
-                        const Icon(Icons.warning_amber_rounded, color: Colors.white, size: 20),
+                        const Icon(Icons.warning_amber_rounded,
+                            color: Colors.white, size: 20),
                       const SizedBox(width: 12),
                       Consumer<RideSessionProvider>(
                         builder: (context, rideProvider, child) {
@@ -633,20 +647,21 @@ class _Member3PageState extends State<Member3Page>
                             mainAxisSize: MainAxisSize.min,
                             children: [
                               Text(
-                                _isSaving 
-                                    ? "Saving risky event..." 
+                                _isSaving
+                                    ? "Saving risky event..."
                                     : "🚨 $_riskyEventsSavedCount Risky Events",
                                 style: const TextStyle(
-                                  color: Colors.white, 
-                                  fontSize: 13, 
+                                  color: Colors.white,
+                                  fontSize: 13,
                                   fontWeight: FontWeight.bold,
                                 ),
                               ),
-                              if (rideProvider.currentRideId != null && !_isSaving)
+                              if (rideProvider.currentRideId != null &&
+                                  !_isSaving)
                                 Text(
                                   "Ride: ${rideProvider.currentRideId!.substring(0, min(8, rideProvider.currentRideId!.length))}...",
                                   style: TextStyle(
-                                    color: Colors.white.withOpacity(0.8), 
+                                    color: Colors.white.withOpacity(0.8),
                                     fontSize: 10,
                                   ),
                                 ),
@@ -877,61 +892,61 @@ class _Member3PageState extends State<Member3Page>
 
   // Update Ride Summary Actions
   Widget _buildSummaryActions(JourneyData journey) {
-    return Column(
-      children: [
-        // View Detailed Report Button
-        SizedBox(
-          width: double.infinity,
-          child: ElevatedButton.icon(
-            onPressed: () {
-               _showJourneyDetails(journey);
-            },
-            icon: const Icon(Icons.analytics),
-            label: const Text('View Detailed Report'),
-            style: ElevatedButton.styleFrom(
-              backgroundColor: const Color(0xFF2A2D35), // Dark sleek color matching the report screen
-              foregroundColor: Colors.white,
-              padding: const EdgeInsets.symmetric(vertical: 16),
-              elevation: 4,
-            ),
+    return Column(children: [
+      // View Detailed Report Button
+      SizedBox(
+        width: double.infinity,
+        child: ElevatedButton.icon(
+          onPressed: () {
+            _showJourneyDetails(journey);
+          },
+          icon: const Icon(Icons.analytics),
+          label: const Text('View Detailed Report'),
+          style: ElevatedButton.styleFrom(
+            backgroundColor: const Color(
+                0xFF2A2D35), // Dark sleek color matching the report screen
+            foregroundColor: Colors.white,
+            padding: const EdgeInsets.symmetric(vertical: 16),
+            elevation: 4,
           ),
         ),
-        const SizedBox(height: 16),
-        // Action Buttons
-        Row(
-          children: [
-            Expanded(
-              child: OutlinedButton.icon(
-                onPressed: () {
-                  setState(() {
-                    _showRideSummary = false;
-                    _completedRide = null;
-                  });
-                },
-                icon: const Icon(Icons.history),
-                label: const Text('All Journeys'),
-                style: OutlinedButton.styleFrom(
-                  padding: const EdgeInsets.symmetric(vertical: 14),
-                ),
+      ),
+      const SizedBox(height: 16),
+      // Action Buttons
+      Row(
+        children: [
+          Expanded(
+            child: OutlinedButton.icon(
+              onPressed: () {
+                setState(() {
+                  _showRideSummary = false;
+                  _completedRide = null;
+                });
+              },
+              icon: const Icon(Icons.history),
+              label: const Text('All Journeys'),
+              style: OutlinedButton.styleFrom(
+                padding: const EdgeInsets.symmetric(vertical: 14),
               ),
             ),
-            const SizedBox(width: 12),
-            Expanded(
-              child: ElevatedButton.icon(
-                onPressed: () => Navigator.of(context).pop(), // Pop to go back to previous dashboard state
-                icon: const Icon(Icons.home),
-                label: const Text('Back to Home'),
-                style: ElevatedButton.styleFrom(
-                  backgroundColor: Colors.blue[700],
-                  foregroundColor: Colors.white,
-                  padding: const EdgeInsets.symmetric(vertical: 14),
-                ),
+          ),
+          const SizedBox(width: 12),
+          Expanded(
+            child: ElevatedButton.icon(
+              onPressed: () => Navigator.of(context)
+                  .pop(), // Pop to go back to previous dashboard state
+              icon: const Icon(Icons.home),
+              label: const Text('Back to Home'),
+              style: ElevatedButton.styleFrom(
+                backgroundColor: Colors.blue[700],
+                foregroundColor: Colors.white,
+                padding: const EdgeInsets.symmetric(vertical: 14),
               ),
             ),
-          ],
-        ),
-      ]
-    );
+          ),
+        ],
+      ),
+    ]);
   }
 
   Widget _buildSummaryStatCard(
@@ -1290,12 +1305,12 @@ class _Member3PageState extends State<Member3Page>
         // Check for specific device or any connected device
         final connectedDevices = btManager.getConnectedDevices();
         String? connectedDevice;
-        
+
         if (btManager.isConnected(targetDeviceName)) {
           connectedDevice = targetDeviceName;
         } else {
           for (final device in connectedDevices) {
-            if (device.toLowerCase().contains('esp') || 
+            if (device.toLowerCase().contains('esp') ||
                 device.toLowerCase().contains('helmet') ||
                 device.toLowerCase().contains('imu')) {
               connectedDevice = device;
@@ -1306,9 +1321,9 @@ class _Member3PageState extends State<Member3Page>
             connectedDevice = connectedDevices.first;
           }
         }
-        
+
         final isConnected = connectedDevice != null;
-        
+
         return Card(
           color: isConnected ? Colors.green[50] : Colors.grey[100],
           elevation: 4,
@@ -1336,10 +1351,11 @@ class _Member3PageState extends State<Member3Page>
                               children: [
                                 const Text('ESP32/IMU Connection',
                                     style: TextStyle(
-                                        fontSize: 16, fontWeight: FontWeight.bold)),
+                                        fontSize: 16,
+                                        fontWeight: FontWeight.bold)),
                                 Text(
-                                  isConnected 
-                                      ? 'Connected to: $connectedDevice' 
+                                  isConnected
+                                      ? 'Connected to: $connectedDevice'
                                       : 'Not connected',
                                   style: TextStyle(
                                       fontSize: 14,
@@ -1359,7 +1375,8 @@ class _Member3PageState extends State<Member3Page>
                         onPressed: () {
                           ScaffoldMessenger.of(context).showSnackBar(
                             const SnackBar(
-                              content: Text('Please connect to ESP32 from the Home page'),
+                              content: Text(
+                                  'Please connect to ESP32 from the Home page'),
                               duration: Duration(seconds: 2),
                             ),
                           );
@@ -1371,7 +1388,8 @@ class _Member3PageState extends State<Member3Page>
                         ),
                       ),
                     if (isConnected)
-                      const Icon(Icons.check_circle, color: Colors.green, size: 28),
+                      const Icon(Icons.check_circle,
+                          color: Colors.green, size: 28),
                   ],
                 ),
               ],
