@@ -16,11 +16,12 @@ import '../../../../services/bluetooth_manager.dart';
 import 'package:geolocator/geolocator.dart';
 import 'package:smart_helmet_app/providers/sensor_data_provider.dart';
 import 'package:smart_helmet_app/providers/ride_session_provider.dart';
+import 'package:smart_helmet_app/providers/emotion_provider.dart';
 // If you have auth service:
-// import '../../../../services/auth_service.dart';
+import '../../../../services/auth_service.dart';
 
 // NEW IMPORT (create the file in the same folder or adjust path)
-import 'weekly_report_page.dart';   // ← ADD THIS LINE
+import 'weekly_report_page.dart'; // ← ADD THIS LINE
 
 class Member1Page extends StatefulWidget {
   const Member1Page({super.key});
@@ -68,17 +69,104 @@ class _Member1PageState extends State<Member1Page> {
   void initState() {
     super.initState();
     _loadModel();
-    _init();
-    _startLocationTracking(); // ← ADD THIS
+    _startLocationTracking();
+
+    // Important: delay connection until first frame is rendered
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      _autoConnect();
+
+      // Optional safety retry if still not connected after ~8 seconds
+      Future.delayed(const Duration(seconds: 8), () {
+        if (mounted &&
+            !context.read<BluetoothManager>().isConnected(deviceName) &&
+            heartRate == 0.0) {
+          _autoConnect(isRetry: true);
+        }
+      });
+    });
   }
 
   Future<void> _loadModel() async {
     try {
-      _interpreter = await Interpreter.fromAsset('assets/model.tflite');
+      _interpreter =
+          await Interpreter.fromAsset('assets/heart_risk_model.tflite');
       debugPrint("TFLite model loaded successfully");
     } catch (e) {
       debugPrint("Error loading model: $e");
-      if (mounted) setState(() => errorMessage = "Failed to load prediction model");
+      if (mounted)
+        setState(() => errorMessage = "Failed to load prediction model");
+    }
+  }
+
+  // ────────────────────────────────────────────────
+// Auto-connect + retry logic
+// ────────────────────────────────────────────────
+
+  Future<void> _autoConnect({bool isRetry = false}) async {
+    final btManager = context.read<BluetoothManager>();
+
+    if (btManager.isConnected(deviceName)) {
+      if (mounted) {
+        setState(() {
+          status = "Connected (already detected)";
+          errorMessage = "";
+        });
+      }
+      _subscribeToData();
+      return;
+    }
+
+    if (!mounted) return;
+
+    setState(() {
+      status = isRetry ? "Reconnecting..." : "Auto-connecting $deviceName...";
+      errorMessage = " ";
+    });
+
+    try {
+      final result = await btManager.connectToDevice(deviceName);
+
+      if (!mounted) return;
+
+      setState(() {
+        status = result;
+      });
+
+      if (btManager.isConnected(deviceName)) {
+        reconnectAttempts = 0;
+        _subscribeToData();
+        setState(() {
+          status = "Connected • SmartWatch";
+          errorMessage = "";
+        });
+      } else {
+        _handleConnectionFailure(result);
+      }
+    } catch (e) {
+      _handleConnectionFailure("Error: $e");
+    }
+  }
+
+  void _handleConnectionFailure(String reason) {
+    if (reconnectAttempts < maxReconnectAttempts) {
+      reconnectAttempts++;
+      setState(() {
+        status = "Retry ${reconnectAttempts}/${maxReconnectAttempts}...";
+        errorMessage = "$reason\nTrying again in a moment...";
+      });
+      Future.delayed(const Duration(seconds: 4), () {
+        if (mounted) _autoConnect(isRetry: true);
+      });
+    } else {
+      setState(() {
+        status = "Connection failed";
+        errorMessage =
+            "Could not connect after $maxReconnectAttempts attempts.\n"
+            "Make sure:\n"
+            "• Device is powered on\n"
+            "• Bluetooth is enabled\n"
+            "• Device is paired";
+      });
     }
   }
 
@@ -110,12 +198,27 @@ class _Member1PageState extends State<Member1Page> {
           buffer = lines.last;
         }
       },
-      onError: (e) => setState(() => errorMessage = "Stream error: $e"),
-      onDone: () => setState(() {
-        status = "Disconnected";
-        riskLevel = "Unknown";
-        riskColor = Colors.grey;
-      }),
+      onError: (e) {
+        if (mounted) {
+          setState(() => errorMessage = "Stream error: $e");
+        }
+      },
+      onDone: () {
+        if (mounted) {
+          setState(() {
+            status = "Disconnected";
+            riskLevel = "Unknown";
+            riskColor = Colors.grey;
+          });
+
+          // Auto-reconnect attempt
+          if (reconnectAttempts < maxReconnectAttempts) {
+            Future.delayed(const Duration(seconds: 3), () {
+              if (mounted) _autoConnect(isRetry: true);
+            });
+          }
+        }
+      },
     );
   }
 
@@ -177,22 +280,51 @@ class _Member1PageState extends State<Member1Page> {
     });
   }
 
+  double _getEmotionRiskMultiplier(String emotion) {
+    final lower = emotion.toLowerCase();
+    if (lower.contains('stressed') ||
+        lower.contains('frustrated') ||
+        lower.contains('angry') ||
+        lower.contains('anxious')) {
+      return 1.6; // significant acute trigger
+    }
+    if (lower.contains('neutral')) {
+      return 1.0;
+    }
+    if (lower.contains('relaxed') ||
+        lower.contains('calm') ||
+        lower.contains('happy')) {
+      return 0.75; // protective effect
+    }
+    return 1.0; // default
+  }
+
+  // Vibration Filter / Moving Average Array
+  final List<double> _hrBuffer = [];
+  final int _hrBufferSize = 5;
+
   void _parseAndUpdateData(String jsonString) {
     try {
       final json = jsonDecode(jsonString);
-      final double hr = (json['hr'] as num?)?.toDouble() ?? 0.0;
+      final double rawHr = (json['hr'] as num?)?.toDouble() ?? 0.0;
       final double temp = (json['temp'] as num?)?.toDouble() ?? 0.0;
+
+      // --- 1. Vibration Filter: Moving Average for Heart Rate ---
+      _hrBuffer.add(rawHr);
+      if (_hrBuffer.length > _hrBufferSize) {
+        _hrBuffer.removeAt(0);
+      }
+      final double hr = _hrBuffer.reduce((a, b) => a + b) / _hrBuffer.length;
 
       // Inside _parseAndUpdateData or after setState
       final sensorProvider =
           Provider.of<SensorDataProvider>(context, listen: false);
-      sensorProvider.updateHeartRate(heartRate.toInt());
-      sensorProvider.updateTemperature(bodyTemperature);
-      sensorProvider
-          .updateDangerAlert(heartRate > 110 || bodyTemperature > 38.0);
+      sensorProvider.updateHeartRate(hr.toInt());
+      sensorProvider.updateTemperature(temp);
+      sensorProvider.updateDangerAlert(hr > 110 || temp > 38.0);
 
-      print(
-          "Sent to provider → HR: $heartRate, Temp: $bodyTemperature, Danger: ${heartRate > 110 || bodyTemperature > 38.0}");
+      debugPrint(
+          "Sent to provider → HR (Smoothed): $hr, Temp: $temp, Danger: ${hr > 110 || temp > 38.0}");
 
       if (mounted) {
         setState(() {
@@ -212,16 +344,10 @@ class _Member1PageState extends State<Member1Page> {
 
       _predictWithTFLite(hr, temp);
 
-
-      // FIXED: These variables must be at CLASS level (moved from inside method)
-      // Add these two lines at the TOP of _Member1PageState class:
-      // DateTime? _lastSavedTime;
-      // final Duration _saveInterval = const Duration(seconds: 10);
-
-
       if (hr > 0 && temp > 0) {
         final now = DateTime.now();
-        if (_lastSavedTime == null || now.difference(_lastSavedTime!) >= _saveInterval) {
+        if (_lastSavedTime == null ||
+            now.difference(_lastSavedTime!) >= _saveInterval) {
           _saveToFirestore(hr, temp);
           _lastSavedTime = now;
         }
@@ -230,8 +356,6 @@ class _Member1PageState extends State<Member1Page> {
       debugPrint("Parse error: $e | Raw: $jsonString");
     }
   }
-
-  
 
   Future<void> _saveToFirestore(double hr, double temp) async {
     final rideProvider =
@@ -245,7 +369,18 @@ class _Member1PageState extends State<Member1Page> {
     setState(() => _isSaving = true);
 
     try {
-      const String userId = "abc123xyz"; // ← REPLACE WITH REAL USER ID
+      final auth = Provider.of<AuthService>(context, listen: false);
+      final userId = auth.userId;
+
+      if (userId == null) {
+        debugPrint("No logged-in user — cannot save to Firestore");
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(content: Text("Please log in to save data")),
+          );
+        }
+        return;
+      }
 
       final String isoTimestamp = DateTime.now().toIso8601String();
 
@@ -254,14 +389,14 @@ class _Member1PageState extends State<Member1Page> {
         "heartRate": hr,
         "bodyTemperature": temp,
         "riskLevel": riskLevel,
-        "riskColor": "#${riskColor.value.toRadixString(16).padLeft(8, '0').substring(2)}",
+        "riskColor":
+            "#${riskColor.value.toRadixString(16).padLeft(8, '0').substring(2)}",
         "userId": userId,
         "deviceName": deviceName,
 
         "createdAt": FieldValue.serverTimestamp(),
         "location": const GeoPoint(7.2000, 79.8730),
 
-        
         "rideId": rideProvider.currentRideId!,
 
         // Ride metadata (copied once per ride)
@@ -274,8 +409,6 @@ class _Member1PageState extends State<Member1Page> {
         "currentLocation": _currentPosition != null
             ? GeoPoint(_currentPosition!.latitude, _currentPosition!.longitude)
             : null,
-
-        
       };
 
       await _firestore.collection("health_readings").add(data);
@@ -299,18 +432,96 @@ class _Member1PageState extends State<Member1Page> {
     }
 
     try {
-      var input = [[hr, temp]];
+      // ────────────────────────────────────────────────
+      // 1. Get current emotional state from provider
+      // ────────────────────────────────────────────────
+      final emotionProvider = Provider.of<EmotionProvider>(
+        context,
+        listen: false,
+      );
+      final currentEmotion = emotionProvider.stressState.emotion;
+      final emotionEmoji = emotionProvider.stressState.emoji ?? "😐";
+
+      final emotionMultiplier = _getEmotionRiskMultiplier(currentEmotion);
+
+      // ────────────────────────────────────────────────
+      // 2. User Profile (still mocked — replace with real DB fetch later)
+      // ────────────────────────────────────────────────
+      double age = 30.0;
+      double gender = 0.0; // 0 = Male, 1 = Female
+      double weight = 75.0; // kg
+      double height = 1.75; // meters
+
+      // ────────────────────────────────────────────────
+      // 3. Feature Engineering
+      // ────────────────────────────────────────────────
+      double derivedBMI = weight / (height * height);
+
+      // Crude HRV proxy
+      double derivedHRV = 60.0;
+      if (hr > 100 || hr < 60) derivedHRV = 30.0;
+
+      // Scalers (from your original training pipeline)
+      List<double> means = [
+        99.70281639014169,
+        37.07289512301389,
+        50.93246,
+        0.49886,
+        27.610900222144865,
+        47.90562916450637
+      ];
+      List<double> scales = [
+        28.799757731731674,
+        1.1095593883726716,
+        19.336496464016147,
+        0.5000000000147614,
+        8.52047814467008,
+        17.265580269863933
+      ];
+
+      double s_hr = (hr - means[0]) / scales[0];
+      double s_temp = (temp - means[1]) / scales[1];
+      double s_age = (age - means[2]) / scales[2];
+      double s_gender = (gender - means[3]) / scales[3];
+      double s_bmi = (derivedBMI - means[4]) / scales[4];
+      double s_hrv = (derivedHRV - means[5]) / scales[5];
+
+      // Input tensor shape: [1, 6]
+      var input = [
+        [s_hr, s_temp, s_age, s_gender, s_bmi, s_hrv]
+      ];
+
       var output = List.filled(1, [0.0]);
+
       _interpreter!.run(input, output);
 
-      final double probability = output[0][0];
-      final int riskPercentage = (probability * 100).round();
-      final String newRisk = probability > 0.5 ? "High" : "Low";
-      final Color newColor = newRisk == "High" ? Colors.red : Colors.green;
+      double baseProbability = output[0][0].clamp(0.0, 1.0);
+
+      // ────────────────────────────────────────────────
+      // 4. Apply emotion adjustment
+      // ────────────────────────────────────────────────
+      final adjustedProbability =
+          (baseProbability * emotionMultiplier).clamp(0.0, 1.0);
+      final int riskPercentage = (adjustedProbability * 100).round();
+
+      String newRisk;
+      Color newColor;
+
+      if (adjustedProbability > 0.65) {
+        newRisk = "High";
+        newColor = Colors.red;
+      } else if (adjustedProbability > 0.35) {
+        newRisk = "Medium";
+        newColor = Colors.orange;
+      } else {
+        newRisk = "Low";
+        newColor = Colors.green;
+      }
 
       if (mounted) {
         setState(() {
-          riskLevel = "$newRisk ($riskPercentage%)";
+          riskLevel =
+              "$newRisk ($riskPercentage%) • $currentEmotion $emotionEmoji";
           riskColor = newColor;
         });
       }
@@ -320,16 +531,23 @@ class _Member1PageState extends State<Member1Page> {
     }
   }
 
+// ────────────────────────────────────────────────
+// Helper: Emotion → Acute Risk Multiplier
+// Values inspired by epidemiological literature:
+//   - Anger/frustration/anxiety → ~1.4–2.0× acute risk
+//   - Relaxed/calm → protective (~0.7–0.9)
+// ────────────────────────────────────────────────
+
   void _fallbackLocalRisk(double hr, double temp) {
     String newRisk = "Low";
     Color newColor = Colors.green;
     int riskPercentage = 15;
 
-    if (hr > 100 || temp > 38.0) {
+    if (hr > 120 || hr < 40 || temp > 38.0 || temp < 35.0) {
       newRisk = "High";
       newColor = Colors.red;
       riskPercentage = 85;
-    } else if (hr > 90 || temp > 37.5) {
+    } else if (hr > 100 || hr < 60 || temp > 37.2) {
       newRisk = "Medium";
       newColor = Colors.orange;
       riskPercentage = 60;
@@ -369,7 +587,8 @@ class _Member1PageState extends State<Member1Page> {
         } else {
           setState(() {
             status = "Connection failed";
-            errorMessage = "Failed after $maxReconnectAttempts attempts. Please check device.";
+            errorMessage =
+                "Failed after $maxReconnectAttempts attempts. Please check device.";
           });
         }
       }
@@ -446,7 +665,7 @@ class _Member1PageState extends State<Member1Page> {
                 const SizedBox(height: 16),
 
                 // Connection Controls
-                _buildConnectionControls(isConnected),
+                _buildConnectionHeader(isConnected),
 
                 const SizedBox(height: 20),
 
@@ -569,57 +788,38 @@ class _Member1PageState extends State<Member1Page> {
     );
   }
 
-  Widget _buildConnectionControls(bool isConnected) {
+  // Replace _buildConnectionControls() with this
+  Widget _buildConnectionHeader(bool isConnected) {
+    final btManager = context.watch<BluetoothManager>();
+    final isConnected = btManager.isConnected(deviceName);
+
     return Card(
       elevation: 2,
+      margin: const EdgeInsets.only(bottom: 16),
       shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
       child: Padding(
         padding: const EdgeInsets.all(16),
         child: Column(
-          crossAxisAlignment: CrossAxisAlignment.stretch,
+          crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            const Text(
-              "Device Connection",
-              style: TextStyle(
-                  fontSize: 14,
-                  fontWeight: FontWeight.w600,
-                  color: Colors.black87),
-            ),
-            const SizedBox(height: 12),
             Row(
               children: [
-                Expanded(
-                  child: OutlinedButton.icon(
-                    onPressed: isConnected ? null : connectToDevice,
-                    icon: const Icon(Icons.bluetooth, size: 18),
-                    label: const Text("Connect"),
-                    style: OutlinedButton.styleFrom(
-                      padding: const EdgeInsets.symmetric(vertical: 12),
-                      side: BorderSide(
-                          color: isConnected
-                              ? Colors.grey.shade300
-                              : Colors.indigo),
-                      foregroundColor:
-                          isConnected ? Colors.grey : Colors.indigo,
-                      shape: RoundedRectangleBorder(
-                          borderRadius: BorderRadius.circular(8)),
-                    ),
-                  ),
+                Icon(
+                  isConnected
+                      ? Icons.bluetooth_connected
+                      : Icons.bluetooth_disabled,
+                  color: isConnected ? Colors.green : Colors.orange,
                 ),
                 const SizedBox(width: 12),
                 Expanded(
-                  child: OutlinedButton.icon(
-                    onPressed: isConnected ? disconnectDevice : null,
-                    icon: const Icon(Icons.bluetooth_disabled, size: 18),
-                    label: const Text("Disconnect"),
-                    style: OutlinedButton.styleFrom(
-                      padding: const EdgeInsets.symmetric(vertical: 12),
-                      side: BorderSide(
-                          color:
-                              isConnected ? Colors.red : Colors.grey.shade300),
-                      foregroundColor: isConnected ? Colors.red : Colors.grey,
-                      shape: RoundedRectangleBorder(
-                          borderRadius: BorderRadius.circular(8)),
+                  child: Text(
+                    status,
+                    style: TextStyle(
+                      fontSize: 16,
+                      fontWeight: FontWeight.w600,
+                      color: isConnected
+                          ? Colors.green.shade800
+                          : Colors.orange.shade800,
                     ),
                   ),
                 ),
@@ -632,8 +832,10 @@ class _Member1PageState extends State<Member1Page> {
                 decoration: BoxDecoration(
                   color: Colors.red.shade50,
                   borderRadius: BorderRadius.circular(8),
+                  border: Border.all(color: Colors.red.shade200),
                 ),
                 child: Row(
+                  crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
                     Icon(Icons.error_outline,
                         size: 16, color: Colors.red.shade700),
@@ -642,10 +844,25 @@ class _Member1PageState extends State<Member1Page> {
                       child: Text(
                         errorMessage,
                         style:
-                            TextStyle(color: Colors.red.shade700, fontSize: 12),
+                            TextStyle(color: Colors.red.shade800, fontSize: 13),
                       ),
                     ),
                   ],
+                ),
+              ),
+            ],
+            if (!isConnected) ...[
+              const SizedBox(height: 16),
+              SizedBox(
+                width: double.infinity,
+                child: OutlinedButton.icon(
+                  icon: const Icon(Icons.refresh, size: 18),
+                  label: const Text("Retry Connection"),
+                  onPressed: () => _autoConnect(),
+                  style: OutlinedButton.styleFrom(
+                    foregroundColor: Colors.blue,
+                    side: const BorderSide(color: Colors.blue),
+                  ),
                 ),
               ),
             ],
@@ -774,35 +991,125 @@ class _Member1PageState extends State<Member1Page> {
   }
 
   Widget _buildEmotionalState(bool isConnected) {
+    // Determine gradient based on dummy data or risk
+    final List<Color> gradientColors = frustrationState == "Neutral"
+        ? [Colors.blue.shade50, Colors.white]
+        : frustrationState == "Frustrated"
+            ? [Colors.orange.shade50, Colors.white]
+            : [Colors.indigo.shade50, Colors.white];
+
     return Card(
-      elevation: 2,
-      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
-      child: Padding(
-        padding: const EdgeInsets.all(20),
+      elevation: 4,
+      shadowColor: Colors.black12,
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+      child: Container(
+        decoration: BoxDecoration(
+          borderRadius: BorderRadius.circular(16),
+          gradient: LinearGradient(
+            colors: gradientColors,
+            begin: Alignment.topLeft,
+            end: Alignment.bottomRight,
+          ),
+        ),
+        padding: const EdgeInsets.all(24),
         child: Column(
           children: [
-            const Text(
-              "Emotional State",
-              style: TextStyle(fontSize: 16, fontWeight: FontWeight.w600),
+            Row(
+              mainAxisAlignment: MainAxisAlignment.spaceBetween,
+              children: [
+                const Text(
+                  "Emotional State",
+                  style: TextStyle(
+                    fontSize: 18,
+                    fontWeight: FontWeight.bold,
+                    color: Colors.black87,
+                  ),
+                ),
+                Container(
+                  padding:
+                      const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+                  decoration: BoxDecoration(
+                    color: Colors.white,
+                    borderRadius: BorderRadius.circular(12),
+                    border: Border.all(color: Colors.grey.shade200),
+                  ),
+                  child: const Row(
+                    children: [
+                      Icon(Icons.psychology, size: 14, color: Colors.indigo),
+                      SizedBox(width: 4),
+                      Text("Beta",
+                          style: TextStyle(
+                              fontSize: 10,
+                              fontWeight: FontWeight.bold,
+                              color: Colors.indigo)),
+                    ],
+                  ),
+                )
+              ],
             ),
-            const SizedBox(height: 16),
-            Text(frustrationEmoji, style: const TextStyle(fontSize: 64)),
-            const SizedBox(height: 12),
-            Text(
-              frustrationState,
-              style: const TextStyle(
-                fontSize: 20,
-                fontWeight: FontWeight.w600,
-                color: Colors.indigo,
+            const SizedBox(height: 24),
+            Row(
+              mainAxisAlignment: MainAxisAlignment.center,
+              crossAxisAlignment: CrossAxisAlignment.center,
+              children: [
+                Container(
+                  padding: const EdgeInsets.all(16),
+                  decoration: BoxDecoration(
+                    color: Colors.white,
+                    shape: BoxShape.circle,
+                    boxShadow: [
+                      BoxShadow(
+                        color: Colors.black.withOpacity(0.05),
+                        blurRadius: 10,
+                        offset: const Offset(0, 4),
+                      )
+                    ],
+                  ),
+                  child: Text(frustrationEmoji,
+                      style: const TextStyle(fontSize: 48)),
+                ),
+                const SizedBox(width: 24),
+                Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      frustrationState,
+                      style: const TextStyle(
+                        fontSize: 24,
+                        fontWeight: FontWeight.w800,
+                        color: Colors.indigo,
+                      ),
+                    ),
+                    const SizedBox(height: 4),
+                    Text(
+                      "Current Analysis",
+                      style:
+                          TextStyle(fontSize: 13, color: Colors.grey.shade600),
+                    ),
+                  ],
+                ),
+              ],
+            ),
+            const SizedBox(height: 20),
+            Container(
+              width: double.infinity,
+              padding: const EdgeInsets.all(12),
+              decoration: BoxDecoration(
+                color: Colors.white.withOpacity(0.6),
+                borderRadius: BorderRadius.circular(8),
               ),
-            ),
-            const SizedBox(height: 8),
-            Text(
-              isConnected
-                  ? "Analyzing real-time signals..."
-                  : "Connect device to detect emotional state",
-              style: const TextStyle(fontSize: 12, color: Colors.black38),
-              textAlign: TextAlign.center,
+              child: Text(
+                isConnected
+                    ? "Analyzing real-time physiological signals..."
+                    : "Connect device to detect emotional state",
+                style: TextStyle(
+                    fontSize: 12,
+                    fontWeight: FontWeight.w500,
+                    color: isConnected
+                        ? Colors.indigo.shade400
+                        : Colors.grey.shade600),
+                textAlign: TextAlign.center,
+              ),
             ),
           ],
         ),
