@@ -6,12 +6,16 @@ import 'package:google_sign_in/google_sign_in.dart';
 class AuthService with ChangeNotifier {
   final FirebaseAuth _auth = FirebaseAuth.instance;
   final GoogleSignIn _googleSignIn = GoogleSignIn(
-  scopes: ['email'],
-);
+    scopes: ['email'],
+  );
 
   Stream<User?> get authStateChanges => _auth.authStateChanges();
 
   User? get currentUser => _auth.currentUser;
+
+  String? get userId => currentUser?.uid;
+
+  bool get isLoggedIn => currentUser != null;
 
   // Email/Password Sign In
   Future<String?> signIn(String email, String password) async {

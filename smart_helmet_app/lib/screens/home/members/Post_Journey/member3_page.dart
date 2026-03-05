@@ -3,6 +3,7 @@ import 'dart:async';
 import 'dart:convert';
 import 'dart:math';
 import 'dart:typed_data';
+import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:flutter_bluetooth_serial/flutter_bluetooth_serial.dart';
 import 'package:permission_handler/permission_handler.dart';
 import 'package:provider/provider.dart';
@@ -67,6 +68,12 @@ class _Member3PageState extends State<Member3Page>
   String _dataBuffer = "";
   static const String targetDeviceName = "SmartHelmet_ESP32";
 
+// Firestore
+  final FirebaseFirestore _firestore = FirebaseFirestore.instance;
+  bool _isSaving = false;
+  DateTime? _lastSavedTime;
+  final Duration _saveInterval =
+      const Duration(seconds: 1); // ← change this value to control frequency
   // Current GPS state
   double currentSpeed = 0.0;
   double currentLat = 0.0;
@@ -423,8 +430,36 @@ class _Member3PageState extends State<Member3Page>
     final journeyProvider =
         Provider.of<JourneyProvider>(context, listen: false);
 
+    // ─── NEW: Calculate new turn status FIRST ────────────────────────────────
+    double turnRate = imuData['gyroZ']!.abs();
+    String newTurnStatus = "Normal";
+    Color newStatusColor = Colors.green;
+    bool isRiskyThisReading = false;
+
+    if (turnRate > riskyTurnThreshold) {
+      newTurnStatus = "RISKY TURN!";
+      newStatusColor = Colors.red;
+      isRiskyThisReading = true;
+      riskyTurnCount++;
+    } else if (turnRate > sharpTurnThreshold) {
+      newTurnStatus = "Sharp Turn";
+      newStatusColor = Colors.orange;
+      sharpTurnCount++;
+    }
+
+    // ─── Save to Firestore BEFORE setState (we already know if it's risky) ───
+    if (imuData['gyroZ'] != null) {
+      _saveLiveReadingIfNeeded(
+        imuData,
+        speed,
+        lat,
+        lng,
+        isRiskyThisReading, // ← pass the flag directly
+      );
+    }
+
+    // Now safe to update UI
     setState(() {
-      // 1. Update IMU UI variables
       gyroX = imuData['gyroX']!;
       gyroY = imuData['gyroY']!;
       gyroZ = imuData['gyroZ']!;
@@ -432,55 +467,41 @@ class _Member3PageState extends State<Member3Page>
       accelY = imuData['accelY']!;
       accelZ = imuData['accelZ']!;
 
-      // 2. Update Graph History
       gyroZHistory.add(gyroZ.abs());
       if (gyroZHistory.length > maxHistoryLength) {
         gyroZHistory.removeAt(0);
       }
 
-      // 3. Process GPS Data (If valid)
+      currentTurnStatus = newTurnStatus;
+      statusColor = newStatusColor;
+
+      // GPS processing remains the same
       if (lat != 0.0 && lng != 0.0) {
         currentLat = lat;
         currentLng = lng;
         currentSpeed = speed;
 
-        // Calculate Distance using Haversine formula approximation
         if (lastLat != null && lastLng != null) {
-          double dist = _calculateDistance(lastLat!, lastLng!, lat, lng);
-          totalDistanceKm += dist;
+          totalDistanceKm += _calculateDistance(lastLat!, lastLng!, lat, lng);
         }
-
         lastLat = lat;
         lastLng = lng;
 
-        // Send to Provider
         if (journeyProvider.isJourneyActive) {
           journeyProvider.updateDistanceAndSpeed(totalDistanceKm, currentSpeed);
         }
       }
 
-      // 4. Turn Detection Logic
-      double turnRate = gyroZ.abs();
-
-      if (turnRate > riskyTurnThreshold) {
-        currentTurnStatus = "RISKY TURN!";
-        statusColor = Colors.red;
-        riskyTurnCount++;
-
-        if (journeyProvider.isJourneyActive) {
+      // Provider turn events (unchanged)
+      if (journeyProvider.isJourneyActive) {
+        if (isRiskyThisReading) {
           journeyProvider.addTurnEvent(
             severity: 'risky',
             turnRate: turnRate,
             latitude: currentLat,
             longitude: currentLng,
           );
-        }
-      } else if (turnRate > sharpTurnThreshold) {
-        currentTurnStatus = "Sharp Turn";
-        statusColor = Colors.orange;
-        sharpTurnCount++;
-
-        if (journeyProvider.isJourneyActive) {
+        } else if (turnRate > sharpTurnThreshold) {
           journeyProvider.addTurnEvent(
             severity: 'sharp',
             turnRate: turnRate,
@@ -488,9 +509,6 @@ class _Member3PageState extends State<Member3Page>
             longitude: currentLng,
           );
         }
-      } else {
-        currentTurnStatus = "Normal";
-        statusColor = Colors.green;
       }
     });
   }
@@ -511,6 +529,64 @@ class _Member3PageState extends State<Member3Page>
 
   double _toRadians(double degree) {
     return degree * (pi / 180);
+  }
+
+  Future<void> _saveLiveReadingIfNeeded(
+    Map<String, double> imu,
+    double speed,
+    double lat,
+    double lng,
+    bool isRiskyThisReading, // ← new parameter
+  ) async {
+    if (_isSaving) return;
+
+    final now = DateTime.now();
+    final timePassed = _lastSavedTime == null ||
+        now.difference(_lastSavedTime!) >= _saveInterval;
+
+    // Save if time interval passed OR this reading is risky
+    if (!timePassed && !isRiskyThisReading) return;
+
+    setState(() => _isSaving = true);
+
+    try {
+      final data = {
+        "timestamp": now.toIso8601String(),
+        "createdAt": FieldValue.serverTimestamp(),
+        "gyroX": imu['gyroX'],
+        "gyroY": imu['gyroY'],
+        "gyroZ": imu['gyroZ'],
+        "accelX": imu['accelX'],
+        "accelY": imu['accelY'],
+        "accelZ": imu['accelZ'],
+        "speedKmh": speed,
+        "latitude": lat,
+        "longitude": lng,
+        "location": GeoPoint(lat, lng),
+        "turnStatus":
+            currentTurnStatus, // still use latest UI value, but we know it's risky
+        "turnRateDegPerSec": imu['gyroZ']!.abs(),
+        "sharpTurnsTotal": sharpTurnCount,
+        "riskyTurnsTotal": riskyTurnCount,
+        "totalDistanceKm": totalDistanceKm,
+        "deviceName": targetDeviceName,
+        "isRiskyEvent": isRiskyThisReading, // ← more accurate
+      };
+
+      await _firestore.collection("helmet_live_readings").add(data);
+
+      _lastSavedTime = now;
+      debugPrint("Live reading saved → Risky: $isRiskyThisReading");
+    } catch (e) {
+      debugPrint("Firestore save error: $e");
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text("Failed to save live data: $e")),
+        );
+      }
+    } finally {
+      if (mounted) setState(() => _isSaving = false);
+    }
   }
 
   @override
@@ -536,15 +612,50 @@ class _Member3PageState extends State<Member3Page>
             ),
         ],
       ),
-      body: _showRideSummary && _completedRide != null
-          ? _buildRideSummaryView(_completedRide!)
-          : TabBarView(
-              controller: _tabController,
-              children: [
-                _buildJourneyHistoryTab(),
-                _buildLiveMonitoringTab(),
-              ],
+      body: Stack(
+        children: [
+          _showRideSummary && _completedRide != null
+              ? _buildRideSummaryView(_completedRide!)
+              : TabBarView(
+                  controller: _tabController,
+                  children: [
+                    _buildJourneyHistoryTab(),
+                    _buildLiveMonitoringTab(),
+                  ],
+                ),
+
+          // Saving indicator
+          if (_isSaving)
+            const Positioned(
+              bottom: 24,
+              right: 24,
+              child: Card(
+                color: Colors.black87,
+                child: Padding(
+                  padding: EdgeInsets.symmetric(horizontal: 16, vertical: 10),
+                  child: Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      SizedBox(
+                        width: 18,
+                        height: 18,
+                        child: CircularProgressIndicator(
+                          strokeWidth: 2.5,
+                          color: Colors.white,
+                        ),
+                      ),
+                      SizedBox(width: 12),
+                      Text(
+                        "Saving...",
+                        style: TextStyle(color: Colors.white, fontSize: 13),
+                      ),
+                    ],
+                  ),
+                ),
+              ),
             ),
+        ],
+      ),
     );
   }
 
