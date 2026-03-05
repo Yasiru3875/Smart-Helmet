@@ -13,12 +13,14 @@ class RegisterScreen extends StatefulWidget {
 class _RegisterScreenState extends State<RegisterScreen> {
   final _formKey = GlobalKey<FormState>();
 
+  final _usernameController = TextEditingController();
   final _emailController = TextEditingController();
   final _passwordController = TextEditingController();
   final _ageController = TextEditingController();
   final _heightController = TextEditingController(); // in cm
   final _weightController = TextEditingController(); // in kg
 
+  final _usernameFocus = FocusNode();
   final _emailFocus = FocusNode();
   final _passwordFocus = FocusNode();
   final _ageFocus = FocusNode();
@@ -27,16 +29,18 @@ class _RegisterScreenState extends State<RegisterScreen> {
 
   String? _selectedGender;
   bool _isLoading = false;
-  bool _obscurePassword = true; // true = hidden, false = visible
+  bool _obscurePassword = true;
 
   @override
   void dispose() {
+    _usernameController.dispose();
     _emailController.dispose();
     _passwordController.dispose();
     _ageController.dispose();
     _heightController.dispose();
     _weightController.dispose();
 
+    _usernameFocus.dispose();
     _emailFocus.dispose();
     _passwordFocus.dispose();
     _ageFocus.dispose();
@@ -53,6 +57,7 @@ class _RegisterScreenState extends State<RegisterScreen> {
     final auth = Provider.of<AuthService>(context, listen: false);
 
     final errorMessage = await auth.register(
+      username: _usernameController.text.trim(),
       email: _emailController.text.trim(),
       password: _passwordController.text.trim(),
       age: int.tryParse(_ageController.text.trim()) ?? 0,
@@ -170,6 +175,41 @@ class _RegisterScreenState extends State<RegisterScreen> {
                                 key: _formKey,
                                 child: Column(
                                   children: [
+                                    // Username
+                                    TextFormField(
+                                      controller: _usernameController,
+                                      focusNode: _usernameFocus,
+                                      textInputAction: TextInputAction.next,
+                                      autofillHints: const [
+                                        AutofillHints.newUsername
+                                      ],
+                                      decoration: _inputDecoration(
+                                        'Username',
+                                        'coolrider42',
+                                        Icons.person_outline,
+                                      ),
+                                      validator: (v) {
+                                        if (v == null || v.trim().isEmpty) {
+                                          return 'Please choose a username';
+                                        }
+                                        final trimmed = v.trim();
+                                        if (trimmed.length < 3) {
+                                          return 'At least 3 characters';
+                                        }
+                                        if (trimmed.length > 20) {
+                                          return 'Max 20 characters';
+                                        }
+                                        if (!RegExp(r'^[a-zA-Z0-9_.-]+$')
+                                            .hasMatch(trimmed)) {
+                                          return 'Only letters, numbers, _, . allowed';
+                                        }
+                                        return null;
+                                      },
+                                      onFieldSubmitted: (_) =>
+                                          _emailFocus.requestFocus(),
+                                    ),
+                                    SizedBox(height: isSmallScreen ? 14 : 18),
+
                                     // Email
                                     TextFormField(
                                       controller: _emailController,
@@ -289,6 +329,7 @@ class _RegisterScreenState extends State<RegisterScreen> {
                                     ),
                                     SizedBox(height: isSmallScreen ? 14 : 18),
 
+                                    // Weight
                                     TextFormField(
                                       controller: _weightController,
                                       focusNode: _weightFocus,
@@ -314,12 +355,11 @@ class _RegisterScreenState extends State<RegisterScreen> {
 
                                     SizedBox(height: isSmallScreen ? 24 : 32),
 
-                                    // Password ── FIXED VISIBILITY TOGGLE ────────
+                                    // Password
                                     TextFormField(
                                       controller: _passwordController,
                                       focusNode: _passwordFocus,
-                                      obscureText:
-                                          _obscurePassword, // ← this controls visibility
+                                      obscureText: _obscurePassword,
                                       textInputAction: TextInputAction.done,
                                       autofillHints: const [
                                         AutofillHints.newPassword

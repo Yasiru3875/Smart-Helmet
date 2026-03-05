@@ -33,6 +33,7 @@ class AuthService with ChangeNotifier {
 
   // ── Email/Password Registration + Save profile to Firestore ──────────────
   Future<String?> register({
+    required String username,
     required String email,
     required String password,
     required int age,
