@@ -22,6 +22,9 @@ class EmotionProvider with ChangeNotifier {
 
   EmotionState get state => _state;
 
+
+  get stressState => null;
+
   void updateEmotion(String emotion, String emoji) {
     _state = _state.copyWith(emotion: emotion, emoji: emoji);
     notifyListeners();
@@ -31,4 +34,6 @@ class EmotionProvider with ChangeNotifier {
     _state = EmotionState();
     notifyListeners();
   }
+
 }
+
