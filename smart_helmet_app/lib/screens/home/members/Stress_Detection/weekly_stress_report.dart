@@ -555,51 +555,83 @@ class _WeeklyStressReportState extends State<WeeklyStressReport> {
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
                         // User Profile Card
-                        Card(
-                          elevation: 4,
-                          shape: RoundedRectangleBorder(
-                              borderRadius: BorderRadius.circular(16)),
+                        Container(
+                          decoration: BoxDecoration(
+                            gradient: const LinearGradient(
+                              colors: [Color(0xFF3B2667), Color(0xFFBC78EC)],
+                              begin: Alignment.topLeft,
+                              end: Alignment.bottomRight,
+                            ),
+                            borderRadius: BorderRadius.circular(24),
+                            boxShadow: [
+                              BoxShadow(
+                                color: const Color(0xFFBC78EC).withOpacity(0.4),
+                                blurRadius: 15,
+                                offset: const Offset(0, 8),
+                              ),
+                            ],
+                          ),
                           child: Padding(
-                            padding: const EdgeInsets.all(20),
+                            padding: const EdgeInsets.all(24),
                             child: Column(
                               crossAxisAlignment: CrossAxisAlignment.start,
                               children: [
-                                Text('Your Profile',
-                                    style: Theme.of(context)
-                                        .textTheme
-                                        .titleLarge
-                                        ?.copyWith(
-                                            fontWeight: FontWeight.bold)),
-                                const SizedBox(height: 16),
-                                Text(
-                                  'Name: ${_userName ?? '—'}',
-                                  style: const TextStyle(fontSize: 16),
+                                Row(
+                                  children: [
+                                    Container(
+                                      padding: const EdgeInsets.all(10),
+                                      decoration: BoxDecoration(
+                                        color: Colors.white.withOpacity(0.2),
+                                        shape: BoxShape.circle,
+                                      ),
+                                      child: const Icon(Icons.person_outline, color: Colors.white, size: 28),
+                                    ),
+                                    const SizedBox(width: 16),
+                                    const Text(
+                                      'Patient Profile',
+                                      style: TextStyle(
+                                        color: Colors.white,
+                                        fontSize: 22,
+                                        fontWeight: FontWeight.bold,
+                                        letterSpacing: 0.5,
+                                      ),
+                                    ),
+                                  ],
                                 ),
-                                Text(
-                                  'Age: ${_age ?? '—'}',
-                                  style: const TextStyle(fontSize: 16),
-                                ),
-                                Text(
-                                  'Gender: ${_gender ?? '—'}',
-                                  style: const TextStyle(fontSize: 16),
-                                ),
-                                Text(
-                                  'Height: ${_heightCm?.toStringAsFixed(0) ?? '—'} cm',
-                                  style: const TextStyle(fontSize: 16),
-                                ),
-                                Text(
-                                  'Weight: ${_weightKg?.toStringAsFixed(0) ?? '—'} kg',
-                                  style: const TextStyle(fontSize: 16),
-                                ),
+                                const SizedBox(height: 24),
+                                _buildProfileRow('Name', _userName ?? '—'),
+                                _buildProfileRow('Age', '${_age ?? '—'} yrs'),
+                                _buildProfileRow('Gender', _gender ?? '—'),
+                                _buildProfileRow('Height', '${_heightCm?.toStringAsFixed(0) ?? '—'} cm'),
+                                _buildProfileRow('Weight', '${_weightKg?.toStringAsFixed(0) ?? '—'} kg'),
                                 if (_bmi != null)
-                                  Text(
-                                    'BMI: ${_bmi!.toStringAsFixed(1)} ($_bmiCategory)',
-                                    style: TextStyle(
-                                      fontSize: 16,
-                                      color: _bmiCategory == 'Normal'
-                                          ? Colors.green
-                                          : Colors.orange,
-                                      fontWeight: FontWeight.bold,
+                                  Padding(
+                                    padding: const EdgeInsets.only(top: 8.0),
+                                    child: Row(
+                                      mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                                      children: [
+                                        Text('BMI Index', style: TextStyle(color: Colors.white.withOpacity(0.8), fontSize: 16)),
+                                        Container(
+                                          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+                                          decoration: BoxDecoration(
+                                            color: _bmiCategory == 'Normal'
+                                                ? Colors.greenAccent.withOpacity(0.2)
+                                                : Colors.orangeAccent.withOpacity(0.2),
+                                            borderRadius: BorderRadius.circular(20),
+                                            border: Border.all(
+                                              color: _bmiCategory == 'Normal' ? Colors.greenAccent : Colors.orangeAccent,
+                                            ),
+                                          ),
+                                          child: Text(
+                                            '${_bmi!.toStringAsFixed(1)} ($_bmiCategory)',
+                                            style: TextStyle(
+                                              color: _bmiCategory == 'Normal' ? Colors.greenAccent : Colors.orangeAccent,
+                                              fontWeight: FontWeight.bold,
+                                              letterSpacing: 0.5,
+                                            ),
+                                          ),
+                                        ),
+                                      ],
                                     ),
                                   ),
                               ],
@@ -610,42 +642,58 @@ class _WeeklyStressReportState extends State<WeeklyStressReport> {
                         const SizedBox(height: 24),
 
                         // Summary Card
-                        Card(
-                          elevation: 4,
-                          shape: RoundedRectangleBorder(
-                              borderRadius: BorderRadius.circular(16)),
+                        Container(
+                          decoration: BoxDecoration(
+                            color: Colors.white,
+                            borderRadius: BorderRadius.circular(24),
+                            boxShadow: [
+                              BoxShadow(color: Colors.black.withOpacity(0.04), blurRadius: 20, offset: const Offset(0, 10)),
+                            ],
+                          ),
                           child: Padding(
-                            padding: const EdgeInsets.all(20),
+                            padding: const EdgeInsets.all(24),
                             child: Column(
                               crossAxisAlignment: CrossAxisAlignment.start,
                               children: [
-                                Text('Weekly Summary',
-                                    style: Theme.of(context)
-                                        .textTheme
-                                        .titleLarge
-                                        ?.copyWith(
-                                            fontWeight: FontWeight.bold)),
-                                const SizedBox(height: 16),
                                 Row(
-                                  mainAxisAlignment:
-                                      MainAxisAlignment.spaceBetween,
                                   children: [
-                                    _statItem('Avg Stress',
-                                        '${avgStress.toStringAsFixed(2)}'),
-                                    _statItem(
-                                        'High Days', '$highStressDays / 7'),
+                                    Container(
+                                      padding: const EdgeInsets.all(8),
+                                      decoration: BoxDecoration(color: Colors.blue.shade50, borderRadius: BorderRadius.circular(12)),
+                                      child: Icon(Icons.analytics_rounded, color: Colors.blue.shade600),
+                                    ),
+                                    const SizedBox(width: 12),
+                                    const Text('Weekly At a Glance',
+                                        style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold, color: Color(0xFF1E1E2C))),
                                   ],
                                 ),
-                                const SizedBox(height: 12),
-                                Text('Mood Distribution:',
-                                    style: Theme.of(context)
-                                        .textTheme
-                                        .titleMedium),
-                                Text(
-                                  'Stressed: ${moodDistribution['Stressed']} • '
-                                  'Neutral: ${moodDistribution['Neutral']} • '
-                                  'Relaxed: ${moodDistribution['Relaxed']}',
-                                  style: const TextStyle(fontSize: 15),
+                                const SizedBox(height: 24),
+                                Row(
+                                  children: [
+                                    Expanded(child: _buildStatCard('Avg Stress', '${(avgStress * 100).toStringAsFixed(0)}%', Icons.show_chart, Colors.purple)),
+                                    const SizedBox(width: 16),
+                                    Expanded(child: _buildStatCard('High Days', '$highStressDays / 7', Icons.warning_rounded, Colors.red)),
+                                  ],
+                                ),
+                                const SizedBox(height: 24),
+                                Container(
+                                  padding: const EdgeInsets.all(16),
+                                  decoration: BoxDecoration(color: Colors.grey.shade50, borderRadius: BorderRadius.circular(16)),
+                                  child: Column(
+                                    crossAxisAlignment: CrossAxisAlignment.start,
+                                    children: [
+                                      Text('Mood Breakdown', style: TextStyle(color: Colors.grey.shade600, fontWeight: FontWeight.bold)),
+                                      const SizedBox(height: 12),
+                                      Row(
+                                        mainAxisAlignment: MainAxisAlignment.spaceAround,
+                                        children: [
+                                          _buildMoodPill('Stressed', '${moodDistribution['Stressed']}', Colors.red.shade100, Colors.red.shade700),
+                                          _buildMoodPill('Neutral', '${moodDistribution['Neutral']}', Colors.orange.shade100, Colors.orange.shade800),
+                                          _buildMoodPill('Relaxed', '${moodDistribution['Relaxed']}', Colors.green.shade100, Colors.green.shade700),
+                                        ],
+                                      ),
+                                    ],
+                                  ),
                                 ),
                               ],
                             ),
@@ -655,52 +703,54 @@ class _WeeklyStressReportState extends State<WeeklyStressReport> {
                         const SizedBox(height: 24),
 
                         // Professional Stress Trend Chart
-                        Card(
-                          elevation: 4,
-                          shape: RoundedRectangleBorder(
-                              borderRadius: BorderRadius.circular(16)),
+                        Container(
+                          decoration: BoxDecoration(
+                            color: const Color(0xFF1E1E2C),
+                            borderRadius: BorderRadius.circular(24),
+                            boxShadow: [
+                              BoxShadow(color: const Color(0xFF1E1E2C).withOpacity(0.3), blurRadius: 20, offset: const Offset(0, 10)),
+                            ],
+                          ),
                           child: Padding(
-                            padding: const EdgeInsets.all(20),
+                            padding: const EdgeInsets.all(24),
                             child: Column(
                               crossAxisAlignment: CrossAxisAlignment.start,
                               children: [
-                                Text('Daily Average Stress Trend',
-                                    style: Theme.of(context)
-                                        .textTheme
-                                        .titleMedium
-                                        ?.copyWith(
-                                            fontWeight: FontWeight.bold)),
-                                const SizedBox(height: 16),
+                                Row(
+                                  children: [
+                                    Container(
+                                      padding: const EdgeInsets.all(8),
+                                      decoration: BoxDecoration(color: Colors.white.withOpacity(0.1), borderRadius: BorderRadius.circular(8)),
+                                      child: const Icon(Icons.timeline_rounded, color: Colors.cyanAccent, size: 20),
+                                    ),
+                                    const SizedBox(width: 12),
+                                    const Text('Stress Trend Analysis',
+                                        style: TextStyle(color: Colors.white, fontSize: 18, fontWeight: FontWeight.bold)),
+                                  ],
+                                ),
+                                const SizedBox(height: 32),
                                 SizedBox(
-                                  height: 260,
+                                  height: 240,
                                   child: _dailyAverages.isEmpty
-                                      ? const Center(
-                                          child: Text('No data yet',
-                                              style: TextStyle(
-                                                  color: Colors.grey)))
+                                      ? const Center(child: Text('Awaiting stress data...', style: TextStyle(color: Colors.white54)))
                                       : LineChart(
                                           LineChartData(
                                             lineTouchData: LineTouchData(
                                               enabled: true,
-                                              touchTooltipData:
-                                                  LineTouchTooltipData(
-                                                getTooltipColor:
-                                                    (touchedSpot) => Colors
-                                                        .black
-                                                        .withOpacity(0.8),
-                                                getTooltipItems:
-                                                    (touchedSpots) {
-                                                  return touchedSpots
-                                                      .map((spot) {
-                                                    final day = _dailyAverages[
-                                                            spot.x.toInt()]
-                                                        .key;
+                                              touchTooltipData: LineTouchTooltipData(
+                                                getTooltipColor: (_) => Colors.white.withOpacity(0.95),
+                                                getTooltipItems: (touchedSpots) {
+                                                  return touchedSpots.map((spot) {
+                                                    final day = _dailyAverages[spot.x.toInt()].key;
                                                     return LineTooltipItem(
-                                                      '${DateFormat('MMM dd').format(DateTime.parse(day))}\n'
-                                                      '${(spot.y * 100).toStringAsFixed(0)}% Stress',
-                                                      const TextStyle(
-                                                          color: Colors.white,
-                                                          fontSize: 14),
+                                                      '${DateFormat('MMM dd').format(DateTime.parse(day))}\n',
+                                                      const TextStyle(color: Colors.black54, fontSize: 12, fontWeight: FontWeight.bold),
+                                                      children: [
+                                                        TextSpan(
+                                                          text: '${(spot.y * 100).toStringAsFixed(0)}% Load',
+                                                          style: const TextStyle(color: Color(0xFF1E1E2C), fontSize: 14, fontWeight: FontWeight.w900),
+                                                        ),
+                                                      ],
                                                     );
                                                   }).toList();
                                                 },
@@ -708,96 +758,63 @@ class _WeeklyStressReportState extends State<WeeklyStressReport> {
                                             ),
                                             gridData: FlGridData(
                                               show: true,
-                                              drawVerticalLine: true,
-                                              horizontalInterval: 0.2,
-                                              verticalInterval: 1,
-                                              getDrawingHorizontalLine:
-                                                  (value) => FlLine(
-                                                color: Colors.grey
-                                                    .withOpacity(0.2),
-                                                strokeWidth: 1,
-                                              ),
-                                              getDrawingVerticalLine: (value) =>
-                                                  FlLine(
-                                                color: Colors.grey
-                                                    .withOpacity(0.1),
-                                                strokeWidth: 1,
-                                              ),
+                                              drawVerticalLine: false,
+                                              horizontalInterval: 0.25,
+                                              getDrawingHorizontalLine: (value) => FlLine(color: Colors.white.withOpacity(0.05), strokeWidth: 1),
                                             ),
                                             titlesData: FlTitlesData(
                                               leftTitles: AxisTitles(
                                                 sideTitles: SideTitles(
                                                   showTitles: true,
-                                                  reservedSize: 40,
-                                                  interval: 0.2,
-                                                  getTitlesWidget:
-                                                      (value, meta) => Text(
+                                                  reservedSize: 36,
+                                                  interval: 0.25,
+                                                  getTitlesWidget: (value, meta) => Text(
                                                     '${(value * 100).toInt()}%',
-                                                    style: const TextStyle(
-                                                        fontSize: 12,
-                                                        color: Colors.grey),
+                                                    style: const TextStyle(fontSize: 11, color: Colors.white38, fontWeight: FontWeight.bold),
                                                   ),
                                                 ),
                                               ),
                                               bottomTitles: AxisTitles(
                                                 sideTitles: SideTitles(
                                                   showTitles: true,
-                                                  reservedSize: 40,
+                                                  reservedSize: 30,
                                                   interval: 1,
-                                                  getTitlesWidget:
-                                                      (value, meta) {
-                                                    if (value.toInt() >=
-                                                        _dailyAverages.length)
-                                                      return const Text('');
-                                                    final day = _dailyAverages[
-                                                            value.toInt()]
-                                                        .key;
+                                                  getTitlesWidget: (value, meta) {
+                                                    if (value.toInt() >= _dailyAverages.length) return const Text('');
+                                                    final day = _dailyAverages[value.toInt()].key;
                                                     return Padding(
-                                                      padding:
-                                                          const EdgeInsets.only(
-                                                              top: 8),
+                                                      padding: const EdgeInsets.only(top: 8),
                                                       child: Text(
-                                                        DateFormat('dd').format(
-                                                            DateTime.parse(
-                                                                day)),
-                                                        style: const TextStyle(
-                                                            fontSize: 12,
-                                                            color: Colors.grey),
+                                                        DateFormat('E').format(DateTime.parse(day)).toUpperCase(),
+                                                        style: const TextStyle(fontSize: 11, color: Colors.white54, fontWeight: FontWeight.bold),
                                                       ),
                                                     );
                                                   },
                                                 ),
                                               ),
-                                              topTitles: const AxisTitles(
-                                                  sideTitles: SideTitles(
-                                                      showTitles: false)),
-                                              rightTitles: const AxisTitles(
-                                                  sideTitles: SideTitles(
-                                                      showTitles: false)),
+                                              topTitles: const AxisTitles(sideTitles: SideTitles(showTitles: false)),
+                                              rightTitles: const AxisTitles(sideTitles: SideTitles(showTitles: false)),
                                             ),
-                                            borderData:
-                                                FlBorderData(show: false),
+                                            borderData: FlBorderData(show: false),
                                             minX: 0,
-                                            maxX: (_dailyAverages.length - 1)
-                                                .toDouble(),
+                                            maxX: (_dailyAverages.length - 1).toDouble(),
                                             minY: 0,
                                             maxY: 1.0,
                                             lineBarsData: [
                                               LineChartBarData(
                                                 spots: _getDailyStressSpots(),
                                                 isCurved: true,
-                                                curveSmoothness: 0.4,
-                                                color: Colors.redAccent,
-                                                barWidth: 3.5,
+                                                curveSmoothness: 0.35,
+                                                color: Colors.cyanAccent,
+                                                barWidth: 4,
+                                                isStrokeCapRound: true,
                                                 dotData: FlDotData(
                                                   show: true,
-                                                  getDotPainter: (spot, percent,
-                                                          barData, index) =>
-                                                      FlDotCirclePainter(
-                                                    radius: 5,
-                                                    color: Colors.redAccent,
-                                                    strokeColor: Colors.white,
-                                                    strokeWidth: 2,
+                                                  getDotPainter: (spot, percent, barData, index) => FlDotCirclePainter(
+                                                    radius: 4,
+                                                    color: Colors.white,
+                                                    strokeColor: Colors.cyanAccent,
+                                                    strokeWidth: 3,
                                                   ),
                                                 ),
                                                 belowBarData: BarAreaData(
@@ -806,11 +823,10 @@ class _WeeklyStressReportState extends State<WeeklyStressReport> {
                                                     begin: Alignment.topCenter,
                                                     end: Alignment.bottomCenter,
                                                     colors: [
-                                                      Colors.redAccent
-                                                          .withOpacity(0.35),
-                                                      Colors.redAccent
-                                                          .withOpacity(0.05),
+                                                      Colors.cyanAccent.withOpacity(0.4),
+                                                      Colors.transparent,
                                                     ],
+                                                    stops: const [0.0, 0.9],
                                                   ),
                                                 ),
                                               ),
@@ -818,19 +834,10 @@ class _WeeklyStressReportState extends State<WeeklyStressReport> {
                                           ),
                                         ),
                                 ),
-                                const SizedBox(height: 12),
-                                const Center(
-                                  child: Text(
-                                    'Daily average stress level • Higher = more stressed',
-                                    style: TextStyle(
-                                        fontSize: 12, color: Colors.grey),
-                                  ),
-                                ),
                               ],
                             ),
                           ),
                         ),
-
                         const SizedBox(height: 32),
 
                         // Mood Distribution Bar Chart
@@ -1043,51 +1050,51 @@ class _WeeklyStressReportState extends State<WeeklyStressReport> {
                         const SizedBox(height: 32),
 
                         // Professional Stress Level Pie Chart
-                        Card(
-                          elevation: 4,
-                          shape: RoundedRectangleBorder(
-                              borderRadius: BorderRadius.circular(16)),
+                        Container(
+                          decoration: BoxDecoration(
+                            color: Colors.white,
+                            borderRadius: BorderRadius.circular(24),
+                            boxShadow: [
+                              BoxShadow(color: Colors.black.withOpacity(0.04), blurRadius: 20, offset: const Offset(0, 10)),
+                            ],
+                          ),
                           child: Padding(
-                            padding: const EdgeInsets.all(20),
+                            padding: const EdgeInsets.all(24),
                             child: Column(
                               crossAxisAlignment: CrossAxisAlignment.start,
                               children: [
-                                Text('Stress Level Distribution This Week',
-                                    style: Theme.of(context)
-                                        .textTheme
-                                        .titleMedium
-                                        ?.copyWith(
-                                            fontWeight: FontWeight.bold)),
-                                const SizedBox(height: 20),
+                                Row(
+                                  children: [
+                                    Container(
+                                      padding: const EdgeInsets.all(8),
+                                      decoration: BoxDecoration(color: Colors.purple.shade50, borderRadius: BorderRadius.circular(12)),
+                                      child: Icon(Icons.pie_chart_rounded, color: Colors.purple.shade600),
+                                    ),
+                                    const SizedBox(width: 12),
+                                    const Expanded(
+                                      child: Text('Stress Load Distribution',
+                                          style: TextStyle(color: Color(0xFF1E1E2C), fontSize: 18, fontWeight: FontWeight.bold)),
+                                    ),
+                                  ],
+                                ),
+                                const SizedBox(height: 32),
                                 SizedBox(
-                                  height: 280,
-                                  child: highStressCount +
-                                              moderateStressCount +
-                                              lowStressCount ==
-                                          0
-                                      ? const Center(
-                                          child: Text(
-                                              'No stress level data recorded',
-                                              style: TextStyle(
-                                                  color: Colors.grey)))
+                                  height: 240,
+                                  child: highStressCount + moderateStressCount + lowStressCount == 0
+                                      ? const Center(child: Text('No stress level data recorded', style: TextStyle(color: Colors.grey)))
                                       : PieChart(
                                           PieChartData(
                                             pieTouchData: PieTouchData(
-                                              touchCallback:
-                                                  (FlTouchEvent event,
-                                                      pieTouchResponse) {
-                                                // You can add tooltip logic here if desired
-                                              },
+                                              touchCallback: (FlTouchEvent event, pieTouchResponse) {},
                                             ),
-                                            borderData:
-                                                FlBorderData(show: false),
-                                            sectionsSpace: 3,
-                                            centerSpaceRadius: 50,
+                                            borderData: FlBorderData(show: false),
+                                            sectionsSpace: 4,
+                                            centerSpaceRadius: 60,
                                             sections: _getStressPieSections(),
                                           ),
                                         ),
                                 ),
-                                const SizedBox(height: 20),
+                                const SizedBox(height: 32),
                                 _buildStressPieLegend(),
                               ],
                             ),
@@ -1097,50 +1104,64 @@ class _WeeklyStressReportState extends State<WeeklyStressReport> {
                         const SizedBox(height: 32),
 
                         // Health Recommendations
-                        Card(
-                          elevation: 4,
-                          color: avgStress > 0.6
-                              ? Colors.orange.shade50
-                              : Colors.green.shade50,
-                          shape: RoundedRectangleBorder(
-                              borderRadius: BorderRadius.circular(16)),
+                        Container(
+                          decoration: BoxDecoration(
+                            gradient: LinearGradient(
+                              colors: avgStress > 0.6
+                                  ? [Colors.orange.shade50, Colors.red.shade50]
+                                  : [Colors.green.shade50, Colors.teal.shade50],
+                              begin: Alignment.topLeft,
+                              end: Alignment.bottomRight,
+                            ),
+                            borderRadius: BorderRadius.circular(24),
+                            border: Border.all(
+                              color: avgStress > 0.6 ? Colors.orange.shade200 : Colors.green.shade200,
+                              width: 1.5,
+                            ),
+                            boxShadow: [
+                              BoxShadow(color: (avgStress > 0.6 ? Colors.orange : Colors.green).withOpacity(0.1), blurRadius: 15, offset: const Offset(0, 8)),
+                            ],
+                          ),
                           child: Padding(
-                            padding: const EdgeInsets.all(20),
+                            padding: const EdgeInsets.all(24),
                             child: Column(
                               crossAxisAlignment: CrossAxisAlignment.start,
                               children: [
-                                Text('Personalized Health Recommendations',
-                                    style: Theme.of(context)
-                                        .textTheme
-                                        .titleMedium
-                                        ?.copyWith(
-                                            fontWeight: FontWeight.bold)),
-                                const SizedBox(height: 12),
+                                Row(
+                                  children: [
+                                    Icon(
+                                      avgStress > 0.6 ? Icons.warning_rounded : Icons.health_and_safety_rounded,
+                                      color: avgStress > 0.6 ? Colors.deepOrange : Colors.teal.shade700,
+                                      size: 28,
+                                    ),
+                                    const SizedBox(width: 12),
+                                    const Text('Health Recommendations', style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
+                                  ],
+                                ),
+                                const SizedBox(height: 16),
                                 Text(
                                   _getHealthTips(),
-                                  style: const TextStyle(
-                                      height: 1.5, fontSize: 15),
+                                  style: TextStyle(height: 1.6, fontSize: 15, color: Colors.blueGrey.shade800),
                                 ),
                                 if (avgStress > 0.65 || highStressDays >= 4)
                                   Padding(
-                                    padding: const EdgeInsets.only(top: 16),
-                                    child: Row(
-                                      crossAxisAlignment:
-                                          CrossAxisAlignment.start,
-                                      children: const [
-                                        Icon(Icons.medical_services,
-                                            color: Colors.redAccent, size: 28),
-                                        SizedBox(width: 12),
-                                        Expanded(
-                                          child: Text(
-                                            "Frequent high stress in certain locations may indicate environmental or situational triggers. "
-                                            "Consider speaking to a healthcare professional if symptoms (anxiety, fatigue, headaches) persist.",
-                                            style: TextStyle(
-                                                color: Colors.redAccent,
-                                                fontSize: 14),
+                                    padding: const EdgeInsets.only(top: 20),
+                                    child: Container(
+                                      padding: const EdgeInsets.all(16),
+                                      decoration: BoxDecoration(color: Colors.red.shade100.withOpacity(0.5), borderRadius: BorderRadius.circular(12)),
+                                      child: Row(
+                                        crossAxisAlignment: CrossAxisAlignment.start,
+                                        children: [
+                                          Icon(Icons.medical_services, color: Colors.red.shade700, size: 24),
+                                          const SizedBox(width: 12),
+                                          Expanded(
+                                            child: Text(
+                                              "Frequent high stress in certain locations may indicate environmental or situational triggers. Consider speaking to a healthcare professional if symptoms persist.",
+                                              style: TextStyle(color: Colors.red.shade900, fontSize: 14, fontWeight: FontWeight.w500),
+                                            ),
                                           ),
-                                        ),
-                                      ],
+                                        ],
+                                      ),
                                     ),
                                   ),
                               ],
@@ -1148,7 +1169,7 @@ class _WeeklyStressReportState extends State<WeeklyStressReport> {
                           ),
                         ),
 
-                        const SizedBox(height: 40),
+                        const SizedBox(height: 60),
                       ],
                     ),
                   ),
@@ -1156,12 +1177,52 @@ class _WeeklyStressReportState extends State<WeeklyStressReport> {
     );
   }
 
-  Widget _statItem(String label, String value) {
+  Widget _buildProfileRow(String label, String value) {
+    return Padding(
+      padding: const EdgeInsets.symmetric(vertical: 4),
+      child: Row(
+        mainAxisAlignment: MainAxisAlignment.spaceBetween,
+        children: [
+          Text(label, style: TextStyle(color: Colors.white.withOpacity(0.8), fontSize: 16)),
+          Text(value, style: const TextStyle(color: Colors.white, fontSize: 16, fontWeight: FontWeight.bold)),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildStatCard(String label, String value, IconData icon, Color color) {
+    return Container(
+      padding: const EdgeInsets.symmetric(vertical: 20, horizontal: 16),
+      decoration: BoxDecoration(
+        color: color.withOpacity(0.05),
+        borderRadius: BorderRadius.circular(16),
+        border: Border.all(color: color.withOpacity(0.2)),
+      ),
+      child: Column(
+        children: [
+          Icon(icon, color: color, size: 28),
+          const SizedBox(height: 12),
+          Text(value, style: TextStyle(fontSize: 24, fontWeight: FontWeight.bold, color: color)),
+          const SizedBox(height: 4),
+          Text(label, style: const TextStyle(fontSize: 13, color: Colors.grey, fontWeight: FontWeight.w600)),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildMoodPill(String label, String count, Color bgColor, Color textColor) {
     return Column(
       children: [
-        Text(value,
-            style: const TextStyle(fontSize: 24, fontWeight: FontWeight.bold)),
-        Text(label, style: const TextStyle(fontSize: 13, color: Colors.grey)),
+        Container(
+          padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+          decoration: BoxDecoration(color: bgColor, borderRadius: BorderRadius.circular(20)),
+          child: Text(
+            count,
+            style: TextStyle(color: textColor, fontWeight: FontWeight.bold, fontSize: 16),
+          ),
+        ),
+        const SizedBox(height: 8),
+        Text(label, style: TextStyle(color: Colors.grey.shade700, fontSize: 13, fontWeight: FontWeight.w500)),
       ],
     );
   }
