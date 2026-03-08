@@ -373,12 +373,12 @@ class _Member3PageState extends State<Member3Page>
           heartRate: 75,
           temperature: 36.5,
           stressLevel: 30,
-          accelX: accelX,
-          accelY: accelY,
-          accelZ: accelZ,
-          gyroX: gyroX,
-          gyroY: gyroY,
-          gyroZ: gyroZ,
+          // accelX: accelX,
+          // accelY: accelY,
+          // accelZ: accelZ,
+          // gyroX: gyroX,
+          // gyroY: gyroY,
+          // gyroZ: gyroZ,
         );
         
         if (eventType == 'risky_turn') {

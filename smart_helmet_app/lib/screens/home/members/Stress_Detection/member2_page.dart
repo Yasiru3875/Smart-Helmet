@@ -13,8 +13,7 @@ import '../../../../services/bluetooth_manager.dart';
 import 'package:smart_helmet_app/providers/sensor_data_provider.dart';
 
 import 'package:smart_helmet_app/providers/ride_session_provider.dart';
-// If you have auth:
-// import '../../../../services/auth_service.dart';
+import '../../../../services/auth_service.dart';
 
 class Member2Page extends StatefulWidget {
   const Member2Page({super.key});
@@ -538,7 +537,13 @@ class _Member2PageState extends State<Member2Page> {
     setState(() => _isSaving = true);
 
     try {
-      const String userId = "abc123xyz"; // ← REPLACE WITH REAL USER ID
+      final auth = Provider.of<AuthService>(context, listen: false);
+      final String? userId = auth.userId;
+
+      if (userId == null) {
+        debugPrint("Member2Page: No authenticated user, skipping save");
+        return;
+      }
 
       final String isoTimestamp = DateTime.now().toIso8601String();
 
