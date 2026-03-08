@@ -18,7 +18,7 @@ class JourneyData {
   final List<BrakingEvent> brakingEvents;
   final List<SensorReading> sensorReadings;
   final List<GpsPoint> gpsTrack;
-  
+
   JourneyData({
     required this.id,
     required this.startTime,
@@ -38,7 +38,7 @@ class JourneyData {
     this.sensorReadings = const [],
     this.gpsTrack = const [],
   });
-  
+
   Map<String, dynamic> toMap() {
     return {
       'id': id,
@@ -56,11 +56,11 @@ class JourneyData {
       'dangerPrediction': dangerPrediction,
       'turnEvents': turnEvents.map((e) => e.toMap()).toList(),
       'brakingEvents': brakingEvents.map((e) => e.toMap()).toList(),
-      // 'sensorReadings' and 'gpsTrack' are explicitly removed to prevent 
+      // 'sensorReadings' and 'gpsTrack' are explicitly removed to prevent
       // uploading thousands of normal datapoints to Firebase, saving bandwidth.
     };
   }
-  
+
   factory JourneyData.fromMap(Map<String, dynamic> map, String id) {
     return JourneyData(
       id: id,
@@ -77,17 +77,21 @@ class JourneyData {
       totalDistance: (map['totalDistance'] ?? 0.0).toDouble(),
       dangerPrediction: map['dangerPrediction'],
       turnEvents: (map['turnEvents'] as List?)
-          ?.map((e) => TurnEvent.fromMap(e))
-          .toList() ?? [],
+              ?.map((e) => TurnEvent.fromMap(e))
+              .toList() ??
+          [],
       brakingEvents: (map['brakingEvents'] as List?)
-          ?.map((e) => BrakingEvent.fromMap(e))
-          .toList() ?? [],
+              ?.map((e) => BrakingEvent.fromMap(e))
+              .toList() ??
+          [],
       sensorReadings: (map['sensorReadings'] as List?)
-          ?.map((e) => SensorReading.fromMap(e))
-          .toList() ?? [],
+              ?.map((e) => SensorReading.fromMap(e))
+              .toList() ??
+          [],
       gpsTrack: (map['gpsTrack'] as List?)
-          ?.map((e) => GpsPoint.fromMap(e))
-          .toList() ?? [],
+              ?.map((e) => GpsPoint.fromMap(e))
+              .toList() ??
+          [],
     );
   }
 }
@@ -98,7 +102,7 @@ class TurnEvent {
   final double turnRate;
   final double latitude;
   final double longitude;
-  
+
   TurnEvent({
     required this.timestamp,
     required this.severity,
@@ -106,7 +110,7 @@ class TurnEvent {
     required this.latitude,
     required this.longitude,
   });
-  
+
   Map<String, dynamic> toMap() {
     return {
       'timestamp': timestamp.toIso8601String(),
@@ -116,7 +120,7 @@ class TurnEvent {
       'longitude': longitude,
     };
   }
-  
+
   factory TurnEvent.fromMap(Map<String, dynamic> map) {
     return TurnEvent(
       timestamp: DateTime.parse(map['timestamp']),
@@ -133,7 +137,7 @@ class SensorReading {
   final int heartRate;
   final double temperature;
   final int stressLevel;
-  
+
   // Danger prediction sensor extensions
   final double accelX;
   final double accelY;
@@ -141,7 +145,7 @@ class SensorReading {
   final double gyroX;
   final double gyroY;
   final double gyroZ;
-  
+
   SensorReading({
     required this.timestamp,
     required this.heartRate,
@@ -154,7 +158,7 @@ class SensorReading {
     this.gyroY = 0.0,
     this.gyroZ = 0.0,
   });
-  
+
   Map<String, dynamic> toMap() {
     return {
       'timestamp': timestamp.toIso8601String(),
@@ -169,7 +173,7 @@ class SensorReading {
       'gyroZ': gyroZ,
     };
   }
-  
+
   factory SensorReading.fromMap(Map<String, dynamic> map) {
     return SensorReading(
       timestamp: DateTime.parse(map['timestamp']),
@@ -191,14 +195,14 @@ class GpsPoint {
   final double longitude;
   final DateTime? timestamp;
   final double speedKmh; // Speed at this GPS point
-  
+
   GpsPoint({
     required this.latitude,
     required this.longitude,
     this.timestamp,
     this.speedKmh = 0.0,
   });
-  
+
   Map<String, dynamic> toMap() {
     return {
       'latitude': latitude,
@@ -207,12 +211,13 @@ class GpsPoint {
       'speedKmh': speedKmh,
     };
   }
-  
+
   factory GpsPoint.fromMap(Map<String, dynamic> map) {
     return GpsPoint(
       latitude: (map['latitude'] ?? 0.0).toDouble(),
       longitude: (map['longitude'] ?? 0.0).toDouble(),
-      timestamp: map['timestamp'] != null ? DateTime.parse(map['timestamp']) : null,
+      timestamp:
+          map['timestamp'] != null ? DateTime.parse(map['timestamp']) : null,
       speedKmh: (map['speedKmh'] ?? 0.0).toDouble(),
     );
   }
@@ -225,7 +230,7 @@ class BrakingEvent {
   final double latitude;
   final double longitude;
   final double speedBefore; // km/h before braking
-  final String severity;   // 'hard' or 'emergency'
+  final String severity; // 'hard' or 'emergency'
 
   BrakingEvent({
     required this.timestamp,
@@ -258,4 +263,3 @@ class BrakingEvent {
     );
   }
 }
-

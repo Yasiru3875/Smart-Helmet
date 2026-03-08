@@ -84,46 +84,46 @@ class JourneyProvider with ChangeNotifier {
     ));
     notifyListeners();
   }
-<<<<<<< Updated upstream
-  
-  // Add sensor reading
-  void addSensorReading({
-    required int heartRate,
-    required double temperature,
-    required int stressLevel, required double accelX, required double accelY, required double accelZ, required double gyroY, required double gyroX, required double gyroZ,
-=======
 
-  // Add braking event
-   Stashed changes
+  // Add sensor reading
+  void addBrakingEvent({
+    required double deceleration,
+    required double latitude,
+    required double longitude,
+    required double speedBefore,
+    required String severity,
   }) {
     if (_currentJourney == null) return;
 
-    _brakingEvents.add(BrakingEvent(
-      timestamp: DateTime.now(),
-      deceleration: deceleration,
-      latitude: latitude,
-      longitude: longitude,
-      speedBefore: speedBefore,
-      severity: severity,
-    ));
+    _brakingEvents.add(
+      BrakingEvent(
+        timestamp: DateTime.now(),
+        deceleration: deceleration,
+        latitude: latitude,
+        longitude: longitude,
+        speedBefore: speedBefore,
+        severity: severity,
+      ),
+    );
+
     notifyListeners();
   }
 
   // Add sensor reading (braking is detected in member3_page with correct thresholds)
   void addSensorReading({
-  required int heartRate,
-  required double temperature,
-  required int stressLevel,
-  double accelX = 0.0,
-  double accelY = 0.0,
-  double accelZ = 0.0,
-  double gyroX = 0.0,
-  double gyroY = 0.0,
-  double gyroZ = 0.0,
-  double latitude = 0.0,
-  double longitude = 0.0,
-  double speedKmh = 0.0,
-}) {
+    required int heartRate,
+    required double temperature,
+    required int stressLevel,
+    double accelX = 0.0,
+    double accelY = 0.0,
+    double accelZ = 0.0,
+    double gyroX = 0.0,
+    double gyroY = 0.0,
+    double gyroZ = 0.0,
+    double latitude = 0.0,
+    double longitude = 0.0,
+    double speedKmh = 0.0,
+  }) {
     if (_currentJourney == null) return;
 
     _currentSensorReadings.add(SensorReading(

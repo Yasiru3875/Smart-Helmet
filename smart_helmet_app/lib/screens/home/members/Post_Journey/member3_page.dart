@@ -31,7 +31,7 @@ class _Member3PageState extends State<Member3Page>
   // Journey Service
   final JourneyService _journeyService = JourneyService();
   List<JourneyData> _journeyHistory = [];
-  
+
   bool _isLoadingHistory = false;
 
   // Show ride summary view
@@ -72,23 +72,12 @@ class _Member3PageState extends State<Member3Page>
   final FirebaseFirestore _firestore = FirebaseFirestore.instance;
   bool _isSaving = false;
 
-<<<<<<< Updated upstream
   // Risky Events Tracking (ONLY risky events saved to Firebase)
   // NOTE: rideId is now obtained from RideSessionProvider (shared across all members)
   int _riskyEventsSavedCount = 0;
   List<Map<String, dynamic>> _riskyEventsThisRide =
       []; // In-memory list for visualization
 
-=======
-
-  // Risky Events Tracking (ONLY risky events saved to Firebase)
-  // NOTE: rideId is now obtained from RideSessionProvider (shared across all members)
-  int _riskyEventsSavedCount = 0;
-  final List<Map<String, dynamic>> _riskyEventsThisRide =
-      []; // In-memory list for visualization
-
-
->>>>>>> Stashed changes
   // Current GPS state
   double currentSpeed = 0.0;
   double currentLat = 0.0;
@@ -103,10 +92,10 @@ class _Member3PageState extends State<Member3Page>
   Timer? _simulationTimer;
   bool _isSimulating = false;
   int _simPacketIndex = 0;
-  
+
   // ── CSV LOGGING FOR RESEARCH ──────────────────────────────
   // Set to true to print raw data to Android Studio / VSCode console
-  final bool _isCsvLoggingEnabled = false; 
+  final bool _isCsvLoggingEnabled = false;
 
   @override
   void initState() {
@@ -182,9 +171,8 @@ class _Member3PageState extends State<Member3Page>
 
     // Trigger only when ride transitions from active → inactive
     if (!rideProvider.isRideActive && journeyProvider.isJourneyActive) {
-
-
-      debugPrint("RideSession ended. Saving JourneyData from memory to Firebase...");
+      debugPrint(
+          "RideSession ended. Saving JourneyData from memory to Firebase...");
 
       // Use the SHARED rideId from RideSessionProvider (same ID used by member1 & member2)
 
@@ -198,10 +186,11 @@ class _Member3PageState extends State<Member3Page>
       try {
         // 2. Build the final journey with the SHARED rideId
         final fullJourney = JourneyData(
-          id: sharedRideId,  // 🔑 Use shared rideId, NOT local timestamp
+          id: sharedRideId, // 🔑 Use shared rideId, NOT local timestamp
           startTime: baseJourney.startTime,
           endTime: DateTime.now(),
-          startLocation: rideProvider.destinationName ?? baseJourney.startLocation,
+          startLocation:
+              rideProvider.destinationName ?? baseJourney.startLocation,
           destination: rideProvider.destinationName ?? baseJourney.destination,
           sharpTurns: baseJourney.sharpTurns,
           riskyTurns: baseJourney.riskyTurns,
@@ -245,7 +234,6 @@ class _Member3PageState extends State<Member3Page>
               builder: (_) => JourneyReportScreen(journey: baseJourney),
             ),
           );
-
         }
       }
     }
@@ -315,7 +303,9 @@ class _Member3PageState extends State<Member3Page>
       });
     } catch (e) {
       setState(() => _isLoadingHistory = false);
-      setState(() { _isSaving = false; });
+      setState(() {
+        _isSaving = false;
+      });
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(content: Text('Error loading journeys: $e')),
@@ -396,10 +386,14 @@ class _Member3PageState extends State<Member3Page>
       newStatusColor = Colors.orange;
       eventType = 'sharp_turn'; // MODERATE severity
       sharpTurnCount++;
-    } else if (imuData['accelZ']! < -4.4 && speed > 5.0) { // Harsh brake: 0.45g = 4.4 m/s² (sensor outputs m/s², NOT g!)
-      newTurnStatus = imuData['accelZ']! < -6.9 ? "EMERGENCY BRAKE!" : "Harsh Brake";
+    } else if (imuData['accelZ']! < -4.4 && speed > 5.0) {
+      // Harsh brake: 0.45g = 4.4 m/s² (sensor outputs m/s², NOT g!)
+      newTurnStatus =
+          imuData['accelZ']! < -6.9 ? "EMERGENCY BRAKE!" : "Harsh Brake";
       newStatusColor = Colors.red;
-      eventType = imuData['accelZ']! < -6.9 ? 'emergency_brake' : 'harsh_brake'; // Emergency: 0.70g = 6.9 m/s²
+      eventType = imuData['accelZ']! < -6.9
+          ? 'emergency_brake'
+          : 'harsh_brake'; // Emergency: 0.70g = 6.9 m/s²
       harshBrakeCount++;
     } else if (speed > 80.0) {
       newTurnStatus = "HIGH SPEED!";
@@ -410,9 +404,15 @@ class _Member3PageState extends State<Member3Page>
     // ─── CSV DATA EXPORT FOR RESEARCH ───────────────
     if (_isCsvLoggingEnabled) {
       // Auto-assignes LABEL: 1 if the manual logic thinks it's dangerous, else 0
-      int label = (eventType == 'harsh_brake' || eventType == 'emergency_brake' || eventType == 'high_speed' || eventType == 'risky_turn') ? 1 : 0;
+      int label = (eventType == 'harsh_brake' ||
+              eventType == 'emergency_brake' ||
+              eventType == 'high_speed' ||
+              eventType == 'risky_turn')
+          ? 1
+          : 0;
       // Format: accelX, accelY, accelZ, gyroX, gyroY, gyroZ, speedKmh, LABEL
-      debugPrint("CSV_EXPORT,${imuData['accelX']!.toStringAsFixed(3)},${imuData['accelY']!.toStringAsFixed(3)},${imuData['accelZ']!.toStringAsFixed(3)},${imuData['gyroX']!.toStringAsFixed(3)},${imuData['gyroY']!.toStringAsFixed(3)},${imuData['gyroZ']!.toStringAsFixed(3)},${speed.toStringAsFixed(2)},$label");
+      debugPrint(
+          "CSV_EXPORT,${imuData['accelX']!.toStringAsFixed(3)},${imuData['accelY']!.toStringAsFixed(3)},${imuData['accelZ']!.toStringAsFixed(3)},${imuData['gyroX']!.toStringAsFixed(3)},${imuData['gyroY']!.toStringAsFixed(3)},${imuData['gyroZ']!.toStringAsFixed(3)},${speed.toStringAsFixed(2)},$label");
     }
 
     // Now safe to update UI
@@ -461,7 +461,8 @@ class _Member3PageState extends State<Member3Page>
 
       // Add full sensor reading (including all IMU data + GPS for braking detection)
       if (eventType != null) {
-        _saveRiskyEventOnly(imuData, currentSpeed, currentLat, currentLng, eventType);
+        _saveRiskyEventOnly(
+            imuData, currentSpeed, currentLat, currentLng, eventType);
       }
       if (journeyProvider.isJourneyActive) {
         journeyProvider.addSensorReading(
@@ -494,10 +495,12 @@ class _Member3PageState extends State<Member3Page>
             latitude: currentLat,
             longitude: currentLng,
           );
-        } else if (eventType == 'harsh_brake' || eventType == 'emergency_brake') {
+        } else if (eventType == 'harsh_brake' ||
+            eventType == 'emergency_brake') {
           journeyProvider.addBrakingEvent(
             severity: eventType == 'emergency_brake' ? 'emergency' : 'hard',
-            deceleration: imuData['accelZ']!, // accelZ = forward axis (X=UP mount)
+            deceleration:
+                imuData['accelZ']!, // accelZ = forward axis (X=UP mount)
             speedBefore: currentSpeed,
             latitude: currentLat,
             longitude: currentLng,
@@ -531,106 +534,509 @@ class _Member3PageState extends State<Member3Page>
   // NOTE: Ride start/end is now managed by RideSessionProvider
   // This ensures all members (Member 1, 2, 3) share the same rideId
 
-<<<<<<< Updated upstream
-  void _resetRideCounters() {
-    _riskyEventsSavedCount = 0;
-    _riskyEventsThisRide = [];
-    sharpTurnCount = 0;
-    riskyTurnCount = 0;
-    totalDistanceKm = 0.0;
-=======
-
-
+  // void _resetRideCounters() {
+  //   _riskyEventsSavedCount = 0;
+  //   _riskyEventsThisRide = [];
+  //   sharpTurnCount = 0;
+  //   riskyTurnCount = 0;
+  //   totalDistanceKm = 0.0;
 
   // ── DEBUG: Simulated Ride Data Pump ──────────────────────────────
   // Pumps 40 pre-scripted IMU+GPS packets through the exact same
   // _parseIMUData() path used by real Bluetooth data.
   // GPS moves along a short route near Colombo.
   void _startSimulatedRide() {
-    if (_isSimulating) { _stopSimulation(); return; }
+    if (_isSimulating) {
+      _stopSimulation();
+      return;
+    }
 
     // Make sure a ride session is active
-    final rideProvider = Provider.of<RideSessionProvider>(context, listen: false);
+    final rideProvider =
+        Provider.of<RideSessionProvider>(context, listen: false);
     if (!rideProvider.isRideActive) {
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(
-          content: Text('Start a ride first (tap START on Home tab), then simulate.'),
+          content: Text(
+              'Start a ride first (tap START on Home tab), then simulate.'),
           backgroundColor: Colors.orange,
         ),
       );
       return;
     }
 
-    setState(() { _isSimulating = true; _simPacketIndex = 0; });
+    setState(() {
+      _isSimulating = true;
+      _simPacketIndex = 0;
+    });
     debugPrint('[SIM] Starting simulated ride data pump...');
 
     // 40 packets × 500 ms = 20 s of simulated riding
     // Each entry: {gyroX, gyroY, gyroZ, accelX, accelY, accelZ, spd, lat, lng}
     // lat/lng moves 0.0001° per packet (~11 m steps)
-    const double baseLat = 6.9271;   // Colombo
+    const double baseLat = 6.9271; // Colombo
     const double baseLng = 79.8612;
     final packets = <Map<String, double>>[
       // 0-4: normal cruise
-      {'gyroX':2.0,'gyroY':1.5,'gyroZ':8.0,  'accelX':0.1, 'accelY':0.1, 'accelZ':9.81,'spd':40,'lat':baseLat+0.000*0.0001,'lng':baseLng+0.000*0.0001},
-      {'gyroX':2.5,'gyroY':2.0,'gyroZ':10.0, 'accelX':0.1, 'accelY':0.1, 'accelZ':9.81,'spd':42,'lat':baseLat+0.001,'lng':baseLng+0.001},
-      {'gyroX':2.0,'gyroY':1.5,'gyroZ':12.0, 'accelX':0.1, 'accelY':0.2, 'accelZ':9.80,'spd':45,'lat':baseLat+0.002,'lng':baseLng+0.002},
-      {'gyroX':3.0,'gyroY':2.5,'gyroZ':15.0, 'accelX':0.2, 'accelY':0.2, 'accelZ':9.80,'spd':48,'lat':baseLat+0.003,'lng':baseLng+0.003},
-      {'gyroX':2.0,'gyroY':1.0,'gyroZ': 8.0, 'accelX':0.1, 'accelY':0.1, 'accelZ':9.81,'spd':50,'lat':baseLat+0.004,'lng':baseLng+0.004},
+      {
+        'gyroX': 2.0,
+        'gyroY': 1.5,
+        'gyroZ': 8.0,
+        'accelX': 0.1,
+        'accelY': 0.1,
+        'accelZ': 9.81,
+        'spd': 40,
+        'lat': baseLat + 0.000 * 0.0001,
+        'lng': baseLng + 0.000 * 0.0001
+      },
+      {
+        'gyroX': 2.5,
+        'gyroY': 2.0,
+        'gyroZ': 10.0,
+        'accelX': 0.1,
+        'accelY': 0.1,
+        'accelZ': 9.81,
+        'spd': 42,
+        'lat': baseLat + 0.001,
+        'lng': baseLng + 0.001
+      },
+      {
+        'gyroX': 2.0,
+        'gyroY': 1.5,
+        'gyroZ': 12.0,
+        'accelX': 0.1,
+        'accelY': 0.2,
+        'accelZ': 9.80,
+        'spd': 45,
+        'lat': baseLat + 0.002,
+        'lng': baseLng + 0.002
+      },
+      {
+        'gyroX': 3.0,
+        'gyroY': 2.5,
+        'gyroZ': 15.0,
+        'accelX': 0.2,
+        'accelY': 0.2,
+        'accelZ': 9.80,
+        'spd': 48,
+        'lat': baseLat + 0.003,
+        'lng': baseLng + 0.003
+      },
+      {
+        'gyroX': 2.0,
+        'gyroY': 1.0,
+        'gyroZ': 8.0,
+        'accelX': 0.1,
+        'accelY': 0.1,
+        'accelZ': 9.81,
+        'spd': 50,
+        'lat': baseLat + 0.004,
+        'lng': baseLng + 0.004
+      },
       // 5-6: SHARP TURN (|gyroZ| 110)
-      {'gyroX':5.0,'gyroY':4.0,'gyroZ':110.0,'accelX':0.3, 'accelY':1.2, 'accelZ':9.80,'spd':50,'lat':baseLat+0.005,'lng':baseLng+0.005},
-      {'gyroX':5.5,'gyroY':4.5,'gyroZ':115.0,'accelX':0.3, 'accelY':1.3, 'accelZ':9.80,'spd':48,'lat':baseLat+0.006,'lng':baseLng+0.006},
+      {
+        'gyroX': 5.0,
+        'gyroY': 4.0,
+        'gyroZ': 110.0,
+        'accelX': 0.3,
+        'accelY': 1.2,
+        'accelZ': 9.80,
+        'spd': 50,
+        'lat': baseLat + 0.005,
+        'lng': baseLng + 0.005
+      },
+      {
+        'gyroX': 5.5,
+        'gyroY': 4.5,
+        'gyroZ': 115.0,
+        'accelX': 0.3,
+        'accelY': 1.3,
+        'accelZ': 9.80,
+        'spd': 48,
+        'lat': baseLat + 0.006,
+        'lng': baseLng + 0.006
+      },
       // 7-8: back to normal
-      {'gyroX':2.0,'gyroY':1.5,'gyroZ': 9.0, 'accelX':0.1, 'accelY':0.1, 'accelZ':9.81,'spd':50,'lat':baseLat+0.007,'lng':baseLng+0.007},
-      {'gyroX':2.5,'gyroY':2.0,'gyroZ':11.0, 'accelX':0.2, 'accelY':0.1, 'accelZ':9.81,'spd':52,'lat':baseLat+0.008,'lng':baseLng+0.008},
+      {
+        'gyroX': 2.0,
+        'gyroY': 1.5,
+        'gyroZ': 9.0,
+        'accelX': 0.1,
+        'accelY': 0.1,
+        'accelZ': 9.81,
+        'spd': 50,
+        'lat': baseLat + 0.007,
+        'lng': baseLng + 0.007
+      },
+      {
+        'gyroX': 2.5,
+        'gyroY': 2.0,
+        'gyroZ': 11.0,
+        'accelX': 0.2,
+        'accelY': 0.1,
+        'accelZ': 9.81,
+        'spd': 52,
+        'lat': baseLat + 0.008,
+        'lng': baseLng + 0.008
+      },
       // 9-10: HARD BRAKING (accelX = -2.5 g)
-      {'gyroX':4.0,'gyroY':3.0,'gyroZ':18.0, 'accelX':-2.5,'accelY':0.1, 'accelZ':9.80,'spd':52,'lat':baseLat+0.009,'lng':baseLng+0.009},
-      {'gyroX':3.5,'gyroY':2.5,'gyroZ':15.0, 'accelX':-2.0,'accelY':0.1, 'accelZ':9.80,'spd':35,'lat':baseLat+0.010,'lng':baseLng+0.010},
+      {
+        'gyroX': 4.0,
+        'gyroY': 3.0,
+        'gyroZ': 18.0,
+        'accelX': -2.5,
+        'accelY': 0.1,
+        'accelZ': 9.80,
+        'spd': 52,
+        'lat': baseLat + 0.009,
+        'lng': baseLng + 0.009
+      },
+      {
+        'gyroX': 3.5,
+        'gyroY': 2.5,
+        'gyroZ': 15.0,
+        'accelX': -2.0,
+        'accelY': 0.1,
+        'accelZ': 9.80,
+        'spd': 35,
+        'lat': baseLat + 0.010,
+        'lng': baseLng + 0.010
+      },
       // 11-14: accelerate back
-      {'gyroX':2.0,'gyroY':1.0,'gyroZ': 7.0, 'accelX':0.5, 'accelY':0.1, 'accelZ':9.81,'spd':38,'lat':baseLat+0.011,'lng':baseLng+0.011},
-      {'gyroX':2.0,'gyroY':1.5,'gyroZ': 8.0, 'accelX':0.4, 'accelY':0.1, 'accelZ':9.81,'spd':45,'lat':baseLat+0.012,'lng':baseLng+0.012},
-      {'gyroX':2.5,'gyroY':2.0,'gyroZ':10.0, 'accelX':0.3, 'accelY':0.1, 'accelZ':9.80,'spd':55,'lat':baseLat+0.013,'lng':baseLng+0.013},
-      {'gyroX':3.0,'gyroY':2.5,'gyroZ':12.0, 'accelX':0.2, 'accelY':0.2, 'accelZ':9.80,'spd':60,'lat':baseLat+0.014,'lng':baseLng+0.014},
+      {
+        'gyroX': 2.0,
+        'gyroY': 1.0,
+        'gyroZ': 7.0,
+        'accelX': 0.5,
+        'accelY': 0.1,
+        'accelZ': 9.81,
+        'spd': 38,
+        'lat': baseLat + 0.011,
+        'lng': baseLng + 0.011
+      },
+      {
+        'gyroX': 2.0,
+        'gyroY': 1.5,
+        'gyroZ': 8.0,
+        'accelX': 0.4,
+        'accelY': 0.1,
+        'accelZ': 9.81,
+        'spd': 45,
+        'lat': baseLat + 0.012,
+        'lng': baseLng + 0.012
+      },
+      {
+        'gyroX': 2.5,
+        'gyroY': 2.0,
+        'gyroZ': 10.0,
+        'accelX': 0.3,
+        'accelY': 0.1,
+        'accelZ': 9.80,
+        'spd': 55,
+        'lat': baseLat + 0.013,
+        'lng': baseLng + 0.013
+      },
+      {
+        'gyroX': 3.0,
+        'gyroY': 2.5,
+        'gyroZ': 12.0,
+        'accelX': 0.2,
+        'accelY': 0.2,
+        'accelZ': 9.80,
+        'spd': 60,
+        'lat': baseLat + 0.014,
+        'lng': baseLng + 0.014
+      },
       // 15-17: RISKY TURN (|gyroZ| 170)
-      {'gyroX':9.0,'gyroY':8.0,'gyroZ':170.0,'accelX':0.5, 'accelY':2.2, 'accelZ':9.78,'spd':60,'lat':baseLat+0.015,'lng':baseLng+0.015},
-      {'gyroX':9.5,'gyroY':8.5,'gyroZ':175.0,'accelX':0.5, 'accelY':2.5, 'accelZ':9.78,'spd':58,'lat':baseLat+0.016,'lng':baseLng+0.016},
-      {'gyroX':8.0,'gyroY':7.0,'gyroZ':160.0,'accelX':0.4, 'accelY':2.0, 'accelZ':9.79,'spd':55,'lat':baseLat+0.017,'lng':baseLng+0.017},
+      {
+        'gyroX': 9.0,
+        'gyroY': 8.0,
+        'gyroZ': 170.0,
+        'accelX': 0.5,
+        'accelY': 2.2,
+        'accelZ': 9.78,
+        'spd': 60,
+        'lat': baseLat + 0.015,
+        'lng': baseLng + 0.015
+      },
+      {
+        'gyroX': 9.5,
+        'gyroY': 8.5,
+        'gyroZ': 175.0,
+        'accelX': 0.5,
+        'accelY': 2.5,
+        'accelZ': 9.78,
+        'spd': 58,
+        'lat': baseLat + 0.016,
+        'lng': baseLng + 0.016
+      },
+      {
+        'gyroX': 8.0,
+        'gyroY': 7.0,
+        'gyroZ': 160.0,
+        'accelX': 0.4,
+        'accelY': 2.0,
+        'accelZ': 9.79,
+        'spd': 55,
+        'lat': baseLat + 0.017,
+        'lng': baseLng + 0.017
+      },
       // 18-22: normal
-      {'gyroX':2.5,'gyroY':2.0,'gyroZ':10.0, 'accelX':0.2, 'accelY':0.2, 'accelZ':9.81,'spd':55,'lat':baseLat+0.018,'lng':baseLng+0.018},
-      {'gyroX':2.0,'gyroY':1.5,'gyroZ': 9.0, 'accelX':0.1, 'accelY':0.1, 'accelZ':9.81,'spd':58,'lat':baseLat+0.019,'lng':baseLng+0.019},
-      {'gyroX':2.0,'gyroY':1.0,'gyroZ': 7.0, 'accelX':0.1, 'accelY':0.1, 'accelZ':9.81,'spd':60,'lat':baseLat+0.020,'lng':baseLng+0.020},
-      {'gyroX':3.0,'gyroY':2.0,'gyroZ':12.0, 'accelX':0.2, 'accelY':0.2, 'accelZ':9.80,'spd':62,'lat':baseLat+0.021,'lng':baseLng+0.021},
-      {'gyroX':2.5,'gyroY':2.0,'gyroZ':10.0, 'accelX':0.2, 'accelY':0.1, 'accelZ':9.81,'spd':62,'lat':baseLat+0.022,'lng':baseLng+0.022},
+      {
+        'gyroX': 2.5,
+        'gyroY': 2.0,
+        'gyroZ': 10.0,
+        'accelX': 0.2,
+        'accelY': 0.2,
+        'accelZ': 9.81,
+        'spd': 55,
+        'lat': baseLat + 0.018,
+        'lng': baseLng + 0.018
+      },
+      {
+        'gyroX': 2.0,
+        'gyroY': 1.5,
+        'gyroZ': 9.0,
+        'accelX': 0.1,
+        'accelY': 0.1,
+        'accelZ': 9.81,
+        'spd': 58,
+        'lat': baseLat + 0.019,
+        'lng': baseLng + 0.019
+      },
+      {
+        'gyroX': 2.0,
+        'gyroY': 1.0,
+        'gyroZ': 7.0,
+        'accelX': 0.1,
+        'accelY': 0.1,
+        'accelZ': 9.81,
+        'spd': 60,
+        'lat': baseLat + 0.020,
+        'lng': baseLng + 0.020
+      },
+      {
+        'gyroX': 3.0,
+        'gyroY': 2.0,
+        'gyroZ': 12.0,
+        'accelX': 0.2,
+        'accelY': 0.2,
+        'accelZ': 9.80,
+        'spd': 62,
+        'lat': baseLat + 0.021,
+        'lng': baseLng + 0.021
+      },
+      {
+        'gyroX': 2.5,
+        'gyroY': 2.0,
+        'gyroZ': 10.0,
+        'accelX': 0.2,
+        'accelY': 0.1,
+        'accelZ': 9.81,
+        'spd': 62,
+        'lat': baseLat + 0.022,
+        'lng': baseLng + 0.022
+      },
       // 23-24: SHARP TURN left (gyroZ -120)
-      {'gyroX':6.0,'gyroY':5.0,'gyroZ':-120.0,'accelX':0.3,'accelY':-1.4,'accelZ':9.80,'spd':55,'lat':baseLat+0.023,'lng':baseLng+0.023},
-      {'gyroX':6.5,'gyroY':5.5,'gyroZ':-125.0,'accelX':0.3,'accelY':-1.5,'accelZ':9.80,'spd':52,'lat':baseLat+0.024,'lng':baseLng+0.024},
+      {
+        'gyroX': 6.0,
+        'gyroY': 5.0,
+        'gyroZ': -120.0,
+        'accelX': 0.3,
+        'accelY': -1.4,
+        'accelZ': 9.80,
+        'spd': 55,
+        'lat': baseLat + 0.023,
+        'lng': baseLng + 0.023
+      },
+      {
+        'gyroX': 6.5,
+        'gyroY': 5.5,
+        'gyroZ': -125.0,
+        'accelX': 0.3,
+        'accelY': -1.5,
+        'accelZ': 9.80,
+        'spd': 52,
+        'lat': baseLat + 0.024,
+        'lng': baseLng + 0.024
+      },
       // 25-29: normal
-      {'gyroX':2.0,'gyroY':1.5,'gyroZ': 9.0, 'accelX':0.2, 'accelY':0.1, 'accelZ':9.81,'spd':55,'lat':baseLat+0.025,'lng':baseLng+0.025},
-      {'gyroX':2.5,'gyroY':2.0,'gyroZ':10.0, 'accelX':0.2, 'accelY':0.1, 'accelZ':9.80,'spd':58,'lat':baseLat+0.026,'lng':baseLng+0.026},
-      {'gyroX':2.0,'gyroY':1.5,'gyroZ': 8.0, 'accelX':0.1, 'accelY':0.1, 'accelZ':9.81,'spd':60,'lat':baseLat+0.027,'lng':baseLng+0.027},
-      {'gyroX':2.5,'gyroY':2.0,'gyroZ':11.0, 'accelX':0.1, 'accelY':0.1, 'accelZ':9.81,'spd':62,'lat':baseLat+0.028,'lng':baseLng+0.028},
-      {'gyroX':3.0,'gyroY':2.5,'gyroZ':13.0, 'accelX':0.2, 'accelY':0.2, 'accelZ':9.80,'spd':62,'lat':baseLat+0.029,'lng':baseLng+0.029},
+      {
+        'gyroX': 2.0,
+        'gyroY': 1.5,
+        'gyroZ': 9.0,
+        'accelX': 0.2,
+        'accelY': 0.1,
+        'accelZ': 9.81,
+        'spd': 55,
+        'lat': baseLat + 0.025,
+        'lng': baseLng + 0.025
+      },
+      {
+        'gyroX': 2.5,
+        'gyroY': 2.0,
+        'gyroZ': 10.0,
+        'accelX': 0.2,
+        'accelY': 0.1,
+        'accelZ': 9.80,
+        'spd': 58,
+        'lat': baseLat + 0.026,
+        'lng': baseLng + 0.026
+      },
+      {
+        'gyroX': 2.0,
+        'gyroY': 1.5,
+        'gyroZ': 8.0,
+        'accelX': 0.1,
+        'accelY': 0.1,
+        'accelZ': 9.81,
+        'spd': 60,
+        'lat': baseLat + 0.027,
+        'lng': baseLng + 0.027
+      },
+      {
+        'gyroX': 2.5,
+        'gyroY': 2.0,
+        'gyroZ': 11.0,
+        'accelX': 0.1,
+        'accelY': 0.1,
+        'accelZ': 9.81,
+        'spd': 62,
+        'lat': baseLat + 0.028,
+        'lng': baseLng + 0.028
+      },
+      {
+        'gyroX': 3.0,
+        'gyroY': 2.5,
+        'gyroZ': 13.0,
+        'accelX': 0.2,
+        'accelY': 0.2,
+        'accelZ': 9.80,
+        'spd': 62,
+        'lat': baseLat + 0.029,
+        'lng': baseLng + 0.029
+      },
       // 30-31: EMERGENCY BRAKE (-5 g)
-      {'gyroX':5.0,'gyroY':4.0,'gyroZ':20.0, 'accelX':-5.0,'accelY':0.2, 'accelZ':9.80,'spd':62,'lat':baseLat+0.030,'lng':baseLng+0.030},
-      {'gyroX':4.0,'gyroY':3.0,'gyroZ':15.0, 'accelX':-4.0,'accelY':0.2, 'accelZ':9.80,'spd':30,'lat':baseLat+0.031,'lng':baseLng+0.031},
+      {
+        'gyroX': 5.0,
+        'gyroY': 4.0,
+        'gyroZ': 20.0,
+        'accelX': -5.0,
+        'accelY': 0.2,
+        'accelZ': 9.80,
+        'spd': 62,
+        'lat': baseLat + 0.030,
+        'lng': baseLng + 0.030
+      },
+      {
+        'gyroX': 4.0,
+        'gyroY': 3.0,
+        'gyroZ': 15.0,
+        'accelX': -4.0,
+        'accelY': 0.2,
+        'accelZ': 9.80,
+        'spd': 30,
+        'lat': baseLat + 0.031,
+        'lng': baseLng + 0.031
+      },
       // 32-34: slow recovery
-      {'gyroX':2.0,'gyroY':1.5,'gyroZ': 6.0, 'accelX':0.3, 'accelY':0.1, 'accelZ':9.81,'spd':32,'lat':baseLat+0.032,'lng':baseLng+0.032},
-      {'gyroX':2.0,'gyroY':1.0,'gyroZ': 5.0, 'accelX':0.4, 'accelY':0.1, 'accelZ':9.81,'spd':38,'lat':baseLat+0.033,'lng':baseLng+0.033},
-      {'gyroX':2.5,'gyroY':1.5,'gyroZ': 8.0, 'accelX':0.3, 'accelY':0.1, 'accelZ':9.81,'spd':45,'lat':baseLat+0.034,'lng':baseLng+0.034},
+      {
+        'gyroX': 2.0,
+        'gyroY': 1.5,
+        'gyroZ': 6.0,
+        'accelX': 0.3,
+        'accelY': 0.1,
+        'accelZ': 9.81,
+        'spd': 32,
+        'lat': baseLat + 0.032,
+        'lng': baseLng + 0.032
+      },
+      {
+        'gyroX': 2.0,
+        'gyroY': 1.0,
+        'gyroZ': 5.0,
+        'accelX': 0.4,
+        'accelY': 0.1,
+        'accelZ': 9.81,
+        'spd': 38,
+        'lat': baseLat + 0.033,
+        'lng': baseLng + 0.033
+      },
+      {
+        'gyroX': 2.5,
+        'gyroY': 1.5,
+        'gyroZ': 8.0,
+        'accelX': 0.3,
+        'accelY': 0.1,
+        'accelZ': 9.81,
+        'spd': 45,
+        'lat': baseLat + 0.034,
+        'lng': baseLng + 0.034
+      },
       // 35-37: HIGH SPEED (85 km/h)
-      {'gyroX':3.0,'gyroY':2.0,'gyroZ':12.0, 'accelX':0.5, 'accelY':0.2, 'accelZ':9.80,'spd':75,'lat':baseLat+0.035,'lng':baseLng+0.035},
-      {'gyroX':3.5,'gyroY':2.5,'gyroZ':14.0, 'accelX':0.4, 'accelY':0.2, 'accelZ':9.80,'spd':82,'lat':baseLat+0.036,'lng':baseLng+0.036},
-      {'gyroX':4.0,'gyroY':3.0,'gyroZ':16.0, 'accelX':0.3, 'accelY':0.3, 'accelZ':9.79,'spd':85,'lat':baseLat+0.037,'lng':baseLng+0.037},
+      {
+        'gyroX': 3.0,
+        'gyroY': 2.0,
+        'gyroZ': 12.0,
+        'accelX': 0.5,
+        'accelY': 0.2,
+        'accelZ': 9.80,
+        'spd': 75,
+        'lat': baseLat + 0.035,
+        'lng': baseLng + 0.035
+      },
+      {
+        'gyroX': 3.5,
+        'gyroY': 2.5,
+        'gyroZ': 14.0,
+        'accelX': 0.4,
+        'accelY': 0.2,
+        'accelZ': 9.80,
+        'spd': 82,
+        'lat': baseLat + 0.036,
+        'lng': baseLng + 0.036
+      },
+      {
+        'gyroX': 4.0,
+        'gyroY': 3.0,
+        'gyroZ': 16.0,
+        'accelX': 0.3,
+        'accelY': 0.3,
+        'accelZ': 9.79,
+        'spd': 85,
+        'lat': baseLat + 0.037,
+        'lng': baseLng + 0.037
+      },
       // 38-39: arrive, slow down
-      {'gyroX':2.0,'gyroY':1.5,'gyroZ': 8.0, 'accelX':-0.8,'accelY':0.1, 'accelZ':9.81,'spd':40,'lat':baseLat+0.038,'lng':baseLng+0.038},
-      {'gyroX':1.0,'gyroY':1.0,'gyroZ': 4.0, 'accelX':-1.0,'accelY':0.1, 'accelZ':9.81,'spd':15,'lat':baseLat+0.039,'lng':baseLng+0.039},
+      {
+        'gyroX': 2.0,
+        'gyroY': 1.5,
+        'gyroZ': 8.0,
+        'accelX': -0.8,
+        'accelY': 0.1,
+        'accelZ': 9.81,
+        'spd': 40,
+        'lat': baseLat + 0.038,
+        'lng': baseLng + 0.038
+      },
+      {
+        'gyroX': 1.0,
+        'gyroY': 1.0,
+        'gyroZ': 4.0,
+        'accelX': -1.0,
+        'accelY': 0.1,
+        'accelZ': 9.81,
+        'spd': 15,
+        'lat': baseLat + 0.039,
+        'lng': baseLng + 0.039
+      },
     ];
 
-
-    _simulationTimer = Timer.periodic(const Duration(milliseconds: 500), (timer) {
+    _simulationTimer =
+        Timer.periodic(const Duration(milliseconds: 500), (timer) {
       if (!mounted || _simPacketIndex >= packets.length) {
         _stopSimulation();
         return;
-
       }
       final p = packets[_simPacketIndex++];
       // Feed directly through the same path as real Bluetooth data
@@ -639,9 +1045,9 @@ class _Member3PageState extends State<Member3Page>
           '"accelX":${p["accelX"]},"accelY":${p["accelY"]},"accelZ":${p["accelZ"]},'
           '"spd":${p["spd"]},"lat":${p["lat"]},"lng":${p["lng"]}'
           '}');
-      debugPrint('[SIM] Packet $_simPacketIndex/40 injected: gyroZ=${p["gyroZ"]} accelX=${p["accelX"]} lat=${p["lat"]}');
+      debugPrint(
+          '[SIM] Packet $_simPacketIndex/40 injected: gyroZ=${p["gyroZ"]} accelX=${p["accelX"]} lat=${p["lat"]}');
     });
->>>>>>> Stashed changes
   }
 
   // ============================================================
@@ -665,7 +1071,6 @@ class _Member3PageState extends State<Member3Page>
     }
 
     if (_isSaving) return;
-
 
     try {
       final now = DateTime.now();
@@ -715,15 +1120,17 @@ class _Member3PageState extends State<Member3Page>
 
       _riskyEventsSavedCount++;
 
-<<<<<<< Updated upstream
-=======
-      setState(() { _isSaving = false; });
->>>>>>> Stashed changes
+      setState(() {
+        _isSaving = false;
+      });
+
       debugPrint(
           "🚨 RISKY EVENT #$_riskyEventsSavedCount saved → Type: $eventType | Turn: ${turnRate.toStringAsFixed(1)}°/s | ID: ${docRef.id}");
     } catch (e) {
       debugPrint("❌ Firebase risky event save error: $e");
-      setState(() { _isSaving = false; });
+      setState(() {
+        _isSaving = false;
+      });
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
@@ -738,10 +1145,13 @@ class _Member3PageState extends State<Member3Page>
   void _stopSimulation() {
     _simulationTimer?.cancel();
     _simulationTimer = null;
-    if (mounted) setState(() { _isSimulating = false; _simPacketIndex = 0; });
+    if (mounted)
+      setState(() {
+        _isSimulating = false;
+        _simPacketIndex = 0;
+      });
     debugPrint('[SIM] Simulation stopped after $_simPacketIndex packets.');
   }
-
 
   // Load risky events from Firebase for a specific ride
   Future<List<Map<String, dynamic>>> loadRiskyEventsForRide(
@@ -764,7 +1174,6 @@ class _Member3PageState extends State<Member3Page>
       return [];
     }
   }
-
 
   @override
   Widget build(BuildContext context) {
@@ -877,11 +1286,7 @@ class _Member3PageState extends State<Member3Page>
                               Text(
                                 _isSaving
                                     ? "Saving risky event..."
-<<<<<<< Updated upstream
                                     : "🚨 $_riskyEventsSavedCount Risky Events",
-=======
-                                    : "🚨 $totalEvents Risky Events",
->>>>>>> Stashed changes
                                 style: const TextStyle(
                                   color: Colors.white,
                                   fontSize: 13,
@@ -893,11 +1298,7 @@ class _Member3PageState extends State<Member3Page>
                                 Text(
                                   "Ride: ${rideProvider.currentRideId!.substring(0, min(8, rideProvider.currentRideId!.length))}...",
                                   style: TextStyle(
-<<<<<<< Updated upstream
                                     color: Colors.white.withOpacity(0.8),
-=======
-                                    color: Colors.white.withValues(alpha: 0.2),
->>>>>>> Stashed changes
                                     fontSize: 10,
                                   ),
                                 ),
@@ -1279,27 +1680,38 @@ class _Member3PageState extends State<Member3Page>
                   child: Column(
                     mainAxisAlignment: MainAxisAlignment.center,
                     children: [
-                      Icon(Icons.route_outlined, size: 70, color: _textSecondary.withValues(alpha: 0.2)),
+                      Icon(Icons.route_outlined,
+                          size: 70,
+                          color: _textSecondary.withValues(alpha: 0.2)),
                       const SizedBox(height: 16),
                       const Text('No journeys recorded yet',
-                        style: TextStyle(fontSize: 18, fontWeight: FontWeight.w600, color: _textPrimary)),
+                          style: TextStyle(
+                              fontSize: 18,
+                              fontWeight: FontWeight.w600,
+                              color: _textPrimary)),
                       const SizedBox(height: 8),
                       const Text('Start a journey from Home Dashboard',
-                        style: TextStyle(fontSize: 14, color: _textSecondary)),
+                          style:
+                              TextStyle(fontSize: 14, color: _textSecondary)),
                       const SizedBox(height: 24),
                       Container(
                         decoration: BoxDecoration(
-                          gradient: const LinearGradient(colors: [_primary, _accent]),
+                          gradient:
+                              const LinearGradient(colors: [_primary, _accent]),
                           borderRadius: BorderRadius.circular(12),
                         ),
                         child: ElevatedButton.icon(
                           onPressed: _showDummyReport,
                           icon: const Icon(Icons.science, color: Colors.white),
-                          label: const Text('View Sample Report', style: TextStyle(color: Colors.white, fontWeight: FontWeight.w600)),
+                          label: const Text('View Sample Report',
+                              style: TextStyle(
+                                  color: Colors.white,
+                                  fontWeight: FontWeight.w600)),
                           style: ElevatedButton.styleFrom(
                             backgroundColor: Colors.transparent,
                             shadowColor: Colors.transparent,
-                            padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 12),
+                            padding: const EdgeInsets.symmetric(
+                                horizontal: 24, vertical: 12),
                           ),
                         ),
                       ),
@@ -1313,13 +1725,17 @@ class _Member3PageState extends State<Member3Page>
                       padding: const EdgeInsets.all(16),
                       child: Container(
                         decoration: BoxDecoration(
-                          gradient: LinearGradient(colors: [Colors.orange[700]!, Colors.deepOrange]),
+                          gradient: LinearGradient(
+                              colors: [Colors.orange[700]!, Colors.deepOrange]),
                           borderRadius: BorderRadius.circular(12),
                         ),
                         child: ElevatedButton.icon(
                           onPressed: _showDummyReport,
                           icon: const Icon(Icons.science, color: Colors.white),
-                          label: const Text('View Sample Report', style: TextStyle(color: Colors.white, fontWeight: FontWeight.w600)),
+                          label: const Text('View Sample Report',
+                              style: TextStyle(
+                                  color: Colors.white,
+                                  fontWeight: FontWeight.w600)),
                           style: ElevatedButton.styleFrom(
                             backgroundColor: Colors.transparent,
                             shadowColor: Colors.transparent,
@@ -1361,7 +1777,12 @@ class _Member3PageState extends State<Member3Page>
       decoration: BoxDecoration(
         color: _cardBg,
         borderRadius: BorderRadius.circular(16),
-        boxShadow: [BoxShadow(color: Colors.black.withValues(alpha: 0.2), blurRadius: 8, offset: const Offset(0, 3))],
+        boxShadow: [
+          BoxShadow(
+              color: Colors.black.withValues(alpha: 0.2),
+              blurRadius: 8,
+              offset: const Offset(0, 3))
+        ],
       ),
       child: InkWell(
         onTap: () => _showJourneyDetails(journey),
@@ -1394,7 +1815,8 @@ class _Member3PageState extends State<Member3Page>
                             color: _primary.withValues(alpha: 0.2),
                             borderRadius: BorderRadius.circular(10),
                           ),
-                          child: const Icon(Icons.navigation, color: _accent, size: 20),
+                          child: const Icon(Icons.navigation,
+                              color: _accent, size: 20),
                         ),
                         const SizedBox(width: 12),
                         Expanded(
@@ -1403,12 +1825,17 @@ class _Member3PageState extends State<Member3Page>
                             children: [
                               Text(
                                 journey.destination ?? 'Unknown Destination',
-                                style: const TextStyle(fontSize: 16, fontWeight: FontWeight.w700, color: _textPrimary),
+                                style: const TextStyle(
+                                    fontSize: 16,
+                                    fontWeight: FontWeight.w700,
+                                    color: _textPrimary),
                               ),
                               const SizedBox(height: 2),
                               Text(
-                                DateFormat('MMM dd, yyyy • HH:mm').format(journey.startTime),
-                                style: const TextStyle(color: _textSecondary, fontSize: 12),
+                                DateFormat('MMM dd, yyyy • HH:mm')
+                                    .format(journey.startTime),
+                                style: const TextStyle(
+                                    color: _textSecondary, fontSize: 12),
                               ),
                             ],
                           ),
@@ -1417,15 +1844,26 @@ class _Member3PageState extends State<Member3Page>
                       ],
                     ),
                     const SizedBox(height: 14),
-                    Container(height: 1, color: _textSecondary.withValues(alpha: 0.2)),
+                    Container(
+                        height: 1,
+                        color: _textSecondary.withValues(alpha: 0.2)),
                     const SizedBox(height: 12),
                     Row(
                       mainAxisAlignment: MainAxisAlignment.spaceAround,
                       children: [
-                        _buildStatColumn(Icons.route, '${journey.totalDistance.toStringAsFixed(1)} km', 'Distance'),
-                        _buildStatColumn(Icons.timer, '${duration.inMinutes} min', 'Duration'),
-                        _buildStatColumn(Icons.turn_sharp_right, '${journey.sharpTurns}', 'Sharp', const Color(0xFFF57F17)),
-                        _buildStatColumn(Icons.warning, '${journey.riskyTurns}', 'Risky', const Color(0xFFC62828)),
+                        _buildStatColumn(
+                            Icons.route,
+                            '${journey.totalDistance.toStringAsFixed(1)} km',
+                            'Distance'),
+                        _buildStatColumn(Icons.timer,
+                            '${duration.inMinutes} min', 'Duration'),
+                        _buildStatColumn(
+                            Icons.turn_sharp_right,
+                            '${journey.sharpTurns}',
+                            'Sharp',
+                            const Color(0xFFF57F17)),
+                        _buildStatColumn(Icons.warning, '${journey.riskyTurns}',
+                            'Risky', const Color(0xFFC62828)),
                       ],
                     ),
                   ],
@@ -1470,7 +1908,9 @@ class _Member3PageState extends State<Member3Page>
         children: [
           Icon(icon, size: 13, color: color),
           const SizedBox(width: 4),
-          Text(label, style: TextStyle(color: color, fontWeight: FontWeight.w700, fontSize: 11)),
+          Text(label,
+              style: TextStyle(
+                  color: color, fontWeight: FontWeight.w700, fontSize: 11)),
         ],
       ),
     );
@@ -1490,8 +1930,13 @@ class _Member3PageState extends State<Member3Page>
           child: Icon(icon, size: 16, color: c),
         ),
         const SizedBox(height: 4),
-        Text(value, style: TextStyle(fontSize: 14, fontWeight: FontWeight.w700, color: color ?? _textPrimary)),
-        Text(label, style: const TextStyle(fontSize: 11, color: _textSecondary)),
+        Text(value,
+            style: TextStyle(
+                fontSize: 14,
+                fontWeight: FontWeight.w700,
+                color: color ?? _textPrimary)),
+        Text(label,
+            style: const TextStyle(fontSize: 11, color: _textSecondary)),
       ],
     );
   }
@@ -1518,7 +1963,6 @@ class _Member3PageState extends State<Member3Page>
   }
 
   // Method to load dummy history for testing
-
 
   // Live Monitoring Tab
   // ═══════════════════════════════════════════════════════════════
@@ -1557,19 +2001,30 @@ class _Member3PageState extends State<Member3Page>
           const SizedBox(height: 20),
           Container(
             decoration: BoxDecoration(
-              gradient: const LinearGradient(colors: [Color(0xFF1565C0), Color(0xFF0D47A1)]),
+              gradient: const LinearGradient(
+                  colors: [Color(0xFF1565C0), Color(0xFF0D47A1)]),
               borderRadius: BorderRadius.circular(14),
-              boxShadow: [BoxShadow(color: _primary.withValues(alpha: 0.2), blurRadius: 8, offset: const Offset(0, 4))],
+              boxShadow: [
+                BoxShadow(
+                    color: _primary.withValues(alpha: 0.2),
+                    blurRadius: 8,
+                    offset: const Offset(0, 4))
+              ],
             ),
             child: ElevatedButton.icon(
               onPressed: _resetCounters,
               icon: const Icon(Icons.refresh_rounded, color: Colors.white),
-              label: const Text('Reset Counters', style: TextStyle(fontSize: 15, fontWeight: FontWeight.w600, color: Colors.white)),
+              label: const Text('Reset Counters',
+                  style: TextStyle(
+                      fontSize: 15,
+                      fontWeight: FontWeight.w600,
+                      color: Colors.white)),
               style: ElevatedButton.styleFrom(
                 backgroundColor: Colors.transparent,
                 shadowColor: Colors.transparent,
                 padding: const EdgeInsets.symmetric(vertical: 16),
-                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
+                shape: RoundedRectangleBorder(
+                    borderRadius: BorderRadius.circular(14)),
               ),
             ),
           ),
@@ -1591,9 +2046,15 @@ class _Member3PageState extends State<Member3Page>
           child: Icon(icon, color: Colors.white, size: 18),
         ),
         const SizedBox(width: 12),
-        Text(title, style: const TextStyle(fontSize: 18, fontWeight: FontWeight.bold, color: _textPrimary)),
+        Text(title,
+            style: const TextStyle(
+                fontSize: 18,
+                fontWeight: FontWeight.bold,
+                color: _textPrimary)),
         const SizedBox(width: 12),
-        Expanded(child: Container(height: 1, color: _textSecondary.withValues(alpha: 0.2))),
+        Expanded(
+            child: Container(
+                height: 1, color: _textSecondary.withValues(alpha: 0.2))),
       ],
     );
   }
@@ -1701,8 +2162,11 @@ class _Member3PageState extends State<Member3Page>
   }
 
   Widget _buildStatusCard() {
-    final isRisky = currentTurnStatus == "RISKY TURN!" || currentTurnStatus == "EMERGENCY BRAKE!";
-    final isWarning = currentTurnStatus == "Sharp Turn" || currentTurnStatus == "Harsh Brake" || currentTurnStatus == "HIGH SPEED!";
+    final isRisky = currentTurnStatus == "RISKY TURN!" ||
+        currentTurnStatus == "EMERGENCY BRAKE!";
+    final isWarning = currentTurnStatus == "Sharp Turn" ||
+        currentTurnStatus == "Harsh Brake" ||
+        currentTurnStatus == "HIGH SPEED!";
 
     return AnimatedContainer(
       duration: const Duration(milliseconds: 350),
@@ -1721,8 +2185,14 @@ class _Member3PageState extends State<Member3Page>
         borderRadius: BorderRadius.circular(20),
         boxShadow: [
           BoxShadow(
-            color: (isRisky ? const Color(0xFFC62828) : isWarning ? const Color(0xFFF57F17) : const Color(0xFF2E7D32)).withValues(alpha: 0.2),
-            blurRadius: 16, offset: const Offset(0, 6),
+            color: (isRisky
+                    ? const Color(0xFFC62828)
+                    : isWarning
+                        ? const Color(0xFFF57F17)
+                        : const Color(0xFF2E7D32))
+                .withValues(alpha: 0.2),
+            blurRadius: 16,
+            offset: const Offset(0, 6),
           ),
         ],
       ),
@@ -1730,7 +2200,10 @@ class _Member3PageState extends State<Member3Page>
         children: [
           AnimatedSwitcher(
             duration: const Duration(milliseconds: 300),
-            child: Icon(_getStatusIcon(), key: ValueKey(currentTurnStatus), size: 52, color: Colors.white),
+            child: Icon(_getStatusIcon(),
+                key: ValueKey(currentTurnStatus),
+                size: 52,
+                color: Colors.white),
           ),
           const SizedBox(height: 10),
           AnimatedSwitcher(
@@ -1738,12 +2211,17 @@ class _Member3PageState extends State<Member3Page>
             child: Text(
               currentTurnStatus,
               key: ValueKey('status_$currentTurnStatus'),
-              style: const TextStyle(fontSize: 26, fontWeight: FontWeight.w800, color: Colors.white, letterSpacing: 0.5),
+              style: const TextStyle(
+                  fontSize: 26,
+                  fontWeight: FontWeight.w800,
+                  color: Colors.white,
+                  letterSpacing: 0.5),
             ),
           ),
           const SizedBox(height: 6),
           Text('Turn Rate: ${gyroX.abs().toStringAsFixed(1)}°/s',
-              style: TextStyle(fontSize: 14, color: Colors.white.withValues(alpha: 0.2))),
+              style: TextStyle(
+                  fontSize: 14, color: Colors.white.withValues(alpha: 0.2))),
         ],
       ),
     );
@@ -1752,7 +2230,8 @@ class _Member3PageState extends State<Member3Page>
   IconData _getStatusIcon() {
     if (currentTurnStatus == "RISKY TURN!") return Icons.warning_amber;
     if (currentTurnStatus == "Sharp Turn") return Icons.turn_sharp_right;
-    if (currentTurnStatus == "EMERGENCY BRAKE!" || currentTurnStatus == "Harsh Brake") return Icons.front_hand_rounded;
+    if (currentTurnStatus == "EMERGENCY BRAKE!" ||
+        currentTurnStatus == "Harsh Brake") return Icons.front_hand_rounded;
     if (currentTurnStatus == "HIGH SPEED!") return Icons.speed;
     return Icons.check_circle;
   }
@@ -1782,28 +2261,44 @@ class _Member3PageState extends State<Member3Page>
       decoration: BoxDecoration(
         color: _cardBg,
         borderRadius: BorderRadius.circular(16),
-        boxShadow: [BoxShadow(color: Colors.black.withValues(alpha: 0.2), blurRadius: 8, offset: const Offset(0, 3))],
+        boxShadow: [
+          BoxShadow(
+              color: Colors.black.withValues(alpha: 0.2),
+              blurRadius: 8,
+              offset: const Offset(0, 3))
+        ],
       ),
       child: Column(
         children: [
-          Container(width: 40, height: 4,
-            decoration: BoxDecoration(color: color, borderRadius: BorderRadius.circular(2)),
+          Container(
+            width: 40,
+            height: 4,
+            decoration: BoxDecoration(
+                color: color, borderRadius: BorderRadius.circular(2)),
           ),
           const SizedBox(height: 12),
           Container(
             padding: const EdgeInsets.all(10),
-            decoration: BoxDecoration(color: color.withValues(alpha: 0.2), shape: BoxShape.circle),
+            decoration: BoxDecoration(
+                color: color.withValues(alpha: 0.2), shape: BoxShape.circle),
             child: Icon(icon, size: 22, color: color),
           ),
           const SizedBox(height: 10),
-          Text(value, style: TextStyle(fontSize: 28, fontWeight: FontWeight.w800, color: color)),
+          Text(value,
+              style: TextStyle(
+                  fontSize: 28, fontWeight: FontWeight.w800, color: color)),
           const SizedBox(height: 2),
-          Text(label, style: const TextStyle(fontSize: 11, color: _textSecondary, fontWeight: FontWeight.w500),
+          Text(label,
+              style: const TextStyle(
+                  fontSize: 11,
+                  color: _textSecondary,
+                  fontWeight: FontWeight.w500),
               textAlign: TextAlign.center),
         ],
       ),
     );
   }
+
   Widget _buildLeanAngleCard() {
     final absAngle = leanAngle.abs();
     Color angleColor;
@@ -1828,7 +2323,12 @@ class _Member3PageState extends State<Member3Page>
       decoration: BoxDecoration(
         color: _cardBg,
         borderRadius: BorderRadius.circular(18),
-        boxShadow: [BoxShadow(color: Colors.black.withValues(alpha: 0.2), blurRadius: 8, offset: const Offset(0, 3))],
+        boxShadow: [
+          BoxShadow(
+              color: Colors.black.withValues(alpha: 0.2),
+              blurRadius: 8,
+              offset: const Offset(0, 3))
+        ],
       ),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
@@ -1837,21 +2337,34 @@ class _Member3PageState extends State<Member3Page>
             children: [
               Container(
                 padding: const EdgeInsets.all(8),
-                decoration: BoxDecoration(color: angleColor.withValues(alpha: 0.2), borderRadius: BorderRadius.circular(10)),
-                child: Icon(Icons.rotate_90_degrees_ccw, size: 20, color: angleColor),
+                decoration: BoxDecoration(
+                    color: angleColor.withValues(alpha: 0.2),
+                    borderRadius: BorderRadius.circular(10)),
+                child: Icon(Icons.rotate_90_degrees_ccw,
+                    size: 20, color: angleColor),
               ),
               const SizedBox(width: 10),
-              const Text('Lean Angle', style: TextStyle(fontSize: 17, fontWeight: FontWeight.w700, color: _textPrimary)),
+              const Text('Lean Angle',
+                  style: TextStyle(
+                      fontSize: 17,
+                      fontWeight: FontWeight.w700,
+                      color: _textPrimary)),
               const Spacer(),
               AnimatedContainer(
                 duration: const Duration(milliseconds: 300),
-                padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 5),
+                padding:
+                    const EdgeInsets.symmetric(horizontal: 12, vertical: 5),
                 decoration: BoxDecoration(
                   color: angleColor.withValues(alpha: 0.2),
                   borderRadius: BorderRadius.circular(20),
-                  border: Border.all(color: angleColor.withValues(alpha: 0.2), width: 1.5),
+                  border: Border.all(
+                      color: angleColor.withValues(alpha: 0.2), width: 1.5),
                 ),
-                child: Text(angleLabel, style: TextStyle(color: angleColor, fontWeight: FontWeight.w700, fontSize: 12)),
+                child: Text(angleLabel,
+                    style: TextStyle(
+                        color: angleColor,
+                        fontWeight: FontWeight.w700,
+                        fontSize: 12)),
               ),
             ],
           ),
@@ -1860,15 +2373,26 @@ class _Member3PageState extends State<Member3Page>
             child: SizedBox(
               height: 120,
               width: double.infinity,
-              child: CustomPaint(painter: _LeanAnglePainter(angle: leanAngle, color: angleColor)),
+              child: CustomPaint(
+                  painter:
+                      _LeanAnglePainter(angle: leanAngle, color: angleColor)),
             ),
           ),
           const SizedBox(height: 10),
-          Center(child: Text('${leanAngle.toStringAsFixed(1)}°', style: TextStyle(fontSize: 36, fontWeight: FontWeight.w800, color: angleColor))),
+          Center(
+              child: Text('${leanAngle.toStringAsFixed(1)}°',
+                  style: TextStyle(
+                      fontSize: 36,
+                      fontWeight: FontWeight.w800,
+                      color: angleColor))),
           const SizedBox(height: 4),
           Center(
             child: Text(
-              leanAngle > 0 ? '← Leaning Left' : leanAngle < 0 ? 'Leaning Right →' : 'Upright',
+              leanAngle > 0
+                  ? '← Leaning Left'
+                  : leanAngle < 0
+                      ? 'Leaning Right →'
+                      : 'Upright',
               style: const TextStyle(fontSize: 13, color: _textSecondary),
             ),
           ),
@@ -1891,14 +2415,22 @@ class _Member3PageState extends State<Member3Page>
     return Column(
       children: [
         Container(
-          width: 12, height: 12,
+          width: 12,
+          height: 12,
           decoration: BoxDecoration(
-            color: color, shape: BoxShape.circle,
-            boxShadow: [BoxShadow(color: color.withValues(alpha: 0.2), blurRadius: 4)],
+            color: color,
+            shape: BoxShape.circle,
+            boxShadow: [
+              BoxShadow(color: color.withValues(alpha: 0.2), blurRadius: 4)
+            ],
           ),
         ),
         const SizedBox(height: 3),
-        Text(range, style: const TextStyle(fontSize: 10, fontWeight: FontWeight.w600, color: _textPrimary)),
+        Text(range,
+            style: const TextStyle(
+                fontSize: 10,
+                fontWeight: FontWeight.w600,
+                color: _textPrimary)),
         Text(label, style: const TextStyle(fontSize: 9, color: _textSecondary)),
       ],
     );
@@ -1910,7 +2442,12 @@ class _Member3PageState extends State<Member3Page>
       decoration: BoxDecoration(
         color: _cardBg,
         borderRadius: BorderRadius.circular(16),
-        boxShadow: [BoxShadow(color: Colors.black.withValues(alpha: 0.2), blurRadius: 6, offset: const Offset(0, 2))],
+        boxShadow: [
+          BoxShadow(
+              color: Colors.black.withValues(alpha: 0.2),
+              blurRadius: 6,
+              offset: const Offset(0, 2))
+        ],
       ),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
@@ -1919,9 +2456,16 @@ class _Member3PageState extends State<Member3Page>
             children: [
               const Icon(Icons.screen_rotation_alt, size: 18, color: _accent),
               const SizedBox(width: 8),
-              const Text('Gyroscope', style: TextStyle(fontSize: 15, fontWeight: FontWeight.w700, color: _textPrimary)),
+              const Text('Gyroscope',
+                  style: TextStyle(
+                      fontSize: 15,
+                      fontWeight: FontWeight.w700,
+                      color: _textPrimary)),
               const Spacer(),
-              Text('°/s', style: TextStyle(fontSize: 12, color: _textSecondary.withValues(alpha: 0.2))),
+              Text('°/s',
+                  style: TextStyle(
+                      fontSize: 12,
+                      color: _textSecondary.withValues(alpha: 0.2))),
             ],
           ),
           const SizedBox(height: 14),
@@ -1939,7 +2483,12 @@ class _Member3PageState extends State<Member3Page>
       decoration: BoxDecoration(
         color: _cardBg,
         borderRadius: BorderRadius.circular(16),
-        boxShadow: [BoxShadow(color: Colors.black.withValues(alpha: 0.2), blurRadius: 6, offset: const Offset(0, 2))],
+        boxShadow: [
+          BoxShadow(
+              color: Colors.black.withValues(alpha: 0.2),
+              blurRadius: 6,
+              offset: const Offset(0, 2))
+        ],
       ),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
@@ -1948,9 +2497,16 @@ class _Member3PageState extends State<Member3Page>
             children: [
               const Icon(Icons.speed, size: 18, color: _accent),
               const SizedBox(width: 8),
-              const Text('Accelerometer', style: TextStyle(fontSize: 15, fontWeight: FontWeight.w700, color: _textPrimary)),
+              const Text('Accelerometer',
+                  style: TextStyle(
+                      fontSize: 15,
+                      fontWeight: FontWeight.w700,
+                      color: _textPrimary)),
               const Spacer(),
-              Text('m/s²', style: TextStyle(fontSize: 12, color: _textSecondary.withValues(alpha: 0.2))),
+              Text('m/s²',
+                  style: TextStyle(
+                      fontSize: 12,
+                      color: _textSecondary.withValues(alpha: 0.2))),
             ],
           ),
           const SizedBox(height: 14),
@@ -1967,17 +2523,22 @@ class _Member3PageState extends State<Member3Page>
       padding: const EdgeInsets.symmetric(vertical: 5),
       child: Row(
         children: [
-          SizedBox(width: 75, child: Text(label, style: const TextStyle(fontSize: 13, color: _textSecondary))),
+          SizedBox(
+              width: 75,
+              child: Text(label,
+                  style: const TextStyle(fontSize: 13, color: _textSecondary))),
           Expanded(
             child: Container(
               height: 20,
-              decoration: BoxDecoration(color: _surfaceBg, borderRadius: BorderRadius.circular(6)),
+              decoration: BoxDecoration(
+                  color: _surfaceBg, borderRadius: BorderRadius.circular(6)),
               child: FractionallySizedBox(
                 widthFactor: (value.abs() / 200).clamp(0.01, 1.0),
                 alignment: Alignment.centerLeft,
                 child: Container(
                   decoration: BoxDecoration(
-                    gradient: LinearGradient(colors: [color.withValues(alpha: 0.2), color]),
+                    gradient: LinearGradient(
+                        colors: [color.withValues(alpha: 0.2), color]),
                     borderRadius: BorderRadius.circular(6),
                   ),
                 ),
@@ -1987,8 +2548,10 @@ class _Member3PageState extends State<Member3Page>
           const SizedBox(width: 8),
           SizedBox(
             width: 60,
-            child: Text(value.toStringAsFixed(2),
-              style: TextStyle(fontSize: 14, fontWeight: FontWeight.w700, color: color),
+            child: Text(
+              value.toStringAsFixed(2),
+              style: TextStyle(
+                  fontSize: 14, fontWeight: FontWeight.w700, color: color),
               textAlign: TextAlign.right,
             ),
           ),
@@ -2003,7 +2566,12 @@ class _Member3PageState extends State<Member3Page>
       decoration: BoxDecoration(
         color: _cardBg,
         borderRadius: BorderRadius.circular(18),
-        boxShadow: [BoxShadow(color: Colors.black.withValues(alpha: 0.2), blurRadius: 6, offset: const Offset(0, 2))],
+        boxShadow: [
+          BoxShadow(
+              color: Colors.black.withValues(alpha: 0.2),
+              blurRadius: 6,
+              offset: const Offset(0, 2))
+        ],
       ),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
@@ -2012,21 +2580,32 @@ class _Member3PageState extends State<Member3Page>
             children: [
               Container(
                 padding: const EdgeInsets.all(7),
-                decoration: BoxDecoration(color: _accent.withValues(alpha: 0.2), borderRadius: BorderRadius.circular(8)),
-                child: const Icon(Icons.show_chart_rounded, size: 18, color: _accent),
+                decoration: BoxDecoration(
+                    color: _accent.withValues(alpha: 0.2),
+                    borderRadius: BorderRadius.circular(8)),
+                child: const Icon(Icons.show_chart_rounded,
+                    size: 18, color: _accent),
               ),
               const SizedBox(width: 10),
-              const Text('Turn Rate History', style: TextStyle(fontSize: 16, fontWeight: FontWeight.w700, color: _textPrimary)),
+              const Text('Turn Rate History',
+                  style: TextStyle(
+                      fontSize: 16,
+                      fontWeight: FontWeight.w700,
+                      color: _textPrimary)),
             ],
           ),
           const SizedBox(height: 16),
           Container(
             height: 150,
-            decoration: BoxDecoration(color: _surfaceBg, borderRadius: BorderRadius.circular(12)),
+            decoration: BoxDecoration(
+                color: _surfaceBg, borderRadius: BorderRadius.circular(12)),
             padding: const EdgeInsets.all(8),
             child: CustomPaint(
               size: Size.infinite,
-              painter: GraphPainter(data: gyroZHistory, sharpThreshold: sharpTurnThreshold, riskyThreshold: riskyTurnThreshold),
+              painter: GraphPainter(
+                  data: gyroZHistory,
+                  sharpThreshold: sharpTurnThreshold,
+                  riskyThreshold: riskyTurnThreshold),
             ),
           ),
           const SizedBox(height: 12),
@@ -2048,9 +2627,14 @@ class _Member3PageState extends State<Member3Page>
   Widget _buildLegend(String label, Color color) {
     return Row(
       children: [
-        Container(width: 14, height: 4, decoration: BoxDecoration(color: color, borderRadius: BorderRadius.circular(2))),
+        Container(
+            width: 14,
+            height: 4,
+            decoration: BoxDecoration(
+                color: color, borderRadius: BorderRadius.circular(2))),
         const SizedBox(width: 5),
-        Text(label, style: const TextStyle(fontSize: 11, color: _textSecondary)),
+        Text(label,
+            style: const TextStyle(fontSize: 11, color: _textSecondary)),
       ],
     );
   }
@@ -2072,7 +2656,12 @@ class _Member3PageState extends State<Member3Page>
       decoration: BoxDecoration(
         color: _cardBg,
         borderRadius: BorderRadius.circular(18),
-        boxShadow: [BoxShadow(color: Colors.black.withValues(alpha: 0.2), blurRadius: 6, offset: const Offset(0, 2))],
+        boxShadow: [
+          BoxShadow(
+              color: Colors.black.withValues(alpha: 0.2),
+              blurRadius: 6,
+              offset: const Offset(0, 2))
+        ],
       ),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
@@ -2083,32 +2672,50 @@ class _Member3PageState extends State<Member3Page>
                 duration: const Duration(milliseconds: 400),
                 padding: const EdgeInsets.all(8),
                 decoration: BoxDecoration(
-                  color: hasFix ? const Color(0xFF2E7D32).withValues(alpha: 0.2) : Colors.grey.withValues(alpha: 0.2),
+                  color: hasFix
+                      ? const Color(0xFF2E7D32).withValues(alpha: 0.2)
+                      : Colors.grey.withValues(alpha: 0.2),
                   borderRadius: BorderRadius.circular(10),
                 ),
                 child: Icon(hasFix ? Icons.gps_fixed : Icons.gps_not_fixed,
-                  color: hasFix ? const Color(0xFF4CAF50) : Colors.grey, size: 20),
+                    color: hasFix ? const Color(0xFF4CAF50) : Colors.grey,
+                    size: 20),
               ),
               const SizedBox(width: 10),
-              const Text('GPS Data', style: TextStyle(fontSize: 16, fontWeight: FontWeight.w700, color: _textPrimary)),
+              const Text('GPS Data',
+                  style: TextStyle(
+                      fontSize: 16,
+                      fontWeight: FontWeight.w700,
+                      color: _textPrimary)),
               const Spacer(),
               AnimatedContainer(
                 duration: const Duration(milliseconds: 400),
-                padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+                padding:
+                    const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
                 decoration: BoxDecoration(
-                  color: hasFix ? const Color(0xFF2E7D32).withValues(alpha: 0.2) : Colors.grey.withValues(alpha: 0.2),
+                  color: hasFix
+                      ? const Color(0xFF2E7D32).withValues(alpha: 0.2)
+                      : Colors.grey.withValues(alpha: 0.2),
                   borderRadius: BorderRadius.circular(20),
                 ),
                 child: Text(hasFix ? '✓ Fix' : '✗ No Fix',
-                  style: TextStyle(fontSize: 11, fontWeight: FontWeight.w600,
-                    color: hasFix ? const Color(0xFF4CAF50) : Colors.grey)),
+                    style: TextStyle(
+                        fontSize: 11,
+                        fontWeight: FontWeight.w600,
+                        color: hasFix ? const Color(0xFF4CAF50) : Colors.grey)),
               ),
             ],
           ),
           const SizedBox(height: 14),
-          _buildGPSRow('Latitude', currentLat != 0.0 ? currentLat.toStringAsFixed(6) : '—'),
-          _buildGPSRow('Longitude', currentLng != 0.0 ? currentLng.toStringAsFixed(6) : '—'),
-          _buildGPSRow('Speed', currentSpeed != 0.0 ? '${currentSpeed.toStringAsFixed(1)} km/h' : '0.0 km/h'),
+          _buildGPSRow('Latitude',
+              currentLat != 0.0 ? currentLat.toStringAsFixed(6) : '—'),
+          _buildGPSRow('Longitude',
+              currentLng != 0.0 ? currentLng.toStringAsFixed(6) : '—'),
+          _buildGPSRow(
+              'Speed',
+              currentSpeed != 0.0
+                  ? '${currentSpeed.toStringAsFixed(1)} km/h'
+                  : '0.0 km/h'),
           _buildGPSRow('Distance', '${totalDistanceKm.toStringAsFixed(2)} km'),
         ],
       ),
@@ -2121,8 +2728,13 @@ class _Member3PageState extends State<Member3Page>
       child: Row(
         mainAxisAlignment: MainAxisAlignment.spaceBetween,
         children: [
-          Text(label, style: const TextStyle(fontSize: 13, color: _textSecondary)),
-          Text(value, style: const TextStyle(fontSize: 14, fontWeight: FontWeight.w600, color: _textPrimary)),
+          Text(label,
+              style: const TextStyle(fontSize: 13, color: _textSecondary)),
+          Text(value,
+              style: const TextStyle(
+                  fontSize: 14,
+                  fontWeight: FontWeight.w600,
+                  color: _textPrimary)),
         ],
       ),
     );
@@ -2332,9 +2944,6 @@ class GraphPainter extends CustomPainter {
         oldDelegate.riskyThreshold != riskyThreshold;
   }
 }
-<<<<<<< Updated upstream
-=======
-
 
 // Lean Angle Visual Gauge Painter
 class _LeanAnglePainter extends CustomPainter {
@@ -2349,21 +2958,29 @@ class _LeanAnglePainter extends CustomPainter {
     final radius = size.height * 0.7;
 
     // Draw zone arcs (background)
-    _drawZoneArc(canvas, center, radius, -45, -30, Colors.red.withValues(alpha: 0.2));
-    _drawZoneArc(canvas, center, radius, -30, -15, Colors.deepOrange.withValues(alpha: 0.2));
-    _drawZoneArc(canvas, center, radius, -15, 0, Colors.green.withValues(alpha: 0.2));
-    _drawZoneArc(canvas, center, radius, 0, 15, Colors.green.withValues(alpha: 0.2));
-    _drawZoneArc(canvas, center, radius, 15, 30, Colors.deepOrange.withValues(alpha: 0.2));
-    _drawZoneArc(canvas, center, radius, 30, 45, Colors.red.withValues(alpha: 0.2));
+    _drawZoneArc(
+        canvas, center, radius, -45, -30, Colors.red.withValues(alpha: 0.2));
+    _drawZoneArc(canvas, center, radius, -30, -15,
+        Colors.deepOrange.withValues(alpha: 0.2));
+    _drawZoneArc(
+        canvas, center, radius, -15, 0, Colors.green.withValues(alpha: 0.2));
+    _drawZoneArc(
+        canvas, center, radius, 0, 15, Colors.green.withValues(alpha: 0.2));
+    _drawZoneArc(canvas, center, radius, 15, 30,
+        Colors.deepOrange.withValues(alpha: 0.2));
+    _drawZoneArc(
+        canvas, center, radius, 30, 45, Colors.red.withValues(alpha: 0.2));
 
     // Draw tick marks
     for (int deg = -45; deg <= 45; deg += 15) {
       final rad = (deg - 90) * pi / 180;
       final innerR = radius * 0.85;
       final outerR = radius;
-      final start = Offset(center.dx + innerR * cos(rad), center.dy + innerR * sin(rad));
-      final end = Offset(center.dx + outerR * cos(rad), center.dy + outerR * sin(rad));
-      
+      final start =
+          Offset(center.dx + innerR * cos(rad), center.dy + innerR * sin(rad));
+      final end =
+          Offset(center.dx + outerR * cos(rad), center.dy + outerR * sin(rad));
+
       final tickPaint = Paint()
         ..color = deg == 0 ? Colors.white : Colors.grey
         ..strokeWidth = deg == 0 ? 3 : 1.5;
@@ -2371,7 +2988,8 @@ class _LeanAnglePainter extends CustomPainter {
 
       // Tick labels
       final labelR = radius * 0.75;
-      final labelOffset = Offset(center.dx + labelR * cos(rad), center.dy + labelR * sin(rad));
+      final labelOffset =
+          Offset(center.dx + labelR * cos(rad), center.dy + labelR * sin(rad));
       final textSpan = TextSpan(
         text: '${deg.abs()}°',
         style: TextStyle(
@@ -2380,10 +2998,14 @@ class _LeanAnglePainter extends CustomPainter {
           fontWeight: deg == 0 ? FontWeight.bold : FontWeight.normal,
         ),
       );
-      final tp = TextPainter(text: textSpan, textAlign: TextAlign.center, textDirection: ui.TextDirection.ltr);
+      final tp = TextPainter(
+          text: textSpan,
+          textAlign: TextAlign.center,
+          textDirection: ui.TextDirection.ltr);
       tp.layout();
       canvas.save();
-      canvas.translate(labelOffset.dx - tp.width / 2, labelOffset.dy - tp.height / 2);
+      canvas.translate(
+          labelOffset.dx - tp.width / 2, labelOffset.dy - tp.height / 2);
       tp.paint(canvas, Offset.zero);
       canvas.restore();
     }
@@ -2441,5 +3063,3 @@ class _LeanAnglePainter extends CustomPainter {
     return oldDelegate.angle != angle || oldDelegate.color != color;
   }
 }
-
->>>>>>> Stashed changes
