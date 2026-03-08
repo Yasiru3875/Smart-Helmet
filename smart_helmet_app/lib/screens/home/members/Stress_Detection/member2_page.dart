@@ -13,7 +13,13 @@ import '../../../../services/bluetooth_manager.dart';
 import 'package:smart_helmet_app/providers/sensor_data_provider.dart';
 
 import 'package:smart_helmet_app/providers/ride_session_provider.dart';
+
 import '../../../../services/auth_service.dart';
+
+import 'package:smart_helmet_app/providers/emotion_provider.dart';
+// If you have auth:
+// import '../../../../services/auth_service.dart';
+
 
 class Member2Page extends StatefulWidget {
   const Member2Page({super.key});
@@ -76,7 +82,7 @@ class _Member2PageState extends State<Member2Page> {
   StreamSubscription? _dataSubscription;
 
   final List<double> modelWindow = [];
-  final int modelWindowSize = 32;
+  final int modelWindowSize = 64;
 
   // ────────────────────────────────────────────────
   // Firestore integration
@@ -91,33 +97,51 @@ class _Member2PageState extends State<Member2Page> {
   @override
   void initState() {
     super.initState();
-    _init();
+    _init(); // model + listeners
+    _startLocationTracking();
+
+    // Auto connect flow
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      _autoConnectSensor();
+
+      // Optional: retry once after 6 seconds if still not connected
+      Future.delayed(const Duration(seconds: 6), () {
+        if (mounted &&
+            !context.read<BluetoothManager>().isConnected(deviceName) &&
+            poorSignalLevel == 200) {
+          _autoConnectSensor(isRetry: true);
+        }
+      });
+    });
+
     _waveformUpdateTimer = Timer.periodic(
       const Duration(milliseconds: waveformUpdateIntervalMs),
       (_) => _flushWaveformBuffer(),
     );
-    _startLocationTracking();
-    _autoConnectSensor(); // ← NEW: Auto-connect on page load
   }
 
-  Future<void> _autoConnectSensor() async {
+  Future<void> _autoConnectSensor({bool isRetry = false}) async {
     final btManager = context.read<BluetoothManager>();
 
-    // Check if already connected
+    // Already connected → just subscribe
     if (btManager.isConnected(deviceName)) {
-      setState(() {
-        status = "Connected (already)";
-      });
+      if (mounted) {
+        setState(() => status = "Connected (already)");
+      }
       _subscribeToData();
       return;
     }
 
+    if (!mounted) return;
+
     setState(() {
-      status = "Auto-connecting $deviceName...";
+      status = "${isRetry ? 'Re-' : 'A'}uto-connecting $deviceName...";
+      errorMessage = null;
     });
 
     try {
       final result = await btManager.connectToDevice(deviceName);
+
       if (!mounted) return;
 
       setState(() {
@@ -126,17 +150,22 @@ class _Member2PageState extends State<Member2Page> {
 
       if (btManager.isConnected(deviceName)) {
         _subscribeToData();
+        setState(() {
+          status = "Connected • $deviceName";
+          errorMessage = null;
+        });
       } else {
         setState(() {
           errorMessage =
-              "Auto-connect failed. Tap 'Connect' or check Bluetooth settings.";
+              "Connection failed → $result\nMake sure device is on and paired.";
         });
       }
     } catch (e) {
       if (!mounted) return;
       setState(() {
-        errorMessage = "Connection error: $e";
-        status = "Connection failed";
+        status = "Connection error";
+        errorMessage =
+            "Error: $e\nCheck Bluetooth • Is $deviceName powered on?";
       });
     }
   }
@@ -207,12 +236,10 @@ class _Member2PageState extends State<Member2Page> {
   Future<void> _loadModel() async {
     try {
       interpreter = await Interpreter.fromAsset(
-        "assets/eeg_stress_model_final.tflite",
+        'assets/models/eeg_stress_model_float32.tflite',
       );
       debugPrint("EEG Stress Model Loaded Successfully");
-      if (mounted) {
-        setState(() => errorMessage = null);
-      }
+      if (mounted) setState(() => errorMessage = null);
     } catch (e) {
       debugPrint("Model load failed: $e");
       if (mounted) {
@@ -273,12 +300,19 @@ class _Member2PageState extends State<Member2Page> {
     if (interpreter == null || !mounted || poorSignalLevel > 50) return;
 
     try {
-      var input = [inputWindow];
-      var shapedInput = [input];
+      // 1. Convert flat List<double> (length 64) → List<List<double>> (64 × 1)
+      List<List<double>> sequence = inputWindow.map((e) => [e]).toList();
+
+      // 2. Add batch dimension → List<List<List<double>>> with shape [1, 64, 1]
+      List<List<List<double>>> shapedInput = [sequence];
+
+      // Prepare output buffer [1, 2]
       var output = List.generate(1, (_) => List.filled(2, 0.0));
 
+      // Run inference
       interpreter!.run(shapedInput, output);
 
+      // Softmax over logits
       final relaxLogit = output[0][0];
       final stressLogit = output[0][1];
       final expRelax = math.exp(relaxLogit);
@@ -483,6 +517,24 @@ class _Member2PageState extends State<Member2Page> {
       });
     }
 
+    // ────────────────────────────────────────────────
+    //  ADD THIS BLOCK → Update shared EmotionProvider
+    // ────────────────────────────────────────────────
+    final emotionProvider = Provider.of<EmotionProvider>(
+      context,
+      listen: false,
+    );
+
+    // Use the same values you're already showing in Member2Page
+    // (or map them differently if you want more granular names in Member1)
+    emotionProvider.updateEmotion(
+      candidateMood, // "Stressed", "Relaxed", "Neutral"
+      candidateEmoji, // "😰", "🧘‍♂️", "😐"
+    );
+
+    // Optional: debug print to confirm it's working
+    print("Emotion → Member1Page: $candidateMood ${candidateEmoji}");
+
     // Throttled save to Firestore
     // Save every 10 seconds OR when mood changes to Stressed/Relaxed
     final now = DateTime.now();
@@ -652,6 +704,22 @@ class _Member2PageState extends State<Member2Page> {
     if (stressScore > 0.7) return Colors.red;
     if (stressScore > 0.4) return Colors.orange;
     return Colors.green;
+  }
+
+  IconData _getConnectionIcon() {
+    final bm = context.watch<BluetoothManager>();
+    if (bm.isConnected(deviceName)) return Icons.bluetooth_connected;
+    if (status.contains("Connecting")) return Icons.bluetooth_searching;
+    return Icons.bluetooth_disabled;
+  }
+
+  Color _getConnectionColor() {
+    final bm = context.watch<BluetoothManager>();
+    if (bm.isConnected(deviceName)) return Colors.green;
+    if (status.contains("Connecting")) return Colors.blue;
+    if (status.contains("failed") || status.contains("Error"))
+      return Colors.red;
+    return Colors.orange;
   }
 
   String _getMoodMessage() {
@@ -892,73 +960,39 @@ class _Member2PageState extends State<Member2Page> {
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.stretch,
               children: [
+                // Replace this part in build() → inside the first Card
                 Card(
                   elevation: 6,
                   shape: RoundedRectangleBorder(
-                    borderRadius: BorderRadius.circular(16),
-                  ),
+                      borderRadius: BorderRadius.circular(16)),
                   child: Padding(
                     padding: const EdgeInsets.all(20),
                     child: Column(
                       children: [
-                        Row(
-                          mainAxisAlignment: MainAxisAlignment.center,
-                          children: [
-                            Expanded(
-                              child: ElevatedButton.icon(
-                                onPressed: isConnected ? null : connectToEEG,
-                                icon: const Icon(Icons.sensors),
-                                label: const Text("Connect EEG"),
-                                style: ElevatedButton.styleFrom(
-                                  backgroundColor: Colors.deepPurple,
-                                  foregroundColor: Colors.white,
-                                  padding:
-                                      const EdgeInsets.symmetric(vertical: 14),
-                                ),
-                              ),
-                            ),
-                            const SizedBox(width: 12),
-                            Expanded(
-                              child: ElevatedButton.icon(
-                                onPressed: isConnected ? disconnectEEG : null,
-                                icon: const Icon(Icons.bluetooth_disabled),
-                                label: const Text("Disconnect"),
-                                style: ElevatedButton.styleFrom(
-                                  backgroundColor: Colors.redAccent,
-                                  foregroundColor: Colors.white,
-                                  padding:
-                                      const EdgeInsets.symmetric(vertical: 14),
-                                ),
-                              ),
-                            ),
-                          ],
-                        ),
-                        const SizedBox(height: 16),
+                        // Status row
                         Row(
                           mainAxisAlignment: MainAxisAlignment.center,
                           children: [
                             Icon(
-                              isConnected
-                                  ? Icons.circle
-                                  : Icons.circle_outlined,
-                              color: isConnected ? Colors.green : Colors.orange,
-                              size: 18,
+                              _getConnectionIcon(),
+                              color: _getConnectionColor(),
+                              size: 28,
                             ),
-                            const SizedBox(width: 10),
+                            const SizedBox(width: 12),
                             Text(
                               status,
                               style: TextStyle(
                                 fontSize: 18,
                                 fontWeight: FontWeight.bold,
-                                color:
-                                    isConnected ? Colors.green : Colors.orange,
+                                color: _getConnectionColor(),
                               ),
                             ),
                           ],
                         ),
+
                         if (errorMessage != null &&
                             errorMessage!.isNotEmpty) ...[
-                          const SizedBox(height: 12),
+                          const SizedBox(height: 16),
                           Container(
                             padding: const EdgeInsets.all(14),
                             decoration: BoxDecoration(
@@ -968,18 +1002,15 @@ class _Member2PageState extends State<Member2Page> {
                             ),
                             child: Row(
                               children: [
-                                const Icon(
-                                  Icons.warning_amber,
-                                  color: Colors.orange,
-                                ),
-                                const SizedBox(width: 10),
+                                const Icon(Icons.warning_amber,
+                                    color: Colors.orange),
+                                const SizedBox(width: 12),
                                 Expanded(
                                   child: Text(
                                     errorMessage!,
                                     style: TextStyle(
-                                      color: Colors.orange.shade800,
-                                      fontSize: 14,
-                                    ),
+                                        color: Colors.orange.shade800,
+                                        fontSize: 14),
                                     textAlign: TextAlign.center,
                                   ),
                                 ),
@@ -987,6 +1018,18 @@ class _Member2PageState extends State<Member2Page> {
                             ),
                           ),
                         ],
+
+                        const SizedBox(height: 16),
+
+                        // Optional: small retry button (useful during development)
+                        if (!context
+                            .watch<BluetoothManager>()
+                            .isConnected(deviceName))
+                          OutlinedButton.icon(
+                            icon: const Icon(Icons.refresh, size: 18),
+                            label: const Text("Retry connection"),
+                            onPressed: _autoConnectSensor,
+                          ),
                       ],
                     ),
                   ),

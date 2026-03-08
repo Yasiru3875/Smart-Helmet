@@ -11,6 +11,7 @@ import 'services/bluetooth_manager.dart';
 import 'providers/journey_provider.dart';
 import 'providers/sensor_data_provider.dart'; // ← NEW: Live sensor values
 import 'providers/ride_session_provider.dart';
+import 'providers/emotion_provider.dart';
 
 // ────────────────────────────────────────────────
 // Screens
@@ -50,6 +51,8 @@ class SmartHelmetApp extends StatelessWidget {
         ChangeNotifierProvider(create: (_) => SensorDataProvider()),
 
         ChangeNotifierProvider(create: (_) => RideSessionProvider()),
+
+        ChangeNotifierProvider(create: (_) => EmotionProvider()),
       ],
       child: MaterialApp(
         debugShowCheckedModeBanner: false,

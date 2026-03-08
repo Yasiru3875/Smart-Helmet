@@ -81,11 +81,13 @@ class _Member1PageState extends State<Member1Page> with SingleTickerProviderStat
     _loadModel();
     _startLocationTracking();
 
+
     // Important: delay connection until first frame is rendered
     WidgetsBinding.instance.addPostFrameCallback((_) {
       _autoConnect();
 
       // Optional safety retry if still not connected after ~8 seconds
+
       Future.delayed(const Duration(seconds: 8), () {
         if (mounted &&
             !context.read<BluetoothManager>().isConnected(deviceName) &&
@@ -95,6 +97,7 @@ class _Member1PageState extends State<Member1Page> with SingleTickerProviderStat
       });
       
       _initTodaySummaryListener();
+
     });
   }
 
@@ -245,7 +248,9 @@ class _Member1PageState extends State<Member1Page> with SingleTickerProviderStat
       },
       onError: (e) {
         if (mounted) {
+
           setState(() => errorMessage = "Stream error ($deviceToUse): $e");
+
         }
       },
       onDone: () {
@@ -394,10 +399,17 @@ class _Member1PageState extends State<Member1Page> with SingleTickerProviderStat
       }
 
       _predictWithTFLite(hr, temp);
-
       // Real-time save: ONLY when a ride is active
       final rideProvider = Provider.of<RideSessionProvider>(context, listen: false);
       if (rideProvider.isRideActive) {
+
+      // FIXED: These variables must be at CLASS level (moved from inside method)
+      // Add these two lines at the TOP of _Member1PageState class:
+      // DateTime? _lastSavedTime;
+      // final Duration _saveInterval = const Duration(seconds: 10);
+
+      if (hr > 0 && temp > 0) {
+
         final now = DateTime.now();
         if (_lastSavedTime == null ||
             now.difference(_lastSavedTime!) >= _saveInterval) {
@@ -446,6 +458,7 @@ class _Member1PageState extends State<Member1Page> with SingleTickerProviderStat
         "createdAt": FieldValue.serverTimestamp(),
         "location": const GeoPoint(7.2000, 79.8730),
       };
+
 
       // Add ride metadata ONLY if a ride is active
       if (rideProvider.isRideActive && rideProvider.currentRideId != null) {
@@ -549,7 +562,6 @@ class _Member1PageState extends State<Member1Page> with SingleTickerProviderStat
       var input = [
         [s_hr, s_temp, s_age, s_gender, s_bmi, s_hrv]
       ];
-
       var output = List.filled(1, [0.0]);
 
       _interpreter!.run(input, output);
@@ -697,6 +709,16 @@ class _Member1PageState extends State<Member1Page> with SingleTickerProviderStat
 
   @override
   Widget build(BuildContext context) {
+
+    final btManager = context.watch<BluetoothManager>();
+    final isConnected = btManager.isConnected(deviceName);
+
+    // ─── Read real emotional state from provider ───
+    final emotionProvider = context.watch<EmotionProvider>();
+    final currentEmotion = emotionProvider.state.emotion;
+    final currentEmoji = emotionProvider.state.emoji;
+
+
     return Scaffold(
       backgroundColor: const Color(0xFFF2F2F7),
       appBar: AppBar(
@@ -743,6 +765,7 @@ class _Member1PageState extends State<Member1Page> with SingleTickerProviderStat
               children: [
                 _buildConnectionStatus(isConnected),
                 const SizedBox(height: 20),
+
                 Row(
                   children: [
                     Expanded(
@@ -778,6 +801,7 @@ class _Member1PageState extends State<Member1Page> with SingleTickerProviderStat
                 ),
                   ],
                 ),
+
                 const SizedBox(height: 24),
                 _buildOverallHealthStatusCard(),
                 const SizedBox(height: 24),
@@ -787,6 +811,17 @@ class _Member1PageState extends State<Member1Page> with SingleTickerProviderStat
                 const SizedBox(height: 24),
                 _buildEmotionalState(isConnected),
                 const SizedBox(height: 24),
+
+
+                const SizedBox(height: 20),
+                _buildRiskAssessment(),
+                const SizedBox(height: 20),
+
+                // Updated: now uses real emotion from provider
+                _buildEmotionalState(isConnected, currentEmotion, currentEmoji),
+
+                const SizedBox(height: 20),
+
                 _buildVitalsChart(),
                 const SizedBox(height: 40),
               ],
@@ -819,6 +854,7 @@ class _Member1PageState extends State<Member1Page> with SingleTickerProviderStat
                       style: TextStyle(color: Colors.white, fontSize: 13),
                     ),
                   ],
+
                 ),
               ),
             ),
@@ -1033,19 +1069,51 @@ class _Member1PageState extends State<Member1Page> with SingleTickerProviderStat
   int _calculateHealthScore() {
     int score = 100;
     
-    // Heart Rate impact
-    if (heartRate > 100 || heartRate < 60) {
-      score -= 15;
-    } else if (heartRate > 120 || heartRate < 50) {
-      score -= 30;
-    }
-
     // Temperature impact
     if (bodyTemperature > 37.5 || bodyTemperature < 36.0) {
       score -= 15;
     } else if (bodyTemperature > 38.5 || bodyTemperature < 35.0) {
       score -= 30;
     }
+  Widget _buildEmotionalState(bool isConnected, String emotion, String emoji) {
+    return Card(
+      elevation: 2,
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+      child: Padding(
+        padding: const EdgeInsets.all(20),
+        child: Column(
+          children: [
+            const Text(
+              "Emotional State",
+              style: TextStyle(fontSize: 16, fontWeight: FontWeight.w600),
+            ),
+            const SizedBox(height: 16),
+            Text(
+              emoji,
+              style: const TextStyle(fontSize: 64),
+            ),
+            const SizedBox(height: 12),
+            Text(
+              emotion,
+              style: const TextStyle(
+                fontSize: 20,
+                fontWeight: FontWeight.w600,
+                color: Colors.indigo,
+              ),
+            ),
+            const SizedBox(height: 8),
+            Text(
+              isConnected
+                  ? "Analyzing real-time signals..."
+                  : "Connect EEG device to detect emotional state",
+              style: const TextStyle(fontSize: 12, color: Colors.black38),
+              textAlign: TextAlign.center,
+            ),
+          ],
+        ),
+      ),
+    );
+  }
 
     // Risk level impact
     if (riskLevel.toLowerCase().contains('medium')) score -= 20;
