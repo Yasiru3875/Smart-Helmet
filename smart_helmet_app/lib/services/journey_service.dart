@@ -1,10 +1,34 @@
 import 'dart:async';
+import 'package:firebase_core/firebase_core.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import '../models/journey_model.dart';
 
 class JourneyService {
   final FirebaseFirestore _firestore = FirebaseFirestore.instance;
   final String _collection = 'journeys';
+
+  // Fetch the latest journey
+  Future<JourneyData?> getLatestJourney() async {
+    try {
+      print('[JourneyService] Fetching latest journey from Firestore...');
+      QuerySnapshot snapshot = await _firestore
+          .collection(_collection)
+          .orderBy('startTime', descending: true)
+          .limit(1)
+          .get(const GetOptions(source: Source.server));
+
+      if (snapshot.docs.isNotEmpty) {
+        return JourneyData.fromMap(
+          snapshot.docs.first.data() as Map<String, dynamic>,
+          snapshot.docs.first.id,
+        );
+      }
+      return null;
+    } catch (e) {
+      print('[JourneyService] Error fetching latest journey: $e');
+      return null;
+    }
+  }
 
   // Save journey data
   Future<void> saveJourney(JourneyData journey) async {
