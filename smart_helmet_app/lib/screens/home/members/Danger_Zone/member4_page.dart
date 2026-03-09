@@ -1294,7 +1294,19 @@ class _Member4PageState extends State<Member4Page> {
     } else {
       // New route: per-segment analysis for safe/risky parts
       int highRiskCount = 0;
+      
+      if (!_historyDataLoaded && mounted) {
+        setState(() {
+          safetyTips.add("🔍 Analyzing route segments...");
+        });
+      }
+
       for (int i = 0; i < routeSegments.length - 1; i++) {
+        // Small delay to make the "little by little" effect visible
+        await Future.delayed(const Duration(milliseconds: 100));
+        
+        if (!mounted) return;
+
         Map<String, dynamic> segmentDict = await generateRandomRouteDict(
             [routeSegments[i], routeSegments[i + 1]]);
         segmentDict.addAll(weatherData); // Apply real weather
@@ -1302,20 +1314,31 @@ class _Member4PageState extends State<Member4Page> {
         double? segmentRisk = predictRouteRisk(segmentDict);
         Color segmentColor = getRiskColor(segmentRisk ?? 0.5);
 
-        if (_historyDataLoaded) return;
-
-        polylines.add(
-          Polyline(
-            polylineId: PolylineId('segment_$i'),
-            points: [routeSegments[i], routeSegments[i + 1]],
-            color: segmentColor,
-            width: 10,
-            jointType: JointType.round,
-            zIndex: 10,
-          ),
-        );
+        setState(() {
+          polylines.add(
+            Polyline(
+              polylineId: PolylineId('segment_$i'),
+              points: [routeSegments[i], routeSegments[i + 1]],
+              color: segmentColor,
+              width: 10,
+              jointType: JointType.round,
+              zIndex: 10,
+            ),
+          );
+          
+          if (!_historyDataLoaded && i % 3 == 0) {
+            // Update status periodically
+            int progress = ((i / (routeSegments.length - 1)) * 100).round();
+             safetyTips.removeWhere((t) => t.startsWith("🔍 Analyzing"));
+             safetyTips.add("🔍 Analyzing route: $progress%");
+          }
+        });
 
         if (segmentRisk != null && segmentRisk > 0.7) highRiskCount++;
+      }
+
+      if (!_historyDataLoaded) {
+          safetyTips.removeWhere((t) => t.startsWith("🔍 Analyzing"));
       }
 
       // Overall risk as average
