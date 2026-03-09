@@ -383,71 +383,266 @@ class _WeeklyStressReportState extends State<WeeklyStressReport> {
     pdf.addPage(
       pw.MultiPage(
         pageFormat: pdf_lib.PdfPageFormat.a4,
+        margin: const pw.EdgeInsets.all(32),
         build: (context) => [
-          pw.Header(
-            level: 0,
-            child: pw.Text('Your Weekly Stress & Mood Report',
-                style:
-                    pw.TextStyle(fontSize: 24, fontWeight: pw.FontWeight.bold)),
+          // Professional Header
+          pw.Container(
+            padding: const pw.EdgeInsets.all(12),
+            decoration: const pw.BoxDecoration(
+              color: pdf_lib.PdfColors.indigo900,
+              borderRadius: pw.BorderRadius.all(pw.Radius.circular(8)),
+            ),
+            child: pw.Row(
+              mainAxisAlignment: pw.MainAxisAlignment.spaceBetween,
+              children: [
+                pw.Column(
+                  crossAxisAlignment: pw.CrossAxisAlignment.start,
+                  children: [
+                    pw.Text('SMART HELMET',
+                        style: pw.TextStyle(
+                            color: pdf_lib.PdfColors.white,
+                            fontSize: 22,
+                            fontWeight: pw.FontWeight.bold)),
+                    pw.Text('WEEKLY HEALTH DIAGNOSTICS',
+                        style: pw.TextStyle(
+                            color: pdf_lib.PdfColors.indigo100, fontSize: 12)),
+                  ],
+                ),
+                pw.Column(
+                  crossAxisAlignment: pw.CrossAxisAlignment.end,
+                  children: [
+                    pw.Text('REPORT ID: ${DateTime.now().millisecondsSinceEpoch}',
+                        style: pw.TextStyle(
+                            color: pdf_lib.PdfColors.indigo100, fontSize: 10)),
+                    pw.Text('ISSUED: ${DateFormat('yyyy-MM-dd').format(now)}',
+                        style: pw.TextStyle(
+                            color: pdf_lib.PdfColors.indigo100, fontSize: 10)),
+                  ],
+                ),
+              ],
+            ),
           ),
-          pw.SizedBox(height: 8),
-          pw.Text(
-              'Personalized Report for: ${_userName ?? 'User'} (${_age ?? ''} years, ${_gender ?? ''})',
-              style:
-                  pw.TextStyle(fontSize: 16, color: pdf_lib.PdfColors.grey800)),
-          pw.Text('Date Range: $dateRange',
-              style:
-                  pw.TextStyle(fontSize: 14, color: pdf_lib.PdfColors.grey600)),
-          pw.SizedBox(height: 16),
-          pw.Text('Profile Summary:',
-              style:
-                  pw.TextStyle(fontSize: 18, fontWeight: pw.FontWeight.bold)),
-          pw.Bullet(text: 'Height: ${_heightCm?.toStringAsFixed(0) ?? '—'} cm'),
-          pw.Bullet(text: 'Weight: ${_weightKg?.toStringAsFixed(0) ?? '—'} kg'),
-          pw.Bullet(
-              text:
-                  'BMI: ${_bmi?.toStringAsFixed(1) ?? '—'} (${_bmiCategory})'),
+          pw.SizedBox(height: 24),
+
+          // User Info & Date Range Row
+          pw.Row(
+            mainAxisAlignment: pw.MainAxisAlignment.spaceBetween,
+            children: [
+              pw.Column(
+                crossAxisAlignment: pw.CrossAxisAlignment.start,
+                children: [
+                  pw.Text('PATIENT INFORMATION',
+                      style: pw.TextStyle(
+                          color: pdf_lib.PdfColors.grey700,
+                          fontSize: 10,
+                          fontWeight: pw.FontWeight.bold)),
+                  pw.SizedBox(height: 4),
+                  pw.Text(_userName ?? 'Guest Patient',
+                      style: pw.TextStyle(
+                          fontSize: 16, fontWeight: pw.FontWeight.bold)),
+                ],
+              ),
+              pw.Column(
+                crossAxisAlignment: pw.CrossAxisAlignment.end,
+                children: [
+                  pw.Text('SAMPLING PERIOD',
+                      style: pw.TextStyle(
+                          color: pdf_lib.PdfColors.grey700,
+                          fontSize: 10,
+                          fontWeight: pw.FontWeight.bold)),
+                  pw.SizedBox(height: 4),
+                  pw.Text(dateRange,
+                      style: pw.TextStyle(fontWeight: pw.FontWeight.bold)),
+                ],
+              ),
+            ],
+          ),
           pw.SizedBox(height: 20),
-          pw.Text('Stress & Mood Summary:',
-              style:
-                  pw.TextStyle(fontSize: 18, fontWeight: pw.FontWeight.bold)),
-          pw.Bullet(
-              text: 'Average Stress Level: ${avgStress.toStringAsFixed(2)}'),
-          pw.Bullet(text: 'High Stress Days: $highStressDays / 7'),
-          pw.Bullet(text: 'Total Readings: ${_weeklyData.length}'),
-          pw.SizedBox(height: 16),
-          pw.Text('Stress Level Distribution:',
-              style:
-                  pw.TextStyle(fontSize: 16, fontWeight: pw.FontWeight.bold)),
-          pw.Bullet(text: 'High (>70%): $highStressCount readings'),
-          pw.Bullet(text: 'Moderate (40–70%): $moderateStressCount readings'),
-          pw.Bullet(text: 'Low/Relaxed (≤40%): $lowStressCount readings'),
-          pw.SizedBox(height: 16),
-          pw.Text('Mood Distribution:',
-              style:
-                  pw.TextStyle(fontSize: 16, fontWeight: pw.FontWeight.bold)),
-          pw.Bullet(text: 'Stressed: ${moodDistribution['Stressed']} readings'),
-          pw.Bullet(text: 'Neutral: ${moodDistribution['Neutral']} readings'),
-          pw.Bullet(text: 'Relaxed: ${moodDistribution['Relaxed']} readings'),
+          pw.Divider(color: pdf_lib.PdfColors.grey300),
           pw.SizedBox(height: 20),
-          pw.Text('Key Locations & Stress Zones:',
-              style:
-                  pw.TextStyle(fontSize: 16, fontWeight: pw.FontWeight.bold)),
-          pw.SizedBox(height: 8),
-          ..._weeklyData.map((r) {
-            final geo = r['currentLocation'] as GeoPoint?;
-            final stress = (r['stressScore'] as num?)?.toDouble() ?? 0.0;
-            final mood = r['currentMood'] as String? ?? '—';
-            final time = (r['timestamp'] as String?)?.substring(0, 19) ?? '—';
-            return pw.Text(
-              '• $time | ${stress.toStringAsFixed(2)} Stress | $mood | Lat: ${geo?.latitude.toStringAsFixed(4)}, Lng: ${geo?.longitude.toStringAsFixed(4)}',
-            );
-          }),
-          pw.SizedBox(height: 20),
-          pw.Text('Personalized Health Recommendations:',
-              style:
-                  pw.TextStyle(fontSize: 18, fontWeight: pw.FontWeight.bold)),
-          pw.Paragraph(text: _getHealthTips()),
+
+          // Profile & Summary Table
+          pw.Row(
+            crossAxisAlignment: pw.CrossAxisAlignment.start,
+            children: [
+              pw.Expanded(
+                flex: 2,
+                child: pw.Column(
+                  crossAxisAlignment: pw.CrossAxisAlignment.start,
+                  children: [
+                    pw.Text('PHYSICAL PROFILE',
+                        style: pw.TextStyle(
+                            fontSize: 14, fontWeight: pw.FontWeight.bold)),
+                    pw.SizedBox(height: 10),
+                    pw.Table(
+                      border: pw.TableBorder.all(color: pdf_lib.PdfColors.grey300, width: 0.5),
+                      children: [
+                        _pdfTableRow('Age', '${_age ?? '—'} yrs'),
+                        _pdfTableRow('Gender', _gender ?? '—'),
+                        _pdfTableRow('Height', '${_heightCm?.toStringAsFixed(0) ?? '—'} cm'),
+                        _pdfTableRow('Weight', '${_weightKg?.toStringAsFixed(0) ?? '—'} kg'),
+                        _pdfTableRow('BMI Index', '${_bmi?.toStringAsFixed(1) ?? '—'} (${_bmiCategory})'),
+                      ],
+                    ),
+                  ],
+                ),
+              ),
+              pw.SizedBox(width: 32),
+              pw.Expanded(
+                flex: 3,
+                child: pw.Column(
+                  crossAxisAlignment: pw.CrossAxisAlignment.start,
+                  children: [
+                    pw.Text('EXECUTIVE SUMMARY',
+                        style: pw.TextStyle(
+                            fontSize: 14, fontWeight: pw.FontWeight.bold)),
+                    pw.SizedBox(height: 10),
+                    pw.Row(
+                      children: [
+                        _pdfStatBox('AVG STRESS', '${(avgStress * 100).toStringAsFixed(0)}%', pdf_lib.PdfColors.purple800),
+                        pw.SizedBox(width: 12),
+                        _pdfStatBox('HIGH DAYS', '$highStressDays / 7', pdf_lib.PdfColors.red800),
+                        pw.SizedBox(width: 12),
+                        _pdfStatBox('READINGS', '${_weeklyData.length}', pdf_lib.PdfColors.blue800),
+                      ],
+                    ),
+                  ],
+                ),
+              ),
+            ],
+          ),
+          pw.SizedBox(height: 32),
+
+          // Stress & Mood Breakdown Tables
+          pw.Row(
+            crossAxisAlignment: pw.CrossAxisAlignment.start,
+            children: [
+              pw.Expanded(
+                child: pw.Column(
+                  crossAxisAlignment: pw.CrossAxisAlignment.start,
+                  children: [
+                    pw.Text('STRESS DISTRIBUTION',
+                        style: pw.TextStyle(
+                            fontSize: 12, fontWeight: pw.FontWeight.bold)),
+                    pw.SizedBox(height: 8),
+                    pw.Table(
+                      border: pw.TableBorder.all(color: pdf_lib.PdfColors.grey200),
+                      children: [
+                        _pdfTableHeader(['Level', 'Count']),
+                        _pdfTableRowWithColor('High (>70%)', '$highStressCount', pdf_lib.PdfColors.red50),
+                        _pdfTableRowWithColor('Moderate', '$moderateStressCount', pdf_lib.PdfColors.orange50),
+                        _pdfTableRowWithColor('Low / Relaxed', '$lowStressCount', pdf_lib.PdfColors.green50),
+                      ],
+                    ),
+                  ],
+                ),
+              ),
+              pw.SizedBox(width: 24),
+              pw.Expanded(
+                child: pw.Column(
+                  crossAxisAlignment: pw.CrossAxisAlignment.start,
+                  children: [
+                    pw.Text('MOOD LOGS',
+                        style: pw.TextStyle(
+                            fontSize: 12, fontWeight: pw.FontWeight.bold)),
+                    pw.SizedBox(height: 8),
+                    pw.Table(
+                      border: pw.TableBorder.all(color: pdf_lib.PdfColors.grey200),
+                      children: [
+                        _pdfTableHeader(['Mood State', 'Frequency']),
+                        _pdfTableRow('Stressed', '${moodDistribution['Stressed']}'),
+                        _pdfTableRow('Neutral', '${moodDistribution['Neutral']}'),
+                        _pdfTableRow('Relaxed', '${moodDistribution['Relaxed']}'),
+                      ],
+                    ),
+                  ],
+                ),
+              ),
+            ],
+          ),
+          pw.SizedBox(height: 32),
+
+          // Health Recommendations
+          pw.Container(
+            padding: const pw.EdgeInsets.all(16),
+            decoration: pw.BoxDecoration(
+              color: avgStress > 0.6 ? pdf_lib.PdfColors.red50 : pdf_lib.PdfColors.green50,
+              borderRadius: const pw.BorderRadius.all(pw.Radius.circular(10)),
+              border: pw.Border.all(
+                  color: avgStress > 0.6 ? pdf_lib.PdfColors.red200 : pdf_lib.PdfColors.green200),
+            ),
+            child: pw.Column(
+              crossAxisAlignment: pw.CrossAxisAlignment.start,
+              children: [
+                pw.Row(
+                  children: [
+                    pw.Text('HEALTH RECOMMENDATIONS',
+                        style: pw.TextStyle(
+                            fontSize: 14,
+                            fontWeight: pw.FontWeight.bold,
+                            color: avgStress > 0.6 ? pdf_lib.PdfColors.red900 : pdf_lib.PdfColors.green900)),
+                  ],
+                ),
+                pw.SizedBox(height: 8),
+                pw.Text(
+                  _getHealthTips(),
+                  style: pw.TextStyle(
+                      fontSize: 11,
+                      lineSpacing: 2,
+                      color: pdf_lib.PdfColors.grey800),
+                ),
+              ],
+            ),
+          ),
+          pw.SizedBox(height: 32),
+
+          // Detail Logs (Table)
+          pw.Text('DETAILED SENSOR LOGS',
+              style: pw.TextStyle(fontSize: 14, fontWeight: pw.FontWeight.bold)),
+          pw.SizedBox(height: 10),
+          pw.Table(
+            border: pw.TableBorder.all(color: pdf_lib.PdfColors.grey300, width: 0.5),
+            columnWidths: {
+              0: const pw.FlexColumnWidth(2),
+              1: const pw.FlexColumnWidth(1),
+              2: const pw.FlexColumnWidth(1),
+              3: const pw.FlexColumnWidth(2),
+            },
+            children: [
+              _pdfTableHeader(['Timestamp', 'Stress %', 'Mood', 'Location (Lat, Lng)']),
+              ..._weeklyData.take(15).map((r) {
+                final geo = r['currentLocation'] as GeoPoint?;
+                final stress = (r['stressScore'] as num?)?.toDouble() ?? 0.0;
+                final mood = r['currentMood'] as String? ?? '—';
+                final time = (r['timestamp'] as String?)?.substring(0, 16) ?? '—';
+                return _pdfTableRowList([
+                  time,
+                  '${(stress * 100).toStringAsFixed(0)}%',
+                  mood,
+                  '${geo?.latitude.toStringAsFixed(4)}, ${geo?.longitude.toStringAsFixed(4)}'
+                ]);
+              }),
+            ],
+          ),
+          if (_weeklyData.length > 15)
+            pw.Padding(
+              padding: const pw.EdgeInsets.only(top: 8),
+              child: pw.Text('* Showing first 15 records. Complete data available in app diagnostics.',
+                  style: pw.TextStyle(fontSize: 9, color: pdf_lib.PdfColors.grey600, fontStyle: pw.FontStyle.italic)),
+            ),
+
+          // Footer
+          pw.SizedBox(height: 40),
+          pw.Divider(color: pdf_lib.PdfColors.grey300),
+          pw.SizedBox(height: 10),
+          pw.Row(
+              mainAxisAlignment: pw.MainAxisAlignment.spaceBetween,
+              children: [
+                pw.Text('© 2026 Smart Helmet Medical Systems',
+                    style: pw.TextStyle(fontSize: 8, color: pdf_lib.PdfColors.grey500)),
+                pw.Text('Confidential Diagnostics Report',
+                    style: pw.TextStyle(fontSize: 8, color: pdf_lib.PdfColors.grey500)),
+              ]),
         ],
       ),
     );
@@ -1224,6 +1419,88 @@ class _WeeklyStressReportState extends State<WeeklyStressReport> {
         const SizedBox(height: 8),
         Text(label, style: TextStyle(color: Colors.grey.shade700, fontSize: 13, fontWeight: FontWeight.w500)),
       ],
+    );
+  }
+
+  // --- PDF Helper Methods ---
+
+  pw.TableRow _pdfTableRow(String label, String value) {
+    return pw.TableRow(
+      children: [
+        pw.Padding(
+          padding: const pw.EdgeInsets.all(6),
+          child: pw.Text(label, style: pw.TextStyle(fontWeight: pw.FontWeight.bold, fontSize: 10)),
+        ),
+        pw.Padding(
+          padding: const pw.EdgeInsets.all(6),
+          child: pw.Text(value, style: const pw.TextStyle(fontSize: 10)),
+        ),
+      ],
+    );
+  }
+
+  pw.TableRow _pdfTableRowWithColor(String label, String value, pdf_lib.PdfColor color) {
+    return pw.TableRow(
+      decoration: pw.BoxDecoration(color: color),
+      children: [
+        pw.Padding(
+          padding: const pw.EdgeInsets.all(6),
+          child: pw.Text(label, style: const pw.TextStyle(fontSize: 10)),
+        ),
+        pw.Padding(
+          padding: const pw.EdgeInsets.all(6),
+          child: pw.Text(value, style: pw.TextStyle(fontWeight: pw.FontWeight.bold, fontSize: 10)),
+        ),
+      ],
+    );
+  }
+
+  pw.TableRow _pdfTableHeader(List<String> headers) {
+    return pw.TableRow(
+      decoration: const pw.BoxDecoration(color: pdf_lib.PdfColors.grey200),
+      children: headers
+          .map((h) => pw.Padding(
+                padding: const pw.EdgeInsets.all(6),
+                child: pw.Text(h,
+                    style: pw.TextStyle(fontWeight: pw.FontWeight.bold, fontSize: 10)),
+              ))
+          .toList(),
+    );
+  }
+
+  pw.TableRow _pdfTableRowList(List<String> cells) {
+    return pw.TableRow(
+      children: cells
+          .map((c) => pw.Padding(
+                padding: const pw.EdgeInsets.all(6),
+                child: pw.Text(c, style: const pw.TextStyle(fontSize: 9)),
+              ))
+          .toList(),
+    );
+  }
+
+  pw.Widget _pdfStatBox(String label, String value, pdf_lib.PdfColor color) {
+    return pw.Expanded(
+      child: pw.Container(
+        padding: const pw.EdgeInsets.all(10),
+        decoration: pw.BoxDecoration(
+          color: color,
+          borderRadius: const pw.BorderRadius.all(pw.Radius.circular(6)),
+        ),
+        child: pw.Column(
+          children: [
+            pw.Text(value,
+                style: pw.TextStyle(
+                    color: pdf_lib.PdfColors.white,
+                    fontWeight: pw.FontWeight.bold,
+                    fontSize: 16)),
+            pw.SizedBox(height: 2),
+            pw.Text(label,
+                style: const pw.TextStyle(
+                    color: pdf_lib.PdfColors.white, fontSize: 8)),
+          ],
+        ),
+      ),
     );
   }
 }

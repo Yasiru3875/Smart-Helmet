@@ -1,4 +1,6 @@
 import 'dart:async';
+import 'dart:convert'; // ← add this
+import 'dart:typed_data';
 import 'package:flutter/foundation.dart';
 import 'package:flutter_bluetooth_serial/flutter_bluetooth_serial.dart';
 import 'package:permission_handler/permission_handler.dart';
@@ -110,6 +112,38 @@ class BluetoothManager extends ChangeNotifier {
       _connectionStatus[deviceName] = false;
       notifyListeners();
       return "Connection failed: ${e.toString()}";
+    }
+  }
+
+  Future<void> sendData(String deviceName, String message) async {
+    final connection = _connections[deviceName];
+
+    if (connection == null || !connection.isConnected) {
+      debugPrint("Cannot send data to $deviceName - not connected");
+      return;
+    }
+
+    try {
+      // Ensure message ends with newline (ESP32 reads until \n)
+      final data = Uint8List.fromList(utf8.encode("$message\n"));
+      connection.output.add(data);
+      await connection.output.allSent;
+      debugPrint("Sent to $deviceName: $message");
+    } catch (e) {
+      debugPrint("Failed to send data to $deviceName: $e");
+      // Optional: mark as disconnected on send failure
+      _handleDisconnection(deviceName);
+    }
+  }
+
+  // Optional: Helper to send JSON directly
+  Future<void> sendJson(
+      String deviceName, Map<String, dynamic> jsonData) async {
+    try {
+      final jsonString = jsonEncode(jsonData);
+      await sendData(deviceName, jsonString);
+    } catch (e) {
+      debugPrint("JSON send error: $e");
     }
   }
 

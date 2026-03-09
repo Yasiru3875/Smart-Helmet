@@ -28,8 +28,7 @@ dependencies:
   fftea: ^1.5.0+1
 
   path_provider: ^2.1.2
-  pdf: ^3.10.8
-  printing: ^5.11.1
+
   share_plus: ^7.2.2
 
   flutter_bluetooth_serial: ^0.4.0
@@ -44,6 +43,11 @@ dependencies:
 
   flutter_staggered_animations: ^1.1.1
   percent_indicator: ^4.2.3
+
+  screenshot: ^3.0.0
+
+  pdf: ^3.11.1 # required for creating PDF documents
+  printing: ^5.13.3 # required for preview/share/print PDF
 
 dev_dependencies:
   flutter_test:
