@@ -31,9 +31,23 @@ class EmotionProvider with ChangeNotifier {
   // Fatigue state
   EmotionState _fatigueState = EmotionState();
 
+  // EEG Data
+  Map<String, double> _eegBands = {
+    'Delta': 0.0,
+    'Theta': 0.0,
+    'Alpha': 0.0,
+    'Beta': 0.0,
+    'Gamma': 0.0,
+  };
+  int _attention = 0;
+  int _meditation = 0;
+
   // Getters
   EmotionState get stressState => _stressState;
   EmotionState get fatigueState => _fatigueState;
+  Map<String, double> get eegBands => _eegBands;
+  int get attention => _attention;
+  int get meditation => _meditation;
 
   // Update stress/mood
   void updateStress({
@@ -46,7 +60,6 @@ class EmotionProvider with ChangeNotifier {
       emoji: emoji,
       color: color,
     );
-
     notifyListeners();
   }
 
@@ -64,21 +77,50 @@ class EmotionProvider with ChangeNotifier {
     notifyListeners();
   }
 
+  // Update EEG data
+  void updateEEG({
+    Map<String, double>? bands,
+    int? attention,
+    int? meditation,
+  }) {
+    if (bands != null) {
+      _eegBands = Map.from(bands);
+    }
+    if (attention != null) {
+      _attention = attention;
+    }
+    if (meditation != null) {
+      _meditation = meditation;
+    }
+    notifyListeners();
+  }
+
   // Reset everything
   void reset() {
     _stressState = EmotionState();
     _fatigueState = EmotionState();
+    _eegBands = {
+      'Delta': 0.0,
+      'Theta': 0.0,
+      'Alpha': 0.0,
+      'Beta': 0.0,
+      'Gamma': 0.0,
+    };
+    _attention = 0;
+    _meditation = 0;
     notifyListeners();
   }
 
-  // Optional: combined reset when signal is lost
+  // Reset on no signal
   void resetOnNoSignal() {
     _stressState =
         EmotionState(emotion: "No Signal", emoji: "📡", color: Colors.grey);
     _fatigueState =
         EmotionState(emotion: "No Signal", emoji: "📡", color: Colors.grey);
+    _eegBands.updateAll((key, value) => 0.0);
+    _attention = 0;
+    _meditation = 0;
     notifyListeners();
   }
-
 }
 

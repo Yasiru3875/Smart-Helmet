@@ -213,6 +213,7 @@ class _Member2PageState extends State<Member2Page> {
     tg.onAttention = (att) {
       if (mounted && poorSignalLevel <= 50) {
         setState(() => attention = att);
+        Provider.of<EmotionProvider>(context, listen: false).updateEEG(attention: att);
         _updateStressAndMood();
       }
     };
@@ -220,6 +221,7 @@ class _Member2PageState extends State<Member2Page> {
     tg.onMeditation = (med) {
       if (mounted && poorSignalLevel <= 50) {
         setState(() => meditation = med);
+        Provider.of<EmotionProvider>(context, listen: false).updateEEG(meditation: med);
         _updateStressAndMood();
       }
     };
@@ -234,6 +236,10 @@ class _Member2PageState extends State<Member2Page> {
           eegBands['Beta'] = powerBands[4] + powerBands[5];
           eegBands['Gamma'] = powerBands[6] + powerBands[7];
         });
+
+        // Push to shared provider for Member 1 to see
+        Provider.of<EmotionProvider>(context, listen: false).updateEEG(bands: eegBands);
+
         _updateStressAndMood();
         _updateEmotionalStates();
       }
