@@ -508,8 +508,8 @@ class _Member1PageState extends State<Member1Page> {
 
     // ─── Read real emotional state from provider ───
     final emotionProvider = context.watch<EmotionProvider>();
-    final currentEmotion = emotionProvider.state.emotion;
-    final currentEmoji = emotionProvider.state.emoji;
+    final currentEmotion = emotionProvider.stressState.emotion;
+    final currentEmoji = emotionProvider.stressState.emoji;
 
     return Scaffold(
       backgroundColor: Colors.grey[50],
