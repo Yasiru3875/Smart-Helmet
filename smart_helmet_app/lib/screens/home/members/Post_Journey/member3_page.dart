@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'dart:async';
 import 'dart:convert';
 import 'dart:math';
+import 'dart:ui' as ui;
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:provider/provider.dart';
 import 'package:intl/intl.dart';
@@ -30,7 +31,7 @@ class _Member3PageState extends State<Member3Page>
   // Journey Service
   final JourneyService _journeyService = JourneyService();
   List<JourneyData> _journeyHistory = [];
-  JourneyData? _selectedJourney;
+
   bool _isLoadingHistory = false;
 
   // Show ride summary view
@@ -45,9 +46,11 @@ class _Member3PageState extends State<Member3Page>
   double accelY = 0.0;
   double accelZ = 0.0;
 
-  // Turn Detection
+  // Turn & Braking Detection
   int sharpTurnCount = 0;
   int riskyTurnCount = 0;
+  int harshBrakeCount = 0;
+  double leanAngle = 0.0; // Lean angle in degrees
   String currentTurnStatus = "Normal";
   Color statusColor = Colors.green;
 
@@ -84,6 +87,15 @@ class _Member3PageState extends State<Member3Page>
   double totalDistanceKm = 0.0;
   double? lastLat;
   double? lastLng;
+
+  // ── DEBUG DATA PUMP ───────────────────────────────────────
+  Timer? _simulationTimer;
+  bool _isSimulating = false;
+  int _simPacketIndex = 0;
+
+  // ── CSV LOGGING FOR RESEARCH ──────────────────────────────
+  // Set to true to print raw data to Android Studio / VSCode console
+  final bool _isCsvLoggingEnabled = false;
 
   @override
   void initState() {
@@ -132,6 +144,7 @@ class _Member3PageState extends State<Member3Page>
   void dispose() {
     _tabController.dispose();
     _dataSubscription?.cancel();
+    _simulationTimer?.cancel();
     // Remove listener from BluetoothManager
     try {
       final btManager = Provider.of<BluetoothManager>(context, listen: false);
@@ -156,28 +169,71 @@ class _Member3PageState extends State<Member3Page>
     final journeyProvider =
         Provider.of<JourneyProvider>(context, listen: false);
 
-    // If the ride was active but is now inactive, it means it just ended
-    // We also check if journeyProvider is active to only process once
+    // Trigger only when ride transitions from active → inactive
     if (!rideProvider.isRideActive && journeyProvider.isJourneyActive) {
-      debugPrint("RideSession ended. Finalizing JourneyData...");
-      final completedJourney = journeyProvider.endJourney();
+      debugPrint(
+          "RideSession ended. Saving JourneyData from memory to Firebase...");
 
-      if (completedJourney != null) {
-        try {
-          // Save to Firebase
-          await _journeyService.saveJourney(completedJourney);
-          debugPrint("Saved complete Journey Data for report.");
+      // Use the SHARED rideId from RideSessionProvider (same ID used by member1 & member2)
 
-          // Show the summary screen immediately
-          setState(() {
-            _completedRide = completedJourney;
-            _showRideSummary = true;
-          });
+      // 1. Finalize in-memory journey (gives us GPS track, sensor readings, braking events)
+      final baseJourney = journeyProvider.endJourney();
+      if (baseJourney == null) return;
 
-          // Refresh history
-          _loadJourneyHistory();
-        } catch (e) {
-          debugPrint("Error saving final Journey Data: $e");
+      // Grab the shared rideId AFTER baseJourney exists (fallback to baseJourney.id if provider has none)
+      final sharedRideId = rideProvider.currentRideId ?? baseJourney.id;
+
+      try {
+        // 2. Build the final journey with the SHARED rideId
+        final fullJourney = JourneyData(
+          id: sharedRideId, // 🔑 Use shared rideId, NOT local timestamp
+          startTime: baseJourney.startTime,
+          endTime: DateTime.now(),
+          startLocation:
+              rideProvider.destinationName ?? baseJourney.startLocation,
+          destination: rideProvider.destinationName ?? baseJourney.destination,
+          sharpTurns: baseJourney.sharpTurns,
+          riskyTurns: baseJourney.riskyTurns,
+          totalBrakingEvents: baseJourney.totalBrakingEvents,
+          averageSpeed: baseJourney.averageSpeed,
+          maxSpeed: baseJourney.maxSpeed,
+          maxTurnRate: baseJourney.maxTurnRate,
+          totalDistance: baseJourney.totalDistance,
+          dangerPrediction: baseJourney.dangerPrediction,
+          turnEvents: baseJourney.turnEvents,
+          brakingEvents: baseJourney.brakingEvents,
+          sensorReadings: baseJourney.sensorReadings,
+          gpsTrack: baseJourney.gpsTrack,
+        );
+
+        // 3. Save to Firestore under the SHARED rideId
+        await _journeyService.saveJourney(fullJourney);
+        debugPrint("✅ Journey saved with shared rideId: $sharedRideId | "
+            "${fullJourney.turnEvents.length} turn events, "
+            "${fullJourney.brakingEvents.length} braking events.");
+
+        // 4. Navigate directly to the full JourneyReportScreen
+        if (mounted) {
+          Navigator.push(
+            context,
+            MaterialPageRoute(
+              builder: (_) => JourneyReportScreen(journey: fullJourney),
+            ),
+          );
+        }
+
+        // Refresh history in background
+        _loadJourneyHistory();
+      } catch (e) {
+        debugPrint("❌ Error saving full journey data: $e");
+        // Fallback: still show the report with whatever in-memory data we have
+        if (mounted) {
+          Navigator.push(
+            context,
+            MaterialPageRoute(
+              builder: (_) => JourneyReportScreen(journey: baseJourney),
+            ),
+          );
         }
       }
     }
@@ -247,6 +303,9 @@ class _Member3PageState extends State<Member3Page>
       });
     } catch (e) {
       setState(() => _isLoadingHistory = false);
+      setState(() {
+        _isSaving = false;
+      });
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(content: Text('Error loading journeys: $e')),
@@ -292,8 +351,8 @@ class _Member3PageState extends State<Member3Page>
         lng: newLng,
       );
     } catch (e) {
-      print('Error parsing Data: $e');
-      print('Raw data: $jsonString');
+      debugPrint('Error parsing Data: $e');
+      debugPrint('Raw data: $jsonString');
     }
   }
 
@@ -309,7 +368,10 @@ class _Member3PageState extends State<Member3Page>
         Provider.of<JourneyProvider>(context, listen: false);
 
     // ─── Calculate turn status FIRST ────────────────────────────────
-    double turnRate = imuData['gyroZ']!.abs();
+    // AXIS MAPPING for sensor mount: X=UP, Y=LEFT, Z=FORWARD
+    // Turn detection uses gyroX (rotation around UP/vertical axis = yaw)
+    // Braking detection uses accelZ (forward/backward axis)
+    double turnRate = imuData['gyroX']!.abs(); // gyroX = yaw when X points UP
     String newTurnStatus = "Normal";
     Color newStatusColor = Colors.green;
     String? eventType; // null = no risky event
@@ -324,17 +386,33 @@ class _Member3PageState extends State<Member3Page>
       newStatusColor = Colors.orange;
       eventType = 'sharp_turn'; // MODERATE severity
       sharpTurnCount++;
+    } else if (imuData['accelZ']! < -4.4 && speed > 5.0) {
+      // Harsh brake: 0.45g = 4.4 m/s² (sensor outputs m/s², NOT g!)
+      newTurnStatus =
+          imuData['accelZ']! < -6.9 ? "EMERGENCY BRAKE!" : "Harsh Brake";
+      newStatusColor = Colors.red;
+      eventType = imuData['accelZ']! < -6.9
+          ? 'emergency_brake'
+          : 'harsh_brake'; // Emergency: 0.70g = 6.9 m/s²
+      harshBrakeCount++;
+    } else if (speed > 80.0) {
+      newTurnStatus = "HIGH SPEED!";
+      newStatusColor = Colors.orange;
+      eventType = 'high_speed';
     }
 
-    // ─── ONLY SAVE RISKY EVENTS (not normal readings) ───────────────
-    if (eventType != null && imuData['gyroZ'] != null) {
-      _saveRiskyEventOnly(
-        imuData,
-        speed,
-        lat,
-        lng,
-        eventType, // 'risky_turn' or 'sharp_turn'
-      );
+    // ─── CSV DATA EXPORT FOR RESEARCH ───────────────
+    if (_isCsvLoggingEnabled) {
+      // Auto-assignes LABEL: 1 if the manual logic thinks it's dangerous, else 0
+      int label = (eventType == 'harsh_brake' ||
+              eventType == 'emergency_brake' ||
+              eventType == 'high_speed' ||
+              eventType == 'risky_turn')
+          ? 1
+          : 0;
+      // Format: accelX, accelY, accelZ, gyroX, gyroY, gyroZ, speedKmh, LABEL
+      debugPrint(
+          "CSV_EXPORT,${imuData['accelX']!.toStringAsFixed(3)},${imuData['accelY']!.toStringAsFixed(3)},${imuData['accelZ']!.toStringAsFixed(3)},${imuData['gyroX']!.toStringAsFixed(3)},${imuData['gyroY']!.toStringAsFixed(3)},${imuData['gyroZ']!.toStringAsFixed(3)},${speed.toStringAsFixed(2)},$label");
     }
 
     // Now safe to update UI
@@ -346,7 +424,11 @@ class _Member3PageState extends State<Member3Page>
       accelY = imuData['accelY']!;
       accelZ = imuData['accelZ']!;
 
-      gyroZHistory.add(gyroZ.abs());
+      // Calculate lean angle from accelerometer (X=UP, Y=LEFT)
+      // atan2(lateral, vertical) gives the tilt angle
+      leanAngle = atan2(accelY, accelX) * (180.0 / pi);
+
+      gyroZHistory.add(gyroX.abs()); // Use gyroX for yaw (X=UP axis mapping)
       if (gyroZHistory.length > maxHistoryLength) {
         gyroZHistory.removeAt(0);
       }
@@ -354,7 +436,7 @@ class _Member3PageState extends State<Member3Page>
       currentTurnStatus = newTurnStatus;
       statusColor = newStatusColor;
 
-      // GPS processing remains the same
+      // GPS processing
       if (lat != 0.0 && lng != 0.0) {
         currentLat = lat;
         currentLng = lng;
@@ -368,22 +450,37 @@ class _Member3PageState extends State<Member3Page>
 
         if (journeyProvider.isJourneyActive) {
           journeyProvider.updateDistanceAndSpeed(totalDistanceKm, currentSpeed);
+          // ✅ Record GPS point with speed into the journey track
+          journeyProvider.addGpsPoint(
+            latitude: lat,
+            longitude: lng,
+            speedKmh: speed,
+          );
         }
       }
 
-      // Add full sensor reading (including all IMU data) to the journey
+      // Add full sensor reading (including all IMU data + GPS for braking detection)
+      if (eventType != null) {
+        _saveRiskyEventOnly(
+            imuData, currentSpeed, currentLat, currentLng, eventType);
+      }
       if (journeyProvider.isJourneyActive) {
-        // We use dummy values for heartRate/temp/stress here, but they can be passed if available
         journeyProvider.addSensorReading(
           heartRate: 75,
           temperature: 36.5,
           stressLevel: 30,
+
           accelX: accelX,
           accelY: accelY,
           accelZ: accelZ,
           gyroX: gyroX,
           gyroY: gyroY,
           gyroZ: gyroZ,
+          // Pass GPS + speed so braking events get accurate location
+          latitude: currentLat,
+          longitude: currentLng,
+          speedKmh: currentSpeed,
+
         );
 
         if (eventType == 'risky_turn') {
@@ -397,6 +494,16 @@ class _Member3PageState extends State<Member3Page>
           journeyProvider.addTurnEvent(
             severity: 'sharp',
             turnRate: turnRate,
+            latitude: currentLat,
+            longitude: currentLng,
+          );
+        } else if (eventType == 'harsh_brake' ||
+            eventType == 'emergency_brake') {
+          journeyProvider.addBrakingEvent(
+            severity: eventType == 'emergency_brake' ? 'emergency' : 'hard',
+            deceleration:
+                imuData['accelZ']!, // accelZ = forward axis (X=UP mount)
+            speedBefore: currentSpeed,
             latitude: currentLat,
             longitude: currentLng,
           );
@@ -429,12 +536,520 @@ class _Member3PageState extends State<Member3Page>
   // NOTE: Ride start/end is now managed by RideSessionProvider
   // This ensures all members (Member 1, 2, 3) share the same rideId
 
-  void _resetRideCounters() {
-    _riskyEventsSavedCount = 0;
-    _riskyEventsThisRide = [];
-    sharpTurnCount = 0;
-    riskyTurnCount = 0;
-    totalDistanceKm = 0.0;
+  // void _resetRideCounters() {
+  //   _riskyEventsSavedCount = 0;
+  //   _riskyEventsThisRide = [];
+  //   sharpTurnCount = 0;
+  //   riskyTurnCount = 0;
+  //   totalDistanceKm = 0.0;
+
+  // ── DEBUG: Simulated Ride Data Pump ──────────────────────────────
+  // Pumps 40 pre-scripted IMU+GPS packets through the exact same
+  // _parseIMUData() path used by real Bluetooth data.
+  // GPS moves along a short route near Colombo.
+  void _startSimulatedRide() {
+    if (_isSimulating) {
+      _stopSimulation();
+      return;
+    }
+
+    // Make sure a ride session is active
+    final rideProvider =
+        Provider.of<RideSessionProvider>(context, listen: false);
+    if (!rideProvider.isRideActive) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text(
+              'Start a ride first (tap START on Home tab), then simulate.'),
+          backgroundColor: Colors.orange,
+        ),
+      );
+      return;
+    }
+
+    setState(() {
+      _isSimulating = true;
+      _simPacketIndex = 0;
+    });
+    debugPrint('[SIM] Starting simulated ride data pump...');
+
+    // 40 packets × 500 ms = 20 s of simulated riding
+    // Each entry: {gyroX, gyroY, gyroZ, accelX, accelY, accelZ, spd, lat, lng}
+    // lat/lng moves 0.0001° per packet (~11 m steps)
+    const double baseLat = 6.9271; // Colombo
+    const double baseLng = 79.8612;
+    final packets = <Map<String, double>>[
+      // 0-4: normal cruise
+      {
+        'gyroX': 2.0,
+        'gyroY': 1.5,
+        'gyroZ': 8.0,
+        'accelX': 0.1,
+        'accelY': 0.1,
+        'accelZ': 9.81,
+        'spd': 40,
+        'lat': baseLat + 0.000 * 0.0001,
+        'lng': baseLng + 0.000 * 0.0001
+      },
+      {
+        'gyroX': 2.5,
+        'gyroY': 2.0,
+        'gyroZ': 10.0,
+        'accelX': 0.1,
+        'accelY': 0.1,
+        'accelZ': 9.81,
+        'spd': 42,
+        'lat': baseLat + 0.001,
+        'lng': baseLng + 0.001
+      },
+      {
+        'gyroX': 2.0,
+        'gyroY': 1.5,
+        'gyroZ': 12.0,
+        'accelX': 0.1,
+        'accelY': 0.2,
+        'accelZ': 9.80,
+        'spd': 45,
+        'lat': baseLat + 0.002,
+        'lng': baseLng + 0.002
+      },
+      {
+        'gyroX': 3.0,
+        'gyroY': 2.5,
+        'gyroZ': 15.0,
+        'accelX': 0.2,
+        'accelY': 0.2,
+        'accelZ': 9.80,
+        'spd': 48,
+        'lat': baseLat + 0.003,
+        'lng': baseLng + 0.003
+      },
+      {
+        'gyroX': 2.0,
+        'gyroY': 1.0,
+        'gyroZ': 8.0,
+        'accelX': 0.1,
+        'accelY': 0.1,
+        'accelZ': 9.81,
+        'spd': 50,
+        'lat': baseLat + 0.004,
+        'lng': baseLng + 0.004
+      },
+      // 5-6: SHARP TURN (|gyroZ| 110)
+      {
+        'gyroX': 5.0,
+        'gyroY': 4.0,
+        'gyroZ': 110.0,
+        'accelX': 0.3,
+        'accelY': 1.2,
+        'accelZ': 9.80,
+        'spd': 50,
+        'lat': baseLat + 0.005,
+        'lng': baseLng + 0.005
+      },
+      {
+        'gyroX': 5.5,
+        'gyroY': 4.5,
+        'gyroZ': 115.0,
+        'accelX': 0.3,
+        'accelY': 1.3,
+        'accelZ': 9.80,
+        'spd': 48,
+        'lat': baseLat + 0.006,
+        'lng': baseLng + 0.006
+      },
+      // 7-8: back to normal
+      {
+        'gyroX': 2.0,
+        'gyroY': 1.5,
+        'gyroZ': 9.0,
+        'accelX': 0.1,
+        'accelY': 0.1,
+        'accelZ': 9.81,
+        'spd': 50,
+        'lat': baseLat + 0.007,
+        'lng': baseLng + 0.007
+      },
+      {
+        'gyroX': 2.5,
+        'gyroY': 2.0,
+        'gyroZ': 11.0,
+        'accelX': 0.2,
+        'accelY': 0.1,
+        'accelZ': 9.81,
+        'spd': 52,
+        'lat': baseLat + 0.008,
+        'lng': baseLng + 0.008
+      },
+      // 9-10: HARD BRAKING (accelX = -2.5 g)
+      {
+        'gyroX': 4.0,
+        'gyroY': 3.0,
+        'gyroZ': 18.0,
+        'accelX': -2.5,
+        'accelY': 0.1,
+        'accelZ': 9.80,
+        'spd': 52,
+        'lat': baseLat + 0.009,
+        'lng': baseLng + 0.009
+      },
+      {
+        'gyroX': 3.5,
+        'gyroY': 2.5,
+        'gyroZ': 15.0,
+        'accelX': -2.0,
+        'accelY': 0.1,
+        'accelZ': 9.80,
+        'spd': 35,
+        'lat': baseLat + 0.010,
+        'lng': baseLng + 0.010
+      },
+      // 11-14: accelerate back
+      {
+        'gyroX': 2.0,
+        'gyroY': 1.0,
+        'gyroZ': 7.0,
+        'accelX': 0.5,
+        'accelY': 0.1,
+        'accelZ': 9.81,
+        'spd': 38,
+        'lat': baseLat + 0.011,
+        'lng': baseLng + 0.011
+      },
+      {
+        'gyroX': 2.0,
+        'gyroY': 1.5,
+        'gyroZ': 8.0,
+        'accelX': 0.4,
+        'accelY': 0.1,
+        'accelZ': 9.81,
+        'spd': 45,
+        'lat': baseLat + 0.012,
+        'lng': baseLng + 0.012
+      },
+      {
+        'gyroX': 2.5,
+        'gyroY': 2.0,
+        'gyroZ': 10.0,
+        'accelX': 0.3,
+        'accelY': 0.1,
+        'accelZ': 9.80,
+        'spd': 55,
+        'lat': baseLat + 0.013,
+        'lng': baseLng + 0.013
+      },
+      {
+        'gyroX': 3.0,
+        'gyroY': 2.5,
+        'gyroZ': 12.0,
+        'accelX': 0.2,
+        'accelY': 0.2,
+        'accelZ': 9.80,
+        'spd': 60,
+        'lat': baseLat + 0.014,
+        'lng': baseLng + 0.014
+      },
+      // 15-17: RISKY TURN (|gyroZ| 170)
+      {
+        'gyroX': 9.0,
+        'gyroY': 8.0,
+        'gyroZ': 170.0,
+        'accelX': 0.5,
+        'accelY': 2.2,
+        'accelZ': 9.78,
+        'spd': 60,
+        'lat': baseLat + 0.015,
+        'lng': baseLng + 0.015
+      },
+      {
+        'gyroX': 9.5,
+        'gyroY': 8.5,
+        'gyroZ': 175.0,
+        'accelX': 0.5,
+        'accelY': 2.5,
+        'accelZ': 9.78,
+        'spd': 58,
+        'lat': baseLat + 0.016,
+        'lng': baseLng + 0.016
+      },
+      {
+        'gyroX': 8.0,
+        'gyroY': 7.0,
+        'gyroZ': 160.0,
+        'accelX': 0.4,
+        'accelY': 2.0,
+        'accelZ': 9.79,
+        'spd': 55,
+        'lat': baseLat + 0.017,
+        'lng': baseLng + 0.017
+      },
+      // 18-22: normal
+      {
+        'gyroX': 2.5,
+        'gyroY': 2.0,
+        'gyroZ': 10.0,
+        'accelX': 0.2,
+        'accelY': 0.2,
+        'accelZ': 9.81,
+        'spd': 55,
+        'lat': baseLat + 0.018,
+        'lng': baseLng + 0.018
+      },
+      {
+        'gyroX': 2.0,
+        'gyroY': 1.5,
+        'gyroZ': 9.0,
+        'accelX': 0.1,
+        'accelY': 0.1,
+        'accelZ': 9.81,
+        'spd': 58,
+        'lat': baseLat + 0.019,
+        'lng': baseLng + 0.019
+      },
+      {
+        'gyroX': 2.0,
+        'gyroY': 1.0,
+        'gyroZ': 7.0,
+        'accelX': 0.1,
+        'accelY': 0.1,
+        'accelZ': 9.81,
+        'spd': 60,
+        'lat': baseLat + 0.020,
+        'lng': baseLng + 0.020
+      },
+      {
+        'gyroX': 3.0,
+        'gyroY': 2.0,
+        'gyroZ': 12.0,
+        'accelX': 0.2,
+        'accelY': 0.2,
+        'accelZ': 9.80,
+        'spd': 62,
+        'lat': baseLat + 0.021,
+        'lng': baseLng + 0.021
+      },
+      {
+        'gyroX': 2.5,
+        'gyroY': 2.0,
+        'gyroZ': 10.0,
+        'accelX': 0.2,
+        'accelY': 0.1,
+        'accelZ': 9.81,
+        'spd': 62,
+        'lat': baseLat + 0.022,
+        'lng': baseLng + 0.022
+      },
+      // 23-24: SHARP TURN left (gyroZ -120)
+      {
+        'gyroX': 6.0,
+        'gyroY': 5.0,
+        'gyroZ': -120.0,
+        'accelX': 0.3,
+        'accelY': -1.4,
+        'accelZ': 9.80,
+        'spd': 55,
+        'lat': baseLat + 0.023,
+        'lng': baseLng + 0.023
+      },
+      {
+        'gyroX': 6.5,
+        'gyroY': 5.5,
+        'gyroZ': -125.0,
+        'accelX': 0.3,
+        'accelY': -1.5,
+        'accelZ': 9.80,
+        'spd': 52,
+        'lat': baseLat + 0.024,
+        'lng': baseLng + 0.024
+      },
+      // 25-29: normal
+      {
+        'gyroX': 2.0,
+        'gyroY': 1.5,
+        'gyroZ': 9.0,
+        'accelX': 0.2,
+        'accelY': 0.1,
+        'accelZ': 9.81,
+        'spd': 55,
+        'lat': baseLat + 0.025,
+        'lng': baseLng + 0.025
+      },
+      {
+        'gyroX': 2.5,
+        'gyroY': 2.0,
+        'gyroZ': 10.0,
+        'accelX': 0.2,
+        'accelY': 0.1,
+        'accelZ': 9.80,
+        'spd': 58,
+        'lat': baseLat + 0.026,
+        'lng': baseLng + 0.026
+      },
+      {
+        'gyroX': 2.0,
+        'gyroY': 1.5,
+        'gyroZ': 8.0,
+        'accelX': 0.1,
+        'accelY': 0.1,
+        'accelZ': 9.81,
+        'spd': 60,
+        'lat': baseLat + 0.027,
+        'lng': baseLng + 0.027
+      },
+      {
+        'gyroX': 2.5,
+        'gyroY': 2.0,
+        'gyroZ': 11.0,
+        'accelX': 0.1,
+        'accelY': 0.1,
+        'accelZ': 9.81,
+        'spd': 62,
+        'lat': baseLat + 0.028,
+        'lng': baseLng + 0.028
+      },
+      {
+        'gyroX': 3.0,
+        'gyroY': 2.5,
+        'gyroZ': 13.0,
+        'accelX': 0.2,
+        'accelY': 0.2,
+        'accelZ': 9.80,
+        'spd': 62,
+        'lat': baseLat + 0.029,
+        'lng': baseLng + 0.029
+      },
+      // 30-31: EMERGENCY BRAKE (-5 g)
+      {
+        'gyroX': 5.0,
+        'gyroY': 4.0,
+        'gyroZ': 20.0,
+        'accelX': -5.0,
+        'accelY': 0.2,
+        'accelZ': 9.80,
+        'spd': 62,
+        'lat': baseLat + 0.030,
+        'lng': baseLng + 0.030
+      },
+      {
+        'gyroX': 4.0,
+        'gyroY': 3.0,
+        'gyroZ': 15.0,
+        'accelX': -4.0,
+        'accelY': 0.2,
+        'accelZ': 9.80,
+        'spd': 30,
+        'lat': baseLat + 0.031,
+        'lng': baseLng + 0.031
+      },
+      // 32-34: slow recovery
+      {
+        'gyroX': 2.0,
+        'gyroY': 1.5,
+        'gyroZ': 6.0,
+        'accelX': 0.3,
+        'accelY': 0.1,
+        'accelZ': 9.81,
+        'spd': 32,
+        'lat': baseLat + 0.032,
+        'lng': baseLng + 0.032
+      },
+      {
+        'gyroX': 2.0,
+        'gyroY': 1.0,
+        'gyroZ': 5.0,
+        'accelX': 0.4,
+        'accelY': 0.1,
+        'accelZ': 9.81,
+        'spd': 38,
+        'lat': baseLat + 0.033,
+        'lng': baseLng + 0.033
+      },
+      {
+        'gyroX': 2.5,
+        'gyroY': 1.5,
+        'gyroZ': 8.0,
+        'accelX': 0.3,
+        'accelY': 0.1,
+        'accelZ': 9.81,
+        'spd': 45,
+        'lat': baseLat + 0.034,
+        'lng': baseLng + 0.034
+      },
+      // 35-37: HIGH SPEED (85 km/h)
+      {
+        'gyroX': 3.0,
+        'gyroY': 2.0,
+        'gyroZ': 12.0,
+        'accelX': 0.5,
+        'accelY': 0.2,
+        'accelZ': 9.80,
+        'spd': 75,
+        'lat': baseLat + 0.035,
+        'lng': baseLng + 0.035
+      },
+      {
+        'gyroX': 3.5,
+        'gyroY': 2.5,
+        'gyroZ': 14.0,
+        'accelX': 0.4,
+        'accelY': 0.2,
+        'accelZ': 9.80,
+        'spd': 82,
+        'lat': baseLat + 0.036,
+        'lng': baseLng + 0.036
+      },
+      {
+        'gyroX': 4.0,
+        'gyroY': 3.0,
+        'gyroZ': 16.0,
+        'accelX': 0.3,
+        'accelY': 0.3,
+        'accelZ': 9.79,
+        'spd': 85,
+        'lat': baseLat + 0.037,
+        'lng': baseLng + 0.037
+      },
+      // 38-39: arrive, slow down
+      {
+        'gyroX': 2.0,
+        'gyroY': 1.5,
+        'gyroZ': 8.0,
+        'accelX': -0.8,
+        'accelY': 0.1,
+        'accelZ': 9.81,
+        'spd': 40,
+        'lat': baseLat + 0.038,
+        'lng': baseLng + 0.038
+      },
+      {
+        'gyroX': 1.0,
+        'gyroY': 1.0,
+        'gyroZ': 4.0,
+        'accelX': -1.0,
+        'accelY': 0.1,
+        'accelZ': 9.81,
+        'spd': 15,
+        'lat': baseLat + 0.039,
+        'lng': baseLng + 0.039
+      },
+    ];
+
+    _simulationTimer =
+        Timer.periodic(const Duration(milliseconds: 500), (timer) {
+      if (!mounted || _simPacketIndex >= packets.length) {
+        _stopSimulation();
+        return;
+      }
+      final p = packets[_simPacketIndex++];
+      // Feed directly through the same path as real Bluetooth data
+      _parseIMUData(''
+          '{"gyroX":${p["gyroX"]},"gyroY":${p["gyroY"]},"gyroZ":${p["gyroZ"]},'
+          '"accelX":${p["accelX"]},"accelY":${p["accelY"]},"accelZ":${p["accelZ"]},'
+          '"spd":${p["spd"]},"lat":${p["lat"]},"lng":${p["lng"]}'
+          '}');
+      debugPrint(
+          '[SIM] Packet $_simPacketIndex/40 injected: gyroZ=${p["gyroZ"]} accelX=${p["accelX"]} lat=${p["lat"]}');
+    });
   }
 
   // ============================================================
@@ -459,12 +1074,9 @@ class _Member3PageState extends State<Member3Page>
 
     if (_isSaving) return;
 
-    setState(() => _isSaving = true);
-
-    final now = DateTime.now();
-    final turnRate = imu['gyroZ']?.abs() ?? 0.0;
-
     try {
+      final now = DateTime.now();
+      final turnRate = imu['gyroZ']?.abs() ?? 0.0;
       final eventData = {
         // Ride identification (using shared rideId from provider)
         "rideId": rideProvider.currentRideId,
@@ -510,10 +1122,17 @@ class _Member3PageState extends State<Member3Page>
 
       _riskyEventsSavedCount++;
 
+      setState(() {
+        _isSaving = false;
+      });
+
       debugPrint(
           "🚨 RISKY EVENT #$_riskyEventsSavedCount saved → Type: $eventType | Turn: ${turnRate.toStringAsFixed(1)}°/s | ID: ${docRef.id}");
     } catch (e) {
       debugPrint("❌ Firebase risky event save error: $e");
+      setState(() {
+        _isSaving = false;
+      });
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
@@ -522,14 +1141,18 @@ class _Member3PageState extends State<Member3Page>
           ),
         );
       }
-    } finally {
-      if (mounted) setState(() => _isSaving = false);
     }
   }
 
-  // Get all risky events for current ride (for visualization)
-  List<Map<String, dynamic>> getRiskyEventsForVisualization() {
-    return List.from(_riskyEventsThisRide);
+  void _stopSimulation() {
+    _simulationTimer?.cancel();
+    _simulationTimer = null;
+    if (mounted)
+      setState(() {
+        _isSimulating = false;
+        _simPacketIndex = 0;
+      });
+    debugPrint('[SIM] Simulation stopped after $_simPacketIndex packets.');
   }
 
   // Load risky events from Firebase for a specific ride
@@ -558,16 +1181,31 @@ class _Member3PageState extends State<Member3Page>
   Widget build(BuildContext context) {
     return Scaffold(
       appBar: AppBar(
-        title: const Text('Risk Assessment'),
+        title: const Text('Risk Assessment',
+            style: TextStyle(fontWeight: FontWeight.w700, letterSpacing: 0.5)),
         backgroundColor: Colors.blue[700],
+        elevation: 0,
         bottom: TabBar(
           controller: _tabController,
+          indicatorColor: Colors.white,
+          indicatorWeight: 3,
+          labelColor: Colors.white,
+          unselectedLabelColor: Colors.white70,
           tabs: const [
             Tab(icon: Icon(Icons.history), text: 'Journey History'),
             Tab(icon: Icon(Icons.sensors), text: 'Live Monitoring'),
           ],
         ),
         actions: [
+          // DEBUG: Simulate ride data pump
+          IconButton(
+            icon: Icon(
+              _isSimulating ? Icons.stop_circle : Icons.science,
+              color: _isSimulating ? Colors.redAccent : Colors.amber,
+            ),
+            tooltip: _isSimulating ? 'Stop Simulation' : 'Simulate Ride Data',
+            onPressed: _startSimulatedRide,
+          ),
           // Connection status indicator in AppBar (read-only, connect from Home)
           Consumer<BluetoothManager>(
             builder: (context, btManager, child) {
@@ -610,7 +1248,7 @@ class _Member3PageState extends State<Member3Page>
                 ),
 
           // Risky Events Indicator (shows only when events detected)
-          if (_isSaving || _riskyEventsSavedCount > 0)
+          if (sharpTurnCount > 0 || riskyTurnCount > 0)
             Positioned(
               bottom: 24,
               right: 24,
@@ -642,6 +1280,7 @@ class _Member3PageState extends State<Member3Page>
                       const SizedBox(width: 12),
                       Consumer<RideSessionProvider>(
                         builder: (context, rideProvider, child) {
+                          final totalEvents = sharpTurnCount + riskyTurnCount;
                           return Column(
                             crossAxisAlignment: CrossAxisAlignment.start,
                             mainAxisSize: MainAxisSize.min,
@@ -1044,29 +1683,37 @@ class _Member3PageState extends State<Member3Page>
                     mainAxisAlignment: MainAxisAlignment.center,
                     children: [
                       Icon(Icons.route_outlined,
-                          size: 80, color: Colors.grey[400]),
+                          size: 70,
+                          color: _textSecondary.withValues(alpha: 0.2)),
                       const SizedBox(height: 16),
-                      Text(
-                        'No journeys recorded yet',
-                        style: TextStyle(fontSize: 18, color: Colors.grey[600]),
-                      ),
+                      const Text('No journeys recorded yet',
+                          style: TextStyle(
+                              fontSize: 18,
+                              fontWeight: FontWeight.w600,
+                              color: _textPrimary)),
                       const SizedBox(height: 8),
-                      Text(
-                        'Start a journey from Home Dashboard',
-                        style: TextStyle(fontSize: 14, color: Colors.grey[500]),
-                      ),
+                      const Text('Start a journey from Home Dashboard',
+                          style:
+                              TextStyle(fontSize: 14, color: _textSecondary)),
                       const SizedBox(height: 24),
-                      // ADD THIS: Test with dummy data button
-                      ElevatedButton.icon(
-                        onPressed: _showDummyReport,
-                        icon: const Icon(Icons.science),
-                        label: const Text('View Sample Report'),
-                        style: ElevatedButton.styleFrom(
-                          backgroundColor: Colors.blue[700],
-                          foregroundColor: Colors.white,
-                          padding: const EdgeInsets.symmetric(
-                            horizontal: 24,
-                            vertical: 12,
+                      Container(
+                        decoration: BoxDecoration(
+                          gradient:
+                              const LinearGradient(colors: [_primary, _accent]),
+                          borderRadius: BorderRadius.circular(12),
+                        ),
+                        child: ElevatedButton.icon(
+                          onPressed: _showDummyReport,
+                          icon: const Icon(Icons.science, color: Colors.white),
+                          label: const Text('View Sample Report',
+                              style: TextStyle(
+                                  color: Colors.white,
+                                  fontWeight: FontWeight.w600)),
+                          style: ElevatedButton.styleFrom(
+                            backgroundColor: Colors.transparent,
+                            shadowColor: Colors.transparent,
+                            padding: const EdgeInsets.symmetric(
+                                horizontal: 24, vertical: 12),
                           ),
                         ),
                       ),
@@ -1075,16 +1722,27 @@ class _Member3PageState extends State<Member3Page>
                 )
               : Column(
                   children: [
-                    // ADD THIS: Test button at top of list
+                    // Test button
                     Padding(
                       padding: const EdgeInsets.all(16),
-                      child: ElevatedButton.icon(
-                        onPressed: _showDummyReport,
-                        icon: const Icon(Icons.science),
-                        label: const Text('View Sample Report'),
-                        style: ElevatedButton.styleFrom(
-                          backgroundColor: Colors.orange[600],
-                          foregroundColor: Colors.white,
+                      child: Container(
+                        decoration: BoxDecoration(
+                          gradient: LinearGradient(
+                              colors: [Colors.orange[700]!, Colors.deepOrange]),
+                          borderRadius: BorderRadius.circular(12),
+                        ),
+                        child: ElevatedButton.icon(
+                          onPressed: _showDummyReport,
+                          icon: const Icon(Icons.science, color: Colors.white),
+                          label: const Text('View Sample Report',
+                              style: TextStyle(
+                                  color: Colors.white,
+                                  fontWeight: FontWeight.w600)),
+                          style: ElevatedButton.styleFrom(
+                            backgroundColor: Colors.transparent,
+                            shadowColor: Colors.transparent,
+                            padding: const EdgeInsets.symmetric(vertical: 12),
+                          ),
                         ),
                       ),
                     ),
@@ -1108,74 +1766,113 @@ class _Member3PageState extends State<Member3Page>
         ? journey.endTime!.difference(journey.startTime)
         : Duration.zero;
 
-    return Card(
-      margin: const EdgeInsets.only(bottom: 16),
-      elevation: 3,
+    // Determine risk color for left border
+    final totalTurns = journey.sharpTurns + journey.riskyTurns;
+    final Color riskColor = journey.riskyTurns > 5 || totalTurns > 15
+        ? const Color(0xFFC62828)
+        : journey.riskyTurns > 2 || totalTurns > 8
+            ? const Color(0xFFF57F17)
+            : const Color(0xFF2E7D32);
+
+    return Container(
+      margin: const EdgeInsets.only(bottom: 14),
+      decoration: BoxDecoration(
+        color: _cardBg,
+        borderRadius: BorderRadius.circular(16),
+        boxShadow: [
+          BoxShadow(
+              color: Colors.black.withValues(alpha: 0.2),
+              blurRadius: 8,
+              offset: const Offset(0, 3))
+        ],
+      ),
       child: InkWell(
         onTap: () => _showJourneyDetails(journey),
-        borderRadius: BorderRadius.circular(12),
-        child: Padding(
-          padding: const EdgeInsets.all(16),
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Row(
-                children: [
-                  Icon(Icons.navigation, color: Colors.blue[700], size: 28),
-                  const SizedBox(width: 12),
-                  Expanded(
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
+        borderRadius: BorderRadius.circular(16),
+        child: Row(
+          children: [
+            // Left colored accent bar
+            Container(
+              width: 5,
+              height: 130,
+              decoration: BoxDecoration(
+                color: riskColor,
+                borderRadius: const BorderRadius.only(
+                  topLeft: Radius.circular(16),
+                  bottomLeft: Radius.circular(16),
+                ),
+              ),
+            ),
+            Expanded(
+              child: Padding(
+                padding: const EdgeInsets.all(16),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Row(
                       children: [
-                        Text(
-                          journey.destination ?? 'Unknown Destination',
-                          style: const TextStyle(
-                            fontSize: 18,
-                            fontWeight: FontWeight.bold,
+                        Container(
+                          padding: const EdgeInsets.all(8),
+                          decoration: BoxDecoration(
+                            color: _primary.withValues(alpha: 0.2),
+                            borderRadius: BorderRadius.circular(10),
+                          ),
+                          child: const Icon(Icons.navigation,
+                              color: _accent, size: 20),
+                        ),
+                        const SizedBox(width: 12),
+                        Expanded(
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              Text(
+                                journey.destination ?? 'Unknown Destination',
+                                style: const TextStyle(
+                                    fontSize: 16,
+                                    fontWeight: FontWeight.w700,
+                                    color: _textPrimary),
+                              ),
+                              const SizedBox(height: 2),
+                              Text(
+                                DateFormat('MMM dd, yyyy • HH:mm')
+                                    .format(journey.startTime),
+                                style: const TextStyle(
+                                    color: _textSecondary, fontSize: 12),
+                              ),
+                            ],
                           ),
                         ),
-                        Text(
-                          DateFormat('MMM dd, yyyy • HH:mm')
-                              .format(journey.startTime),
-                          style:
-                              TextStyle(color: Colors.grey[600], fontSize: 13),
-                        ),
+                        _getRiskBadge(journey),
                       ],
                     ),
-                  ),
-                  _getRiskBadge(journey),
-                ],
+                    const SizedBox(height: 14),
+                    Container(
+                        height: 1,
+                        color: _textSecondary.withValues(alpha: 0.2)),
+                    const SizedBox(height: 12),
+                    Row(
+                      mainAxisAlignment: MainAxisAlignment.spaceAround,
+                      children: [
+                        _buildStatColumn(
+                            Icons.route,
+                            '${journey.totalDistance.toStringAsFixed(1)} km',
+                            'Distance'),
+                        _buildStatColumn(Icons.timer,
+                            '${duration.inMinutes} min', 'Duration'),
+                        _buildStatColumn(
+                            Icons.turn_sharp_right,
+                            '${journey.sharpTurns}',
+                            'Sharp',
+                            const Color(0xFFF57F17)),
+                        _buildStatColumn(Icons.warning, '${journey.riskyTurns}',
+                            'Risky', const Color(0xFFC62828)),
+                      ],
+                    ),
+                  ],
+                ),
               ),
-              const Divider(height: 24),
-              Row(
-                mainAxisAlignment: MainAxisAlignment.spaceAround,
-                children: [
-                  _buildStatColumn(
-                    Icons.route,
-                    '${journey.totalDistance.toStringAsFixed(1)} km',
-                    'Distance',
-                  ),
-                  _buildStatColumn(
-                    Icons.timer,
-                    '${duration.inMinutes} min',
-                    'Duration',
-                  ),
-                  _buildStatColumn(
-                    Icons.turn_sharp_right,
-                    '${journey.sharpTurns}',
-                    'Sharp',
-                    Colors.orange,
-                  ),
-                  _buildStatColumn(
-                    Icons.warning,
-                    '${journey.riskyTurns}',
-                    'Risky',
-                    Colors.red,
-                  ),
-                ],
-              ),
-            ],
-          ),
+            ),
+          ],
         ),
       ),
     );
@@ -1185,54 +1882,63 @@ class _Member3PageState extends State<Member3Page>
     final totalTurns = journey.sharpTurns + journey.riskyTurns;
     Color color;
     String label;
+    IconData icon;
 
     if (journey.riskyTurns > 5 || totalTurns > 15) {
-      color = Colors.red;
-      label = 'HIGH RISK';
+      color = const Color(0xFFC62828);
+      label = 'HIGH';
+      icon = Icons.error_outline;
     } else if (journey.riskyTurns > 2 || totalTurns > 8) {
-      color = Colors.orange;
-      label = 'MODERATE';
+      color = const Color(0xFFF57F17);
+      label = 'MED';
+      icon = Icons.warning_amber_rounded;
     } else {
-      color = Colors.green;
-      label = 'LOW RISK';
+      color = const Color(0xFF2E7D32);
+      label = 'LOW';
+      icon = Icons.shield_outlined;
     }
 
     return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
       decoration: BoxDecoration(
-        color: color.withOpacity(0.2),
+        color: color.withValues(alpha: 0.2),
         borderRadius: BorderRadius.circular(20),
-        border: Border.all(color: color, width: 2),
+        border: Border.all(color: color.withValues(alpha: 0.2), width: 1.5),
       ),
-      child: Text(
-        label,
-        style: TextStyle(
-          color: color,
-          fontWeight: FontWeight.bold,
-          fontSize: 12,
-        ),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Icon(icon, size: 13, color: color),
+          const SizedBox(width: 4),
+          Text(label,
+              style: TextStyle(
+                  color: color, fontWeight: FontWeight.w700, fontSize: 11)),
+        ],
       ),
     );
   }
 
   Widget _buildStatColumn(IconData icon, String value, String label,
       [Color? color]) {
+    final c = color ?? _accent;
     return Column(
       children: [
-        Icon(icon, size: 24, color: color ?? Colors.grey[700]),
-        const SizedBox(height: 4),
-        Text(
-          value,
-          style: TextStyle(
-            fontSize: 16,
-            fontWeight: FontWeight.bold,
-            color: color ?? Colors.black,
+        Container(
+          padding: const EdgeInsets.all(6),
+          decoration: BoxDecoration(
+            color: c.withValues(alpha: 0.2),
+            shape: BoxShape.circle,
           ),
+          child: Icon(icon, size: 16, color: c),
         ),
-        Text(
-          label,
-          style: TextStyle(fontSize: 12, color: Colors.grey[600]),
-        ),
+        const SizedBox(height: 4),
+        Text(value,
+            style: TextStyle(
+                fontSize: 14,
+                fontWeight: FontWeight.w700,
+                color: color ?? _textPrimary)),
+        Text(label,
+            style: const TextStyle(fontSize: 11, color: _textSecondary)),
       ],
     );
   }
@@ -1259,14 +1965,18 @@ class _Member3PageState extends State<Member3Page>
   }
 
   // Method to load dummy history for testing
-  void _loadDummyHistory() {
-    setState(() {
-      _journeyHistory = DummyJourneyData.getSampleJourneyHistory();
-      _isLoadingHistory = false;
-    });
-  }
 
   // Live Monitoring Tab
+  // ═══════════════════════════════════════════════════════════════
+  //  DESIGN SYSTEM CONSTANTS
+  // ═══════════════════════════════════════════════════════════════
+  static const Color _primary = Color(0xFF1565C0);
+  static const Color _accent = Color(0xFF00B0FF);
+  static const Color _cardBg = Colors.white;
+  static const Color _surfaceBg = Color(0xFFF0F2F5);
+  static const Color _textPrimary = Color(0xFF1E1E2E);
+  static const Color _textSecondary = Color(0xFF6B7280);
+
   Widget _buildLiveMonitoringTab() {
     return SingleChildScrollView(
       padding: const EdgeInsets.all(16),
@@ -1281,20 +1991,73 @@ class _Member3PageState extends State<Member3Page>
           const SizedBox(height: 16),
           _buildStatisticsRow(),
           const SizedBox(height: 16),
+          _buildLeanAngleCard(),
+          const SizedBox(height: 20),
+          _buildSectionHeader('Sensor Data', Icons.sensors),
+          const SizedBox(height: 12),
           _buildGyroscopeCard(),
-          const SizedBox(height: 16),
+          const SizedBox(height: 12),
           _buildAccelerometerCard(),
           const SizedBox(height: 16),
           _buildTurnRateGraph(),
-          const SizedBox(height: 16),
-          ElevatedButton.icon(
-            onPressed: _resetCounters,
-            icon: const Icon(Icons.refresh),
-            label: const Text('Reset Counters'),
-            style: ElevatedButton.styleFrom(padding: const EdgeInsets.all(16)),
+          const SizedBox(height: 20),
+          Container(
+            decoration: BoxDecoration(
+              gradient: const LinearGradient(
+                  colors: [Color(0xFF1565C0), Color(0xFF0D47A1)]),
+              borderRadius: BorderRadius.circular(14),
+              boxShadow: [
+                BoxShadow(
+                    color: _primary.withValues(alpha: 0.2),
+                    blurRadius: 8,
+                    offset: const Offset(0, 4))
+              ],
+            ),
+            child: ElevatedButton.icon(
+              onPressed: _resetCounters,
+              icon: const Icon(Icons.refresh_rounded, color: Colors.white),
+              label: const Text('Reset Counters',
+                  style: TextStyle(
+                      fontSize: 15,
+                      fontWeight: FontWeight.w600,
+                      color: Colors.white)),
+              style: ElevatedButton.styleFrom(
+                backgroundColor: Colors.transparent,
+                shadowColor: Colors.transparent,
+                padding: const EdgeInsets.symmetric(vertical: 16),
+                shape: RoundedRectangleBorder(
+                    borderRadius: BorderRadius.circular(14)),
+              ),
+            ),
           ),
+          const SizedBox(height: 16),
         ],
       ),
+    );
+  }
+
+  Widget _buildSectionHeader(String title, IconData icon) {
+    return Row(
+      children: [
+        Container(
+          padding: const EdgeInsets.all(8),
+          decoration: BoxDecoration(
+            gradient: const LinearGradient(colors: [_primary, _accent]),
+            borderRadius: BorderRadius.circular(10),
+          ),
+          child: Icon(icon, color: Colors.white, size: 18),
+        ),
+        const SizedBox(width: 12),
+        Text(title,
+            style: const TextStyle(
+                fontSize: 18,
+                fontWeight: FontWeight.bold,
+                color: _textPrimary)),
+        const SizedBox(width: 12),
+        Expanded(
+            child: Container(
+                height: 1, color: _textSecondary.withValues(alpha: 0.2))),
+      ],
     );
   }
 
@@ -1401,25 +2164,67 @@ class _Member3PageState extends State<Member3Page>
   }
 
   Widget _buildStatusCard() {
-    return Card(
-      color: statusColor.withOpacity(0.2),
-      elevation: 4,
-      child: Padding(
-        padding: const EdgeInsets.all(20),
-        child: Column(
-          children: [
-            Icon(_getStatusIcon(), size: 48, color: statusColor),
-            const SizedBox(height: 12),
-            Text(currentTurnStatus,
-                style: TextStyle(
-                    fontSize: 24,
-                    fontWeight: FontWeight.bold,
-                    color: statusColor)),
-            const SizedBox(height: 8),
-            Text('Turn Rate: ${gyroZ.abs().toStringAsFixed(1)}°/s',
-                style: const TextStyle(fontSize: 16)),
-          ],
+    final isRisky = currentTurnStatus == "RISKY TURN!" ||
+        currentTurnStatus == "EMERGENCY BRAKE!";
+    final isWarning = currentTurnStatus == "Sharp Turn" ||
+        currentTurnStatus == "Harsh Brake" ||
+        currentTurnStatus == "HIGH SPEED!";
+
+    return AnimatedContainer(
+      duration: const Duration(milliseconds: 350),
+      curve: Curves.easeInOut,
+      padding: const EdgeInsets.symmetric(vertical: 24, horizontal: 20),
+      decoration: BoxDecoration(
+        gradient: LinearGradient(
+          colors: isRisky
+              ? [const Color(0xFFC62828), const Color(0xFFB71C1C)]
+              : isWarning
+                  ? [const Color(0xFFF57F17), const Color(0xFFE65100)]
+                  : [const Color(0xFF1B5E20), const Color(0xFF2E7D32)],
+          begin: Alignment.topLeft,
+          end: Alignment.bottomRight,
         ),
+        borderRadius: BorderRadius.circular(20),
+        boxShadow: [
+          BoxShadow(
+            color: (isRisky
+                    ? const Color(0xFFC62828)
+                    : isWarning
+                        ? const Color(0xFFF57F17)
+                        : const Color(0xFF2E7D32))
+                .withValues(alpha: 0.2),
+            blurRadius: 16,
+            offset: const Offset(0, 6),
+          ),
+        ],
+      ),
+      child: Column(
+        children: [
+          AnimatedSwitcher(
+            duration: const Duration(milliseconds: 300),
+            child: Icon(_getStatusIcon(),
+                key: ValueKey(currentTurnStatus),
+                size: 52,
+                color: Colors.white),
+          ),
+          const SizedBox(height: 10),
+          AnimatedSwitcher(
+            duration: const Duration(milliseconds: 300),
+            child: Text(
+              currentTurnStatus,
+              key: ValueKey('status_$currentTurnStatus'),
+              style: const TextStyle(
+                  fontSize: 26,
+                  fontWeight: FontWeight.w800,
+                  color: Colors.white,
+                  letterSpacing: 0.5),
+            ),
+          ),
+          const SizedBox(height: 6),
+          Text('Turn Rate: ${gyroX.abs().toStringAsFixed(1)}°/s',
+              style: TextStyle(
+                  fontSize: 14, color: Colors.white.withValues(alpha: 0.2))),
+        ],
       ),
     );
   }
@@ -1427,6 +2232,9 @@ class _Member3PageState extends State<Member3Page>
   IconData _getStatusIcon() {
     if (currentTurnStatus == "RISKY TURN!") return Icons.warning_amber;
     if (currentTurnStatus == "Sharp Turn") return Icons.turn_sharp_right;
+    if (currentTurnStatus == "EMERGENCY BRAKE!" ||
+        currentTurnStatus == "Harsh Brake") return Icons.front_hand_rounded;
+    if (currentTurnStatus == "HIGH SPEED!") return Icons.speed;
     return Icons.check_circle;
   }
 
@@ -1436,111 +2244,168 @@ class _Member3PageState extends State<Member3Page>
         Expanded(
             child: _buildStatCard('Sharp Turns', sharpTurnCount.toString(),
                 Icons.turn_right, Colors.orange)),
-        const SizedBox(width: 16),
+        const SizedBox(width: 8),
         Expanded(
             child: _buildStatCard('Risky Turns', riskyTurnCount.toString(),
                 Icons.warning, Colors.red)),
+        const SizedBox(width: 8),
+        Expanded(
+            child: _buildStatCard('Harsh Brakes', harshBrakeCount.toString(),
+                Icons.stop_circle_outlined, Colors.purple)),
       ],
     );
   }
 
   Widget _buildStatCard(
       String label, String value, IconData icon, Color color) {
-    return Card(
-      elevation: 3,
-      child: Padding(
-        padding: const EdgeInsets.all(16),
-        child: Column(
-          children: [
-            Icon(icon, size: 32, color: color),
-            const SizedBox(height: 8),
-            Text(value,
-                style: TextStyle(
-                    fontSize: 28, fontWeight: FontWeight.bold, color: color)),
-            Text(label,
-                style: const TextStyle(fontSize: 14),
-                textAlign: TextAlign.center),
-          ],
-        ),
+    return Container(
+      padding: const EdgeInsets.symmetric(vertical: 16, horizontal: 8),
+      decoration: BoxDecoration(
+        color: _cardBg,
+        borderRadius: BorderRadius.circular(16),
+        boxShadow: [
+          BoxShadow(
+              color: Colors.black.withValues(alpha: 0.2),
+              blurRadius: 8,
+              offset: const Offset(0, 3))
+        ],
       ),
-    );
-  }
-
-  Widget _buildGyroscopeCard() {
-    return Card(
-      elevation: 3,
-      child: Padding(
-        padding: const EdgeInsets.all(16),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            const Text('Gyroscope (°/s)',
-                style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
-            const SizedBox(height: 12),
-            _buildDataRow('X-axis (Roll)', gyroX, Colors.red),
-            _buildDataRow('Y-axis (Pitch)', gyroY, Colors.green),
-            _buildDataRow('Z-axis (Yaw)', gyroZ, Colors.blue),
-          ],
-        ),
-      ),
-    );
-  }
-
-  Widget _buildAccelerometerCard() {
-    return Card(
-      elevation: 3,
-      child: Padding(
-        padding: const EdgeInsets.all(16),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            const Text('Accelerometer (m/s²)',
-                style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
-            const SizedBox(height: 12),
-            _buildDataRow('X-axis', accelX, Colors.red),
-            _buildDataRow('Y-axis', accelY, Colors.green),
-            _buildDataRow('Z-axis', accelZ, Colors.blue),
-          ],
-        ),
-      ),
-    );
-  }
-
-  Widget _buildDataRow(String label, double value, Color color) {
-    return Padding(
-      padding: const EdgeInsets.symmetric(vertical: 4),
-      child: Row(
-        mainAxisAlignment: MainAxisAlignment.spaceBetween,
+      child: Column(
         children: [
-          Text(label, style: const TextStyle(fontSize: 16)),
+          Container(
+            width: 40,
+            height: 4,
+            decoration: BoxDecoration(
+                color: color, borderRadius: BorderRadius.circular(2)),
+          ),
+          const SizedBox(height: 12),
+          Container(
+            padding: const EdgeInsets.all(10),
+            decoration: BoxDecoration(
+                color: color.withValues(alpha: 0.2), shape: BoxShape.circle),
+            child: Icon(icon, size: 22, color: color),
+          ),
+          const SizedBox(height: 10),
+          Text(value,
+              style: TextStyle(
+                  fontSize: 28, fontWeight: FontWeight.w800, color: color)),
+          const SizedBox(height: 2),
+          Text(label,
+              style: const TextStyle(
+                  fontSize: 11,
+                  color: _textSecondary,
+                  fontWeight: FontWeight.w500),
+              textAlign: TextAlign.center),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildLeanAngleCard() {
+    final absAngle = leanAngle.abs();
+    Color angleColor;
+    String angleLabel;
+
+    if (absAngle < 15) {
+      angleColor = const Color(0xFF2E7D32);
+      angleLabel = 'Normal';
+    } else if (absAngle < 30) {
+      angleColor = const Color(0xFFF57F17);
+      angleLabel = 'Aggressive';
+    } else if (absAngle < 45) {
+      angleColor = Colors.deepOrange;
+      angleLabel = 'Dangerous';
+    } else {
+      angleColor = const Color(0xFFC62828);
+      angleLabel = 'EXTREME!';
+    }
+
+    return Container(
+      padding: const EdgeInsets.all(18),
+      decoration: BoxDecoration(
+        color: _cardBg,
+        borderRadius: BorderRadius.circular(18),
+        boxShadow: [
+          BoxShadow(
+              color: Colors.black.withValues(alpha: 0.2),
+              blurRadius: 8,
+              offset: const Offset(0, 3))
+        ],
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
           Row(
             children: [
               Container(
-                width: 100,
-                height: 20,
+                padding: const EdgeInsets.all(8),
                 decoration: BoxDecoration(
-                  color: color.withOpacity(0.2),
-                  borderRadius: BorderRadius.circular(4),
-                ),
-                child: FractionallySizedBox(
-                  widthFactor: (value.abs() / 200).clamp(0.0, 1.0),
-                  alignment: Alignment.centerLeft,
-                  child: Container(
-                    decoration: BoxDecoration(
-                        color: color, borderRadius: BorderRadius.circular(4)),
-                  ),
-                ),
+                    color: angleColor.withValues(alpha: 0.2),
+                    borderRadius: BorderRadius.circular(10)),
+                child: Icon(Icons.rotate_90_degrees_ccw,
+                    size: 20, color: angleColor),
               ),
-              const SizedBox(width: 8),
-              SizedBox(
-                width: 70,
-                child: Text(
-                  value.toStringAsFixed(2),
+              const SizedBox(width: 10),
+              const Text('Lean Angle',
                   style: TextStyle(
-                      fontSize: 16, fontWeight: FontWeight.bold, color: color),
-                  textAlign: TextAlign.right,
+                      fontSize: 17,
+                      fontWeight: FontWeight.w700,
+                      color: _textPrimary)),
+              const Spacer(),
+              AnimatedContainer(
+                duration: const Duration(milliseconds: 300),
+                padding:
+                    const EdgeInsets.symmetric(horizontal: 12, vertical: 5),
+                decoration: BoxDecoration(
+                  color: angleColor.withValues(alpha: 0.2),
+                  borderRadius: BorderRadius.circular(20),
+                  border: Border.all(
+                      color: angleColor.withValues(alpha: 0.2), width: 1.5),
                 ),
+                child: Text(angleLabel,
+                    style: TextStyle(
+                        color: angleColor,
+                        fontWeight: FontWeight.w700,
+                        fontSize: 12)),
               ),
+            ],
+          ),
+          const SizedBox(height: 16),
+          Center(
+            child: SizedBox(
+              height: 120,
+              width: double.infinity,
+              child: CustomPaint(
+                  painter:
+                      _LeanAnglePainter(angle: leanAngle, color: angleColor)),
+            ),
+          ),
+          const SizedBox(height: 10),
+          Center(
+              child: Text('${leanAngle.toStringAsFixed(1)}°',
+                  style: TextStyle(
+                      fontSize: 36,
+                      fontWeight: FontWeight.w800,
+                      color: angleColor))),
+          const SizedBox(height: 4),
+          Center(
+            child: Text(
+              leanAngle > 0
+                  ? '← Leaning Left'
+                  : leanAngle < 0
+                      ? 'Leaning Right →'
+                      : 'Upright',
+              style: const TextStyle(fontSize: 13, color: _textSecondary),
+            ),
+          ),
+          const SizedBox(height: 14),
+          Row(
+            mainAxisAlignment: MainAxisAlignment.spaceEvenly,
+            children: [
+              _buildAngleZone('0°-15°', 'Normal', const Color(0xFF2E7D32)),
+              _buildAngleZone('15°-30°', 'Aggress.', const Color(0xFFF57F17)),
+              _buildAngleZone('30°-45°', 'Danger', Colors.deepOrange),
+              _buildAngleZone('45°+', 'Extreme', const Color(0xFFC62828)),
             ],
           ),
         ],
@@ -1548,40 +2413,215 @@ class _Member3PageState extends State<Member3Page>
     );
   }
 
-  Widget _buildTurnRateGraph() {
-    return Card(
-      elevation: 3,
-      child: Padding(
-        padding: const EdgeInsets.all(16),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            const Text('Turn Rate History',
-                style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
-            const SizedBox(height: 12),
-            SizedBox(
-              height: 150,
-              child: CustomPaint(
-                size: Size.infinite,
-                painter: GraphPainter(
-                    data: gyroZHistory,
-                    sharpThreshold: sharpTurnThreshold,
-                    riskyThreshold: riskyTurnThreshold),
+  Widget _buildAngleZone(String range, String label, Color color) {
+    return Column(
+      children: [
+        Container(
+          width: 12,
+          height: 12,
+          decoration: BoxDecoration(
+            color: color,
+            shape: BoxShape.circle,
+            boxShadow: [
+              BoxShadow(color: color.withValues(alpha: 0.2), blurRadius: 4)
+            ],
+          ),
+        ),
+        const SizedBox(height: 3),
+        Text(range,
+            style: const TextStyle(
+                fontSize: 10,
+                fontWeight: FontWeight.w600,
+                color: _textPrimary)),
+        Text(label, style: const TextStyle(fontSize: 9, color: _textSecondary)),
+      ],
+    );
+  }
+
+  Widget _buildGyroscopeCard() {
+    return Container(
+      padding: const EdgeInsets.all(16),
+      decoration: BoxDecoration(
+        color: _cardBg,
+        borderRadius: BorderRadius.circular(16),
+        boxShadow: [
+          BoxShadow(
+              color: Colors.black.withValues(alpha: 0.2),
+              blurRadius: 6,
+              offset: const Offset(0, 2))
+        ],
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              const Icon(Icons.screen_rotation_alt, size: 18, color: _accent),
+              const SizedBox(width: 8),
+              const Text('Gyroscope',
+                  style: TextStyle(
+                      fontSize: 15,
+                      fontWeight: FontWeight.w700,
+                      color: _textPrimary)),
+              const Spacer(),
+              Text('°/s',
+                  style: TextStyle(
+                      fontSize: 12,
+                      color: _textSecondary.withValues(alpha: 0.2))),
+            ],
+          ),
+          const SizedBox(height: 14),
+          _buildDataRow('X (Yaw)', gyroX, const Color(0xFFEF5350)),
+          _buildDataRow('Y (Pitch)', gyroY, const Color(0xFF66BB6A)),
+          _buildDataRow('Z (Roll)', gyroZ, const Color(0xFF42A5F5)),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildAccelerometerCard() {
+    return Container(
+      padding: const EdgeInsets.all(16),
+      decoration: BoxDecoration(
+        color: _cardBg,
+        borderRadius: BorderRadius.circular(16),
+        boxShadow: [
+          BoxShadow(
+              color: Colors.black.withValues(alpha: 0.2),
+              blurRadius: 6,
+              offset: const Offset(0, 2))
+        ],
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              const Icon(Icons.speed, size: 18, color: _accent),
+              const SizedBox(width: 8),
+              const Text('Accelerometer',
+                  style: TextStyle(
+                      fontSize: 15,
+                      fontWeight: FontWeight.w700,
+                      color: _textPrimary)),
+              const Spacer(),
+              Text('m/s²',
+                  style: TextStyle(
+                      fontSize: 12,
+                      color: _textSecondary.withValues(alpha: 0.2))),
+            ],
+          ),
+          const SizedBox(height: 14),
+          _buildDataRow('X (Up)', accelX, const Color(0xFFEF5350)),
+          _buildDataRow('Y (Lat)', accelY, const Color(0xFF66BB6A)),
+          _buildDataRow('Z (Fwd)', accelZ, const Color(0xFF42A5F5)),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildDataRow(String label, double value, Color color) {
+    return Padding(
+      padding: const EdgeInsets.symmetric(vertical: 5),
+      child: Row(
+        children: [
+          SizedBox(
+              width: 75,
+              child: Text(label,
+                  style: const TextStyle(fontSize: 13, color: _textSecondary))),
+          Expanded(
+            child: Container(
+              height: 20,
+              decoration: BoxDecoration(
+                  color: _surfaceBg, borderRadius: BorderRadius.circular(6)),
+              child: FractionallySizedBox(
+                widthFactor: (value.abs() / 200).clamp(0.01, 1.0),
+                alignment: Alignment.centerLeft,
+                child: Container(
+                  decoration: BoxDecoration(
+                    gradient: LinearGradient(
+                        colors: [color.withValues(alpha: 0.2), color]),
+                    borderRadius: BorderRadius.circular(6),
+                  ),
+                ),
               ),
             ),
-            const SizedBox(height: 8),
-            Row(
-              mainAxisAlignment: MainAxisAlignment.center,
-              children: [
-                _buildLegend('Normal', Colors.green),
-                const SizedBox(width: 12),
-                _buildLegend('Sharp', Colors.orange),
-                const SizedBox(width: 12),
-                _buildLegend('Risky', Colors.red),
-              ],
+          ),
+          const SizedBox(width: 8),
+          SizedBox(
+            width: 60,
+            child: Text(
+              value.toStringAsFixed(2),
+              style: TextStyle(
+                  fontSize: 14, fontWeight: FontWeight.w700, color: color),
+              textAlign: TextAlign.right,
             ),
-          ],
-        ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildTurnRateGraph() {
+    return Container(
+      padding: const EdgeInsets.all(18),
+      decoration: BoxDecoration(
+        color: _cardBg,
+        borderRadius: BorderRadius.circular(18),
+        boxShadow: [
+          BoxShadow(
+              color: Colors.black.withValues(alpha: 0.2),
+              blurRadius: 6,
+              offset: const Offset(0, 2))
+        ],
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              Container(
+                padding: const EdgeInsets.all(7),
+                decoration: BoxDecoration(
+                    color: _accent.withValues(alpha: 0.2),
+                    borderRadius: BorderRadius.circular(8)),
+                child: const Icon(Icons.show_chart_rounded,
+                    size: 18, color: _accent),
+              ),
+              const SizedBox(width: 10),
+              const Text('Turn Rate History',
+                  style: TextStyle(
+                      fontSize: 16,
+                      fontWeight: FontWeight.w700,
+                      color: _textPrimary)),
+            ],
+          ),
+          const SizedBox(height: 16),
+          Container(
+            height: 150,
+            decoration: BoxDecoration(
+                color: _surfaceBg, borderRadius: BorderRadius.circular(12)),
+            padding: const EdgeInsets.all(8),
+            child: CustomPaint(
+              size: Size.infinite,
+              painter: GraphPainter(
+                  data: gyroZHistory,
+                  sharpThreshold: sharpTurnThreshold,
+                  riskyThreshold: riskyTurnThreshold),
+            ),
+          ),
+          const SizedBox(height: 12),
+          Row(
+            mainAxisAlignment: MainAxisAlignment.center,
+            children: [
+              _buildLegend('Normal', const Color(0xFF2E7D32)),
+              const SizedBox(width: 16),
+              _buildLegend('Sharp', const Color(0xFFF57F17)),
+              const SizedBox(width: 16),
+              _buildLegend('Risky', const Color(0xFFC62828)),
+            ],
+          ),
+        ],
       ),
     );
   }
@@ -1589,9 +2629,14 @@ class _Member3PageState extends State<Member3Page>
   Widget _buildLegend(String label, Color color) {
     return Row(
       children: [
-        Container(width: 16, height: 3, color: color),
-        const SizedBox(width: 4),
-        Text(label, style: const TextStyle(fontSize: 12)),
+        Container(
+            width: 14,
+            height: 4,
+            decoration: BoxDecoration(
+                color: color, borderRadius: BorderRadius.circular(2))),
+        const SizedBox(width: 5),
+        Text(label,
+            style: const TextStyle(fontSize: 11, color: _textSecondary)),
       ],
     );
   }
@@ -1600,74 +2645,103 @@ class _Member3PageState extends State<Member3Page>
     setState(() {
       sharpTurnCount = 0;
       riskyTurnCount = 0;
+      harshBrakeCount = 0;
       gyroZHistory.clear();
     });
   }
 
-  // ⚠️ NEW: GPS Data Card
   Widget _buildGPSCard() {
     final hasFix = currentLat != 0.0 && currentLng != 0.0;
 
-    return Card(
-      elevation: 3,
-      child: Padding(
-        padding: const EdgeInsets.all(16),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Row(
-              children: [
-                Icon(
-                  hasFix ? Icons.gps_fixed : Icons.gps_not_fixed,
-                  color: hasFix ? Colors.green : Colors.grey,
-                  size: 24,
-                ),
-                const SizedBox(width: 12),
-                const Text(
-                  'GPS Data',
-                  style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
-                ),
-              ],
-            ),
-            const SizedBox(height: 12),
-            _buildGPSRow('Latitude',
-                currentLat != 0.0 ? currentLat.toStringAsFixed(6) : 'No Fix'),
-            _buildGPSRow('Longitude',
-                currentLng != 0.0 ? currentLng.toStringAsFixed(6) : 'No Fix'),
-            _buildGPSRow(
-                'Speed',
-                currentSpeed != 0.0
-                    ? '${currentSpeed.toStringAsFixed(1)} km/h'
-                    : '0.0 km/h'),
-            _buildGPSRow(
-                'Distance', '${totalDistanceKm.toStringAsFixed(2)} km'),
-            _buildGPSRow('Status', hasFix ? '✓ GPS Fix' : '✗ Searching...'),
-          ],
-        ),
+    return Container(
+      padding: const EdgeInsets.all(16),
+      decoration: BoxDecoration(
+        color: _cardBg,
+        borderRadius: BorderRadius.circular(18),
+        boxShadow: [
+          BoxShadow(
+              color: Colors.black.withValues(alpha: 0.2),
+              blurRadius: 6,
+              offset: const Offset(0, 2))
+        ],
       ),
-    );
-  }
-
-// ⚠️ NEW: GPS Row Builder
-  Widget _buildGPSRow(String label, String value) {
-    return Padding(
-      padding: const EdgeInsets.symmetric(vertical: 4),
-      child: Row(
-        mainAxisAlignment: MainAxisAlignment.spaceBetween,
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Text(label, style: const TextStyle(fontSize: 14, color: Colors.grey)),
-          Text(
-            value,
-            style: const TextStyle(
-              fontSize: 14,
-              fontWeight: FontWeight.w600,
-            ),
+          Row(
+            children: [
+              AnimatedContainer(
+                duration: const Duration(milliseconds: 400),
+                padding: const EdgeInsets.all(8),
+                decoration: BoxDecoration(
+                  color: hasFix
+                      ? const Color(0xFF2E7D32).withValues(alpha: 0.2)
+                      : Colors.grey.withValues(alpha: 0.2),
+                  borderRadius: BorderRadius.circular(10),
+                ),
+                child: Icon(hasFix ? Icons.gps_fixed : Icons.gps_not_fixed,
+                    color: hasFix ? const Color(0xFF4CAF50) : Colors.grey,
+                    size: 20),
+              ),
+              const SizedBox(width: 10),
+              const Text('GPS Data',
+                  style: TextStyle(
+                      fontSize: 16,
+                      fontWeight: FontWeight.w700,
+                      color: _textPrimary)),
+              const Spacer(),
+              AnimatedContainer(
+                duration: const Duration(milliseconds: 400),
+                padding:
+                    const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+                decoration: BoxDecoration(
+                  color: hasFix
+                      ? const Color(0xFF2E7D32).withValues(alpha: 0.2)
+                      : Colors.grey.withValues(alpha: 0.2),
+                  borderRadius: BorderRadius.circular(20),
+                ),
+                child: Text(hasFix ? '✓ Fix' : '✗ No Fix',
+                    style: TextStyle(
+                        fontSize: 11,
+                        fontWeight: FontWeight.w600,
+                        color: hasFix ? const Color(0xFF4CAF50) : Colors.grey)),
+              ),
+            ],
           ),
+          const SizedBox(height: 14),
+          _buildGPSRow('Latitude',
+              currentLat != 0.0 ? currentLat.toStringAsFixed(6) : '—'),
+          _buildGPSRow('Longitude',
+              currentLng != 0.0 ? currentLng.toStringAsFixed(6) : '—'),
+          _buildGPSRow(
+              'Speed',
+              currentSpeed != 0.0
+                  ? '${currentSpeed.toStringAsFixed(1)} km/h'
+                  : '0.0 km/h'),
+          _buildGPSRow('Distance', '${totalDistanceKm.toStringAsFixed(2)} km'),
         ],
       ),
     );
   }
-}
+
+  Widget _buildGPSRow(String label, String value) {
+    return Padding(
+      padding: const EdgeInsets.symmetric(vertical: 5),
+      child: Row(
+        mainAxisAlignment: MainAxisAlignment.spaceBetween,
+        children: [
+          Text(label,
+              style: const TextStyle(fontSize: 13, color: _textSecondary)),
+          Text(value,
+              style: const TextStyle(
+                  fontSize: 14,
+                  fontWeight: FontWeight.w600,
+                  color: _textPrimary)),
+        ],
+      ),
+    );
+  }
+} // End of _Member3PageState class
 
 // Journey Details Sheet
 class JourneyDetailsSheet extends StatelessWidget {
@@ -1811,7 +2885,7 @@ class JourneyDetailsSheet extends StatelessWidget {
   }
 }
 
-// Graph Painter (keep existing)
+// Graph Painter
 class GraphPainter extends CustomPainter {
   final List<double> data;
   final double sharpThreshold;
@@ -1829,11 +2903,11 @@ class GraphPainter extends CustomPainter {
 
     // Threshold lines
     final sharpPaint = Paint()
-      ..color = Colors.orange.withOpacity(0.3)
+      ..color = Colors.orange.withValues(alpha: 0.2)
       ..strokeWidth = 2
       ..style = PaintingStyle.stroke;
     final riskyPaint = Paint()
-      ..color = Colors.red.withOpacity(0.3)
+      ..color = Colors.red.withValues(alpha: 0.2)
       ..strokeWidth = 2
       ..style = PaintingStyle.stroke;
 
@@ -1870,5 +2944,124 @@ class GraphPainter extends CustomPainter {
     return oldDelegate.data != data ||
         oldDelegate.sharpThreshold != sharpThreshold ||
         oldDelegate.riskyThreshold != riskyThreshold;
+  }
+}
+
+// Lean Angle Visual Gauge Painter
+class _LeanAnglePainter extends CustomPainter {
+  final double angle; // in degrees, positive = left, negative = right
+  final Color color;
+
+  _LeanAnglePainter({required this.angle, required this.color});
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    final center = Offset(size.width / 2, size.height * 0.8);
+    final radius = size.height * 0.7;
+
+    // Draw zone arcs (background)
+    _drawZoneArc(
+        canvas, center, radius, -45, -30, Colors.red.withValues(alpha: 0.2));
+    _drawZoneArc(canvas, center, radius, -30, -15,
+        Colors.deepOrange.withValues(alpha: 0.2));
+    _drawZoneArc(
+        canvas, center, radius, -15, 0, Colors.green.withValues(alpha: 0.2));
+    _drawZoneArc(
+        canvas, center, radius, 0, 15, Colors.green.withValues(alpha: 0.2));
+    _drawZoneArc(canvas, center, radius, 15, 30,
+        Colors.deepOrange.withValues(alpha: 0.2));
+    _drawZoneArc(
+        canvas, center, radius, 30, 45, Colors.red.withValues(alpha: 0.2));
+
+    // Draw tick marks
+    for (int deg = -45; deg <= 45; deg += 15) {
+      final rad = (deg - 90) * pi / 180;
+      final innerR = radius * 0.85;
+      final outerR = radius;
+      final start =
+          Offset(center.dx + innerR * cos(rad), center.dy + innerR * sin(rad));
+      final end =
+          Offset(center.dx + outerR * cos(rad), center.dy + outerR * sin(rad));
+
+      final tickPaint = Paint()
+        ..color = deg == 0 ? Colors.white : Colors.grey
+        ..strokeWidth = deg == 0 ? 3 : 1.5;
+      canvas.drawLine(start, end, tickPaint);
+
+      // Tick labels
+      final labelR = radius * 0.75;
+      final labelOffset =
+          Offset(center.dx + labelR * cos(rad), center.dy + labelR * sin(rad));
+      final textSpan = TextSpan(
+        text: '${deg.abs()}°',
+        style: TextStyle(
+          color: Colors.grey[500],
+          fontSize: 10,
+          fontWeight: deg == 0 ? FontWeight.bold : FontWeight.normal,
+        ),
+      );
+      final tp = TextPainter(
+          text: textSpan,
+          textAlign: TextAlign.center,
+          textDirection: ui.TextDirection.ltr);
+      tp.layout();
+      canvas.save();
+      canvas.translate(
+          labelOffset.dx - tp.width / 2, labelOffset.dy - tp.height / 2);
+      tp.paint(canvas, Offset.zero);
+      canvas.restore();
+    }
+
+    // Draw needle (the lean indicator)
+    final clampedAngle = angle.clamp(-60.0, 60.0);
+    final needleRad = (clampedAngle - 90) * pi / 180;
+    final needleEnd = Offset(
+      center.dx + (radius * 0.82) * cos(needleRad),
+      center.dy + (radius * 0.82) * sin(needleRad),
+    );
+
+    // Needle shadow
+    canvas.drawLine(
+      center,
+      needleEnd,
+      Paint()
+        ..color = color.withValues(alpha: 0.2)
+        ..strokeWidth = 6
+        ..strokeCap = StrokeCap.round,
+    );
+    // Needle
+    canvas.drawLine(
+      center,
+      needleEnd,
+      Paint()
+        ..color = color
+        ..strokeWidth = 3
+        ..strokeCap = StrokeCap.round,
+    );
+
+    // Center dot
+    canvas.drawCircle(center, 6, Paint()..color = color);
+    canvas.drawCircle(center, 3, Paint()..color = Colors.white);
+  }
+
+  void _drawZoneArc(Canvas canvas, Offset center, double radius,
+      double startDeg, double endDeg, Color color) {
+    final rect = Rect.fromCircle(center: center, radius: radius);
+    final startRad = (startDeg - 90) * pi / 180;
+    final sweepRad = (endDeg - startDeg) * pi / 180;
+    canvas.drawArc(
+      rect,
+      startRad,
+      sweepRad,
+      true,
+      Paint()
+        ..color = color
+        ..style = PaintingStyle.fill,
+    );
+  }
+
+  @override
+  bool shouldRepaint(covariant _LeanAnglePainter oldDelegate) {
+    return oldDelegate.angle != angle || oldDelegate.color != color;
   }
 }
