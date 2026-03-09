@@ -50,6 +50,9 @@ dependencies:
   screenshot: ^3.0.0
   share_plus: ^7.2.1
 
+  pdf: ^3.11.1 # required for creating PDF documents
+  printing: ^5.13.3 # required for preview/share/print PDF
+
 dev_dependencies:
   flutter_test:
     sdk: flutter

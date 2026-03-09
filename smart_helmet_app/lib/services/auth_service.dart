@@ -3,6 +3,7 @@ import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:google_sign_in/google_sign_in.dart';
+import 'package:smart_helmet_app/services/auth_service.dart';
 
 class AuthService with ChangeNotifier {
   final FirebaseAuth _auth = FirebaseAuth.instance;
@@ -16,10 +17,15 @@ class AuthService with ChangeNotifier {
   // inside lib/services/auth_service.dart
   User? get currentUser => _auth.currentUser;
 
-  // Add this line:
-  String? get userId => _auth.currentUser?.uid;
+
+  String? get userId => currentUser?.uid;
+
+  bool get isLoggedIn => currentUser != null;
 
   // Email/Password Sign In
+
+  // ── Email/Password Sign In ───────────────────────────────────────────────
+
 
   Future<String?> signIn(String email, String password) async {
     try {
