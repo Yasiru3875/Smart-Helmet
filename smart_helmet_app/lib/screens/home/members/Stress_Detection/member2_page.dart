@@ -18,9 +18,13 @@ import 'weekly_stress_report.dart'; // ← NEW import
 import 'package:smart_helmet_app/providers/sensor_data_provider.dart';
 
 import 'package:smart_helmet_app/providers/ride_session_provider.dart';
+
+import '../../../../services/auth_service.dart';
+
 import 'package:smart_helmet_app/providers/emotion_provider.dart';
 // If you have auth:
 // import '../../../../services/auth_service.dart';
+
 
 class Member2Page extends StatefulWidget {
   const Member2Page({super.key});
@@ -661,6 +665,7 @@ class _Member2PageState extends State<Member2Page> {
 
     try {
       final auth = Provider.of<AuthService>(context, listen: false);
+
       final userId = auth.userId;
 
       if (userId == null) {
@@ -670,6 +675,7 @@ class _Member2PageState extends State<Member2Page> {
             const SnackBar(content: Text("Please log in to save data")),
           );
         }
+
         return;
       }
 

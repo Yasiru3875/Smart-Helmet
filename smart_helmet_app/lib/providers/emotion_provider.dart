@@ -46,6 +46,7 @@ class EmotionProvider with ChangeNotifier {
       emoji: emoji,
       color: color,
     );
+
     notifyListeners();
   }
 
@@ -78,4 +79,6 @@ class EmotionProvider with ChangeNotifier {
         EmotionState(emotion: "No Signal", emoji: "📡", color: Colors.grey);
     notifyListeners();
   }
+
 }
+

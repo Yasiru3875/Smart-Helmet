@@ -9,7 +9,8 @@ import 'package:http/http.dart' as http;
 import 'dart:convert';
 import 'package:provider/provider.dart';
 import 'package:smart_helmet_app/providers/sensor_data_provider.dart';
-import 'package:smart_helmet_app/providers/ride_session_provider.dart'; // ← NEW
+import 'package:smart_helmet_app/providers/ride_session_provider.dart';
+import '../../../../services/auth_service.dart'; // Added
 import 'package:smart_helmet_app/screens/home/members/Danger_Zone/member4_page.dart';
 
 const String apiKey = 'AIzaSyBbZVI_sO637CROKwc3hjMOB4ZmsL12ikw';
@@ -258,12 +259,13 @@ class _HomeDashboardState extends State<HomeDashboard> {
       return;
     }
 
-    final rideProvider =
-        Provider.of<RideSessionProvider>(context, listen: false);
+    final auth = Provider.of<AuthService>(context, listen: false);
+    final rideProvider = Provider.of<RideSessionProvider>(context, listen: false);
 
     rideProvider.startNewRide(
       currentPosition: _currentPosition!,
       destination: _destinationController.text.trim(),
+      userId: auth.userId ?? 'unknown_user', // Pass real UID
     );
 
     // Proceed with journey start (switch tab, etc.)

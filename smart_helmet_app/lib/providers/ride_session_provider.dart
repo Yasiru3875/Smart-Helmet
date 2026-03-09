@@ -25,6 +25,7 @@ class RideSessionProvider with ChangeNotifier {
   Future<void> startNewRide({
     required Position currentPosition,
     required String destination,
+    required String userId, // Added userId parameter
   }) async {
     final firestore = FirebaseFirestore.instance;
     final rideRef = firestore.collection('rides').doc();
@@ -40,7 +41,7 @@ class RideSessionProvider with ChangeNotifier {
 
     await rideRef.set({
       'rideId': _currentRideId,
-      'userId': 'abc123xyz', // ← replace with real auth user ID
+      'userId': userId, // Use dynamic userId
       'startLocation': _startLocation,
       'startTime': FieldValue.serverTimestamp(),
       'destination': destination,

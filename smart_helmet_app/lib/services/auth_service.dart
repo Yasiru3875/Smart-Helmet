@@ -14,7 +14,9 @@ class AuthService with ChangeNotifier {
 
   Stream<User?> get authStateChanges => _auth.authStateChanges();
 
+  // inside lib/services/auth_service.dart
   User? get currentUser => _auth.currentUser;
+
 
   String? get userId => currentUser?.uid;
 
@@ -23,6 +25,7 @@ class AuthService with ChangeNotifier {
   // Email/Password Sign In
 
   // ── Email/Password Sign In ───────────────────────────────────────────────
+
 
   Future<String?> signIn(String email, String password) async {
     try {
