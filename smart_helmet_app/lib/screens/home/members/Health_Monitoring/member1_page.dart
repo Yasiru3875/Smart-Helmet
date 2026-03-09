@@ -30,7 +30,8 @@ class Member1Page extends StatefulWidget {
   State<Member1Page> createState() => _Member1PageState();
 }
 
-class _Member1PageState extends State<Member1Page> with SingleTickerProviderStateMixin {
+class _Member1PageState extends State<Member1Page>
+    with SingleTickerProviderStateMixin {
   late TabController _tabController;
   static const String deviceName = "SmartWatch_ESP32";
 
@@ -67,7 +68,7 @@ class _Member1PageState extends State<Member1Page> with SingleTickerProviderStat
   // Firestore
   final FirebaseFirestore _firestore = FirebaseFirestore.instance;
   bool _isSaving = false;
-  
+
   // Historical summary for TODAY
   double _todayAvgHR = 0;
   double _todayAvgTemp = 0;
@@ -80,7 +81,6 @@ class _Member1PageState extends State<Member1Page> with SingleTickerProviderStat
     _tabController = TabController(length: 2, vsync: this);
     _loadModel();
     _startLocationTracking();
-
 
     // Important: delay connection until first frame is rendered
     WidgetsBinding.instance.addPostFrameCallback((_) {
@@ -95,9 +95,8 @@ class _Member1PageState extends State<Member1Page> with SingleTickerProviderStat
           _autoConnect(isRetry: true);
         }
       });
-      
-      _initTodaySummaryListener();
 
+      _initTodaySummaryListener();
     });
   }
 
@@ -196,7 +195,7 @@ class _Member1PageState extends State<Member1Page> with SingleTickerProviderStat
 
   void _subscribeToData() {
     final btManager = context.read<BluetoothManager>();
-    
+
     // Flexible device discovery
     String? deviceToUse;
     if (btManager.isConnected(deviceName)) {
@@ -206,8 +205,8 @@ class _Member1PageState extends State<Member1Page> with SingleTickerProviderStat
       debugPrint("Member1Page: Checking connected devices: $connectedDevices");
       for (final dev in connectedDevices) {
         // Look for any ESP32, SmartWatch, or Helmet device
-        if (dev.toLowerCase().contains('esp') || 
-            dev.toLowerCase().contains('watch') || 
+        if (dev.toLowerCase().contains('esp') ||
+            dev.toLowerCase().contains('watch') ||
             dev.toLowerCase().contains('helmet') ||
             dev.toLowerCase().contains('hr')) {
           deviceToUse = dev;
@@ -221,7 +220,8 @@ class _Member1PageState extends State<Member1Page> with SingleTickerProviderStat
     }
 
     if (deviceToUse == null) {
-      debugPrint("Member1Page: No suitable connected device found to subscribe");
+      debugPrint(
+          "Member1Page: No suitable connected device found to subscribe");
       return;
     }
 
@@ -248,9 +248,7 @@ class _Member1PageState extends State<Member1Page> with SingleTickerProviderStat
       },
       onError: (e) {
         if (mounted) {
-
           setState(() => errorMessage = "Stream error ($deviceToUse): $e");
-
         }
       },
       onDone: () {
@@ -400,21 +398,21 @@ class _Member1PageState extends State<Member1Page> with SingleTickerProviderStat
 
       _predictWithTFLite(hr, temp);
       // Real-time save: ONLY when a ride is active
-      final rideProvider = Provider.of<RideSessionProvider>(context, listen: false);
+      final rideProvider =
+          Provider.of<RideSessionProvider>(context, listen: false);
       if (rideProvider.isRideActive) {
+        // FIXED: These variables must be at CLASS level (moved from inside method)
+        // Add these two lines at the TOP of _Member1PageState class:
+        // DateTime? _lastSavedTime;
+        // final Duration _saveInterval = const Duration(seconds: 10);
 
-      // FIXED: These variables must be at CLASS level (moved from inside method)
-      // Add these two lines at the TOP of _Member1PageState class:
-      // DateTime? _lastSavedTime;
-      // final Duration _saveInterval = const Duration(seconds: 10);
-
-      if (hr > 0 && temp > 0) {
-
-        final now = DateTime.now();
-        if (_lastSavedTime == null ||
-            now.difference(_lastSavedTime!) >= _saveInterval) {
-          _saveToFirestore(hr, temp);
-          _lastSavedTime = now;
+        if (hr > 0 && temp > 0) {
+          final now = DateTime.now();
+          if (_lastSavedTime == null ||
+              now.difference(_lastSavedTime!) >= _saveInterval) {
+            _saveToFirestore(hr, temp);
+            _lastSavedTime = now;
+          }
         }
       }
     } catch (e) {
@@ -445,20 +443,19 @@ class _Member1PageState extends State<Member1Page> with SingleTickerProviderStat
         "timestamp": isoTimestamp,
         "heartRate": hr,
         "heart_rate": hr, // Alias 1
-        "bpm": hr,        // Alias 2
+        "bpm": hr, // Alias 2
         "bodyTemperature": temp,
         "body_temperature": temp, // Alias 1
-        "temp": temp,             // Alias 2
+        "temp": temp, // Alias 2
         "riskLevel": riskLevel,
         "riskColor":
             "#${riskColor.value.toRadixString(16).padLeft(8, '0').substring(2)}",
         "userId": userId,
-        "uid": userId,     // Alias for UID
+        "uid": userId, // Alias for UID
         "deviceName": deviceName,
         "createdAt": FieldValue.serverTimestamp(),
         "location": const GeoPoint(7.2000, 79.8730),
       };
-
 
       // Add ride metadata ONLY if a ride is active
       if (rideProvider.isRideActive && rideProvider.currentRideId != null) {
@@ -470,15 +467,17 @@ class _Member1PageState extends State<Member1Page> with SingleTickerProviderStat
 
       // Real-time location of THIS reading
       if (_currentPosition != null) {
-        data["currentLocation"] = GeoPoint(_currentPosition!.latitude, _currentPosition!.longitude);
+        data["currentLocation"] =
+            GeoPoint(_currentPosition!.latitude, _currentPosition!.longitude);
       }
 
       await _firestore.collection("health_readings").add(data);
       debugPrint("✅ Health reading saved: HR=$hr, Temp=$temp (User: $userId)");
-      
+
       // Real-time feedback for the user
       if (mounted) {
-        final sensorProvider = Provider.of<SensorDataProvider>(context, listen: false);
+        final sensorProvider =
+            Provider.of<SensorDataProvider>(context, listen: false);
         // We can use a temporary flag or just assume success if no error
       }
     } catch (e) {
@@ -709,7 +708,6 @@ class _Member1PageState extends State<Member1Page> with SingleTickerProviderStat
 
   @override
   Widget build(BuildContext context) {
-
     final btManager = context.watch<BluetoothManager>();
     final isConnected = btManager.isConnected(deviceName);
 
@@ -717,7 +715,6 @@ class _Member1PageState extends State<Member1Page> with SingleTickerProviderStat
     final emotionProvider = context.watch<EmotionProvider>();
     final currentEmotion = emotionProvider.state.emotion;
     final currentEmoji = emotionProvider.state.emoji;
-
 
     return Scaffold(
       backgroundColor: const Color(0xFFF2F2F7),
@@ -730,10 +727,13 @@ class _Member1PageState extends State<Member1Page> with SingleTickerProviderStat
           labelColor: Colors.white,
           unselectedLabelColor: const Color(0xFFB9B9B9),
           indicatorColor: Colors.white,
-          labelStyle: const TextStyle(fontWeight: FontWeight.bold, fontSize: 13),
+          labelStyle:
+              const TextStyle(fontWeight: FontWeight.bold, fontSize: 13),
           tabs: const [
             Tab(icon: Icon(Icons.sensors), text: "Live Monitoring"),
-            Tab(icon: Icon(Icons.analytics_outlined), text: "Vital health report"),
+            Tab(
+                icon: Icon(Icons.analytics_outlined),
+                text: "Vital health report"),
           ],
         ),
       ),
@@ -769,36 +769,40 @@ class _Member1PageState extends State<Member1Page> with SingleTickerProviderStat
                 Row(
                   children: [
                     Expanded(
-                  child: MedicalVitalCard(
-                    title: "HEART RATE",
-                    value: heartRate > 0 ? heartRate.toInt().toString() : "--",
-                    unit: "BPM",
-                    percentage: heartRate.toInt(),
-                    status: _getHRStatus(heartRate),
-                    statusColor: _getStatusColor(_getHRStatus(heartRate)),
-                    iconWidget: AnimatedHeartIcon(
-                      color: Colors.red,
-                      percentage: heartRate.toInt(),
+                      child: MedicalVitalCard(
+                        title: "HEART RATE",
+                        value:
+                            heartRate > 0 ? heartRate.toInt().toString() : "--",
+                        unit: "BPM",
+                        percentage: heartRate.toInt(),
+                        status: _getHRStatus(heartRate),
+                        statusColor: _getStatusColor(_getHRStatus(heartRate)),
+                        iconWidget: AnimatedHeartIcon(
+                          color: Colors.red,
+                          percentage: heartRate.toInt(),
+                        ),
+                        description: "Cardiovascular frequency in real-time.",
+                      ),
                     ),
-                    description: "Cardiovascular frequency in real-time.",
-                  ),
-                ),
-                const SizedBox(width: 12),
-                Expanded(
-                  child: MedicalVitalCard(
-                    title: "BODY TEMP",
-                    value: bodyTemperature > 0 ? bodyTemperature.toStringAsFixed(1) : "--",
-                    unit: "°C",
-                    percentage: (bodyTemperature * 2.5).toInt(),
-                    status: _getTempStatus(bodyTemperature),
-                    statusColor: _getStatusColor(_getTempStatus(bodyTemperature)),
-                    iconWidget: AnimatedTempIcon(
-                      color: const Color(0xFFF89E0A),
-                      percentage: (bodyTemperature * 2.5).toInt(),
+                    const SizedBox(width: 12),
+                    Expanded(
+                      child: MedicalVitalCard(
+                        title: "BODY TEMP",
+                        value: bodyTemperature > 0
+                            ? bodyTemperature.toStringAsFixed(1)
+                            : "--",
+                        unit: "°C",
+                        percentage: (bodyTemperature * 2.5).toInt(),
+                        status: _getTempStatus(bodyTemperature),
+                        statusColor:
+                            _getStatusColor(_getTempStatus(bodyTemperature)),
+                        iconWidget: AnimatedTempIcon(
+                          color: const Color(0xFFF89E0A),
+                          percentage: (bodyTemperature * 2.5).toInt(),
+                        ),
+                        description: "Core biological temperature stability.",
+                      ),
                     ),
-                    description: "Core biological temperature stability.",
-                  ),
-                ),
                   ],
                 ),
 
@@ -811,14 +815,12 @@ class _Member1PageState extends State<Member1Page> with SingleTickerProviderStat
                 const SizedBox(height: 24),
                 _buildEmotionalState(isConnected),
                 const SizedBox(height: 24),
-
-
                 const SizedBox(height: 20),
-                _buildRiskAssessment(),
+                //_buildRiskAssessment(),
                 const SizedBox(height: 20),
 
                 // Updated: now uses real emotion from provider
-                _buildEmotionalState(isConnected, currentEmotion, currentEmoji),
+                _buildEmotionalState(isConnected),
 
                 const SizedBox(height: 20),
 
@@ -834,9 +836,11 @@ class _Member1PageState extends State<Member1Page> with SingleTickerProviderStat
             right: 24,
             child: Card(
               color: Colors.black87,
-              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+              shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(12)),
               child: Padding(
-                padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+                padding:
+                    const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
                 child: Row(
                   mainAxisSize: MainAxisSize.min,
                   children: [
@@ -854,7 +858,6 @@ class _Member1PageState extends State<Member1Page> with SingleTickerProviderStat
                       style: TextStyle(color: Colors.white, fontSize: 13),
                     ),
                   ],
-
                 ),
               ),
             ),
@@ -877,7 +880,8 @@ class _Member1PageState extends State<Member1Page> with SingleTickerProviderStat
           ),
         ],
         border: Border.all(
-          color: isConnected ? const Color(0xFFE5E7EB) : const Color(0xFFFDE68A),
+          color:
+              isConnected ? const Color(0xFFE5E7EB) : const Color(0xFFFDE68A),
           width: 1,
         ),
       ),
@@ -885,7 +889,8 @@ class _Member1PageState extends State<Member1Page> with SingleTickerProviderStat
         children: [
           Icon(
             isConnected ? Icons.sensors : Icons.sensors_off,
-            color: isConnected ? const Color(0xFF34C759) : const Color(0xFFF59E0B),
+            color:
+                isConnected ? const Color(0xFF34C759) : const Color(0xFFF59E0B),
             size: 18,
           ),
           const SizedBox(width: 12),
@@ -1068,52 +1073,53 @@ class _Member1PageState extends State<Member1Page> with SingleTickerProviderStat
 
   int _calculateHealthScore() {
     int score = 100;
-    
+
     // Temperature impact
     if (bodyTemperature > 37.5 || bodyTemperature < 36.0) {
       score -= 15;
     } else if (bodyTemperature > 38.5 || bodyTemperature < 35.0) {
       score -= 30;
     }
-  Widget _buildEmotionalState(bool isConnected, String emotion, String emoji) {
-    return Card(
-      elevation: 2,
-      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
-      child: Padding(
-        padding: const EdgeInsets.all(20),
-        child: Column(
-          children: [
-            const Text(
-              "Emotional State",
-              style: TextStyle(fontSize: 16, fontWeight: FontWeight.w600),
-            ),
-            const SizedBox(height: 16),
-            Text(
-              emoji,
-              style: const TextStyle(fontSize: 64),
-            ),
-            const SizedBox(height: 12),
-            Text(
-              emotion,
-              style: const TextStyle(
-                fontSize: 20,
-                fontWeight: FontWeight.w600,
-                color: Colors.indigo,
+    Widget _buildEmotionalState(
+        bool isConnected, String emotion, String emoji) {
+      return Card(
+        elevation: 2,
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+        child: Padding(
+          padding: const EdgeInsets.all(20),
+          child: Column(
+            children: [
+              const Text(
+                "Emotional State",
+                style: TextStyle(fontSize: 16, fontWeight: FontWeight.w600),
               ),
-            ),
-            const SizedBox(height: 8),
-            Text(
-              isConnected
-                  ? "Analyzing real-time signals..."
-                  : "Connect EEG device to detect emotional state",
-              style: const TextStyle(fontSize: 12, color: Colors.black38),
-              textAlign: TextAlign.center,
-            ),
-          ],
+              const SizedBox(height: 16),
+              Text(
+                emoji,
+                style: const TextStyle(fontSize: 64),
+              ),
+              const SizedBox(height: 12),
+              Text(
+                emotion,
+                style: const TextStyle(
+                  fontSize: 20,
+                  fontWeight: FontWeight.w600,
+                  color: Colors.indigo,
+                ),
+              ),
+              const SizedBox(height: 8),
+              Text(
+                isConnected
+                    ? "Analyzing real-time signals..."
+                    : "Connect EEG device to detect emotional state",
+                style: const TextStyle(fontSize: 12, color: Colors.black38),
+                textAlign: TextAlign.center,
+              ),
+            ],
+          ),
         ),
-      ),
-    );
-  }
+      );
+    }
 
     // Risk level impact
     if (riskLevel.toLowerCase().contains('medium')) score -= 20;
@@ -1124,8 +1130,16 @@ class _Member1PageState extends State<Member1Page> with SingleTickerProviderStat
 
   Widget _buildOverallHealthStatusCard() {
     final int score = _calculateHealthScore();
-    final String statusLabel = score >= 85 ? "OPTIMAL" : score >= 60 ? "STABLE" : "CAUTION";
-    final Color statusColor = score >= 85 ? const Color(0xFF34C759) : score >= 60 ? const Color(0xFF007AFF) : const Color(0xFFFF3B30);
+    final String statusLabel = score >= 85
+        ? "OPTIMAL"
+        : score >= 60
+            ? "STABLE"
+            : "CAUTION";
+    final Color statusColor = score >= 85
+        ? const Color(0xFF34C759)
+        : score >= 60
+            ? const Color(0xFF007AFF)
+            : const Color(0xFFFF3B30);
 
     return Container(
       width: double.infinity,
@@ -1133,7 +1147,8 @@ class _Member1PageState extends State<Member1Page> with SingleTickerProviderStat
       decoration: BoxDecoration(
         color: const Color(0xFF065aa7).withOpacity(0.05),
         borderRadius: BorderRadius.circular(30),
-        border: Border.all(color: const Color(0xFF065aa7).withOpacity(0.12), width: 1.5),
+        border: Border.all(
+            color: const Color(0xFF065aa7).withOpacity(0.12), width: 1.5),
       ),
       child: Column(
         children: [
@@ -1163,7 +1178,8 @@ class _Member1PageState extends State<Member1Page> with SingleTickerProviderStat
                 ],
               ),
               Container(
-                padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 6),
+                padding:
+                    const EdgeInsets.symmetric(horizontal: 14, vertical: 6),
                 decoration: BoxDecoration(
                   color: statusColor.withOpacity(0.15),
                   borderRadius: BorderRadius.circular(100),
@@ -1261,7 +1277,8 @@ class _Member1PageState extends State<Member1Page> with SingleTickerProviderStat
       recommendations.add({
         "icon": Icons.air_rounded,
         "title": "Breathing Exercise",
-        "tip": "High heart rate detected. Try deep breathing for 2 minutes to lower stress.",
+        "tip":
+            "High heart rate detected. Try deep breathing for 2 minutes to lower stress.",
         "color": Colors.blue,
       });
     }
@@ -1270,7 +1287,8 @@ class _Member1PageState extends State<Member1Page> with SingleTickerProviderStat
       recommendations.add({
         "icon": Icons.local_drink_rounded,
         "title": "Hydration Alert",
-        "tip": "Body temp is elevated. Drink chilled water to maintain regulation.",
+        "tip":
+            "Body temp is elevated. Drink chilled water to maintain regulation.",
         "color": Colors.orange,
       });
     }
@@ -1279,7 +1297,8 @@ class _Member1PageState extends State<Member1Page> with SingleTickerProviderStat
       recommendations.add({
         "icon": Icons.hotel_rounded,
         "title": "Rest Suggested",
-        "tip": "Biometrics are showing instability. Stop your journey and take a 15-min break.",
+        "tip":
+            "Biometrics are showing instability. Stop your journey and take a 15-min break.",
         "color": Colors.red,
       });
     }
@@ -1379,7 +1398,7 @@ class _Member1PageState extends State<Member1Page> with SingleTickerProviderStat
   void _initTodaySummaryListener() {
     final rawId = context.read<AuthService>().userId;
     if (rawId == null) return;
-    
+
     final now = DateTime.now();
     final startOfDay = DateTime(now.year, now.month, now.day);
     final endOfDay = DateTime(now.year, now.month, now.day, 23, 59, 59);
@@ -1396,7 +1415,7 @@ class _Member1PageState extends State<Member1Page> with SingleTickerProviderStat
       final todayDocs = snapshot.docs.where((doc) {
         final data = doc.data();
         DateTime? ts;
-        
+
         // Robust timestamp parsing
         final dynamic createdAt = data['createdAt'];
         if (createdAt != null) {
@@ -1406,16 +1425,16 @@ class _Member1PageState extends State<Member1Page> with SingleTickerProviderStat
             ts = DateTime.tryParse(createdAt);
           }
         }
-        
+
         if (ts == null && data['timestamp'] != null) {
           ts = DateTime.tryParse(data['timestamp'].toString());
         }
-        
+
         if (ts == null) return false;
-        
+
         // Check if the timestamp belongs to TODAY
-        return ts.isAfter(startOfDay.subtract(const Duration(seconds: 1))) && 
-               ts.isBefore(endOfDay.add(const Duration(seconds: 1)));
+        return ts.isAfter(startOfDay.subtract(const Duration(seconds: 1))) &&
+            ts.isBefore(endOfDay.add(const Duration(seconds: 1)));
       }).toList();
 
       if (todayDocs.isEmpty) {
@@ -1433,17 +1452,19 @@ class _Member1PageState extends State<Member1Page> with SingleTickerProviderStat
 
       for (var doc in todayDocs) {
         final data = doc.data();
-        
+
         // Robust Heart Rate parsing (check all aliases)
-        double hr = (data['heartRate'] as num?)?.toDouble() ?? 
-                    (data['heart_rate'] as num?)?.toDouble() ?? 
-                    (data['bpm'] as num?)?.toDouble() ?? 0.0;
-        
+        double hr = (data['heartRate'] as num?)?.toDouble() ??
+            (data['heart_rate'] as num?)?.toDouble() ??
+            (data['bpm'] as num?)?.toDouble() ??
+            0.0;
+
         // Robust Temperature parsing (check all aliases)
-        double temp = (data['bodyTemperature'] as num?)?.toDouble() ?? 
-                      (data['body_temperature'] as num?)?.toDouble() ?? 
-                      (data['temp'] as num?)?.toDouble() ?? 0.0;
-                      
+        double temp = (data['bodyTemperature'] as num?)?.toDouble() ??
+            (data['body_temperature'] as num?)?.toDouble() ??
+            (data['temp'] as num?)?.toDouble() ??
+            0.0;
+
         if (hr > 0) {
           sumHR += hr;
           hrCount++;
@@ -1473,7 +1494,8 @@ class _Member1PageState extends State<Member1Page> with SingleTickerProviderStat
       decoration: BoxDecoration(
         color: Colors.white,
         borderRadius: BorderRadius.circular(24),
-        border: Border.all(color: const Color(0xFF2D62ED).withOpacity(0.1), width: 1.5),
+        border: Border.all(
+            color: const Color(0xFF2D62ED).withOpacity(0.1), width: 1.5),
         boxShadow: [
           BoxShadow(
             color: Colors.black.withOpacity(0.03),
@@ -1486,38 +1508,58 @@ class _Member1PageState extends State<Member1Page> with SingleTickerProviderStat
         onTap: () {
           _tabController.animateTo(1);
         },
-        contentPadding: const EdgeInsets.symmetric(horizontal: 20, vertical: 12),
+        contentPadding:
+            const EdgeInsets.symmetric(horizontal: 20, vertical: 12),
         leading: Container(
           padding: const EdgeInsets.all(12),
           decoration: BoxDecoration(
             color: const Color(0xFF2D62ED).withOpacity(0.1),
             shape: BoxShape.circle,
           ),
-          child: const Icon(Icons.history_toggle_off_rounded, color: Color(0xFF2D62ED), size: 28),
+          child: const Icon(Icons.history_toggle_off_rounded,
+              color: Color(0xFF2D62ED), size: 28),
         ),
         title: const Text(
           "Today's Average Log",
-          style: TextStyle(fontSize: 14, fontWeight: FontWeight.w600, color: Color(0xFF8E8E93)),
+          style: TextStyle(
+              fontSize: 14,
+              fontWeight: FontWeight.w600,
+              color: Color(0xFF8E8E93)),
         ),
         subtitle: Padding(
           padding: const EdgeInsets.only(top: 4),
           child: Row(
             children: [
               Text(
-                _isLoadingToday ? "Calculating..." : "${_todayAvgHR.toInt()} BPM",
-                style: const TextStyle(fontSize: 18, fontWeight: FontWeight.w900, color: Color(0xFF1C1C1E)),
+                _isLoadingToday
+                    ? "Calculating..."
+                    : "${_todayAvgHR.toInt()} BPM",
+                style: const TextStyle(
+                    fontSize: 18,
+                    fontWeight: FontWeight.w900,
+                    color: Color(0xFF1C1C1E)),
               ),
               const SizedBox(width: 12),
-              Container(width: 4, height: 4, decoration: const BoxDecoration(color: Colors.grey, shape: BoxShape.circle)),
+              Container(
+                  width: 4,
+                  height: 4,
+                  decoration: const BoxDecoration(
+                      color: Colors.grey, shape: BoxShape.circle)),
               const SizedBox(width: 12),
               Text(
-                _isLoadingToday ? "..." : "${_todayAvgTemp.toStringAsFixed(1)}°C",
-                style: const TextStyle(fontSize: 18, fontWeight: FontWeight.w900, color: Color(0xFF2D62ED)),
+                _isLoadingToday
+                    ? "..."
+                    : "${_todayAvgTemp.toStringAsFixed(1)}°C",
+                style: const TextStyle(
+                    fontSize: 18,
+                    fontWeight: FontWeight.w900,
+                    color: Color(0xFF2D62ED)),
               ),
             ],
           ),
         ),
-        trailing: const Icon(Icons.arrow_forward_ios_rounded, color: Color(0xFF2D62ED), size: 16),
+        trailing: const Icon(Icons.arrow_forward_ios_rounded,
+            color: Color(0xFF2D62ED), size: 16),
       ),
     );
   }
@@ -1561,7 +1603,8 @@ class _Member1PageState extends State<Member1Page> with SingleTickerProviderStat
       decoration: BoxDecoration(
         color: Colors.white.withOpacity(0.9),
         borderRadius: BorderRadius.circular(24),
-        border: Border.all(color: const Color(0xFF2D62ED).withOpacity(0.2), width: 1.5),
+        border: Border.all(
+            color: const Color(0xFF2D62ED).withOpacity(0.2), width: 1.5),
         boxShadow: [
           BoxShadow(
             color: const Color(0xFF2D62ED).withOpacity(0.06),
@@ -1601,7 +1644,8 @@ class _Member1PageState extends State<Member1Page> with SingleTickerProviderStat
                   border: Border.all(color: Colors.white, width: 2),
                 ),
                 child: Center(
-                  child: Text(frustrationEmoji, style: const TextStyle(fontSize: 28)),
+                  child: Text(frustrationEmoji,
+                      style: const TextStyle(fontSize: 28)),
                 ),
               ),
               const SizedBox(width: 16),
@@ -1698,16 +1742,21 @@ class _Member1PageState extends State<Member1Page> with SingleTickerProviderStat
                   ),
                   Text(
                     "High-fidelity sensor feed",
-                    style: TextStyle(fontSize: 12, color: Colors.grey, fontWeight: FontWeight.w500),
+                    style: TextStyle(
+                        fontSize: 12,
+                        color: Colors.grey,
+                        fontWeight: FontWeight.w500),
                   ),
                 ],
               ),
               Container(
-                padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
+                padding:
+                    const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
                 decoration: BoxDecoration(
                     color: const Color(0xFF34C759).withOpacity(0.1),
                     borderRadius: BorderRadius.circular(8),
-                    border: Border.all(color: const Color(0xFF34C759).withOpacity(0.3))),
+                    border: Border.all(
+                        color: const Color(0xFF34C759).withOpacity(0.3))),
                 child: Row(
                   children: [
                     Container(
@@ -1740,7 +1789,9 @@ class _Member1PageState extends State<Member1Page> with SingleTickerProviderStat
                             size: 48, color: Colors.grey.shade200),
                         const SizedBox(height: 12),
                         Text("Waiting for medical signal...",
-                            style: TextStyle(color: Colors.grey.shade400, fontWeight: FontWeight.w500)),
+                            style: TextStyle(
+                                color: Colors.grey.shade400,
+                                fontWeight: FontWeight.w500)),
                       ],
                     ),
                   )
@@ -1777,9 +1828,12 @@ class _Member1PageState extends State<Member1Page> with SingleTickerProviderStat
                             },
                           ),
                         ),
-                        bottomTitles: const AxisTitles(sideTitles: SideTitles(showTitles: false)),
-                        rightTitles: const AxisTitles(sideTitles: SideTitles(showTitles: false)),
-                        topTitles: const AxisTitles(sideTitles: SideTitles(showTitles: false)),
+                        bottomTitles: const AxisTitles(
+                            sideTitles: SideTitles(showTitles: false)),
+                        rightTitles: const AxisTitles(
+                            sideTitles: SideTitles(showTitles: false)),
+                        topTitles: const AxisTitles(
+                            sideTitles: SideTitles(showTitles: false)),
                       ),
                       lineBarsData: [
                         LineChartBarData(
@@ -1888,16 +1942,17 @@ class _Member1PageState extends State<Member1Page> with SingleTickerProviderStat
 
   String _getHRStatus(double hr) {
     if (hr == 0) return "No Data";
-    
+
     // High Risk: HR > 120 or < 40 bpm
     if (hr > 120 || hr < 40) return "High Risk";
-    
+
     // Medium Risk: 100 to 120 bpm OR 50 to 59 bpm
-    if ((hr >= 100 && hr <= 120) || (hr >= 50 && hr <= 59)) return "Medium Risk";
-    
+    if ((hr >= 100 && hr <= 120) || (hr >= 50 && hr <= 59))
+      return "Medium Risk";
+
     // Normal: 60 to 100 bpm
     if (hr >= 60 && hr < 100) return "Normal";
-    
+
     // Default cases for small gaps (e.g., 40-50, 59-60)
     if (hr < 50) return "High Risk"; // Closer to 40
     return "Normal";
@@ -1905,24 +1960,26 @@ class _Member1PageState extends State<Member1Page> with SingleTickerProviderStat
 
   String _getTempStatus(double temp) {
     if (temp == 0) return "No Data";
-    
+
     // High Risk: > 38°C (Special case: combined with high HR handled in global risk)
     if (temp > 38.0) return "High Risk";
-    
+
     // Medium Risk: 37.3°C to 38.0°C
     if (temp >= 37.3 && temp <= 38.0) return "Medium Risk";
-    
+
     // Normal: 36.1°C to 37.2°C
     if (temp >= 36.1 && temp <= 37.2) return "Normal";
-    
+
     // Below normal (< 36.1) - often Normal in stable resting but can be Low
     return "Normal";
   }
 
   Color _getStatusColor(String status) {
     if (status.contains("High")) return const Color(0xFFFF3B30); // Apple Red
-    if (status.contains("Medium")) return const Color(0xFFFF9500); // Apple Orange
-    if (status.contains("Normal")) return const Color(0xFF34C759); // Apple Green
+    if (status.contains("Medium"))
+      return const Color(0xFFFF9500); // Apple Orange
+    if (status.contains("Normal"))
+      return const Color(0xFF34C759); // Apple Green
     return const Color(0xFF8E8E93); // Medical Grey for No Data
   }
 }
@@ -1966,10 +2023,11 @@ class MedicalVitalCard extends StatelessWidget {
     }
 
     return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12), // Even more compact
+      padding: const EdgeInsets.symmetric(
+          horizontal: 14, vertical: 12), // Even more compact
       decoration: BoxDecoration(
         color: Colors.white.withOpacity(0.9),
-        borderRadius: BorderRadius.circular(20), 
+        borderRadius: BorderRadius.circular(20),
         border: Border.all(color: Colors.white.withOpacity(0.5), width: 1.2),
         boxShadow: [
           BoxShadow(
@@ -2017,11 +2075,11 @@ class MedicalVitalCard extends StatelessWidget {
               ],
             ),
           ),
-          const SizedBox(height: 8), 
+          const SizedBox(height: 8),
           Text(
             value,
             style: const TextStyle(
-              fontSize: 22, 
+              fontSize: 22,
               fontWeight: FontWeight.w900,
               color: Color(0xFF1C1C1E),
               letterSpacing: -1,
@@ -2036,7 +2094,7 @@ class MedicalVitalCard extends StatelessWidget {
               letterSpacing: 0.5,
             ),
           ),
-          const SizedBox(height: 8), 
+          const SizedBox(height: 8),
           StatusBadge(label: status, color: statusColor),
           const SizedBox(height: 8),
           Text(
@@ -2060,13 +2118,15 @@ class AnimatedHeartIcon extends StatefulWidget {
   final Color color;
   final int percentage;
 
-  const AnimatedHeartIcon({super.key, required this.color, required this.percentage});
+  const AnimatedHeartIcon(
+      {super.key, required this.color, required this.percentage});
 
   @override
   State<AnimatedHeartIcon> createState() => _AnimatedHeartIconState();
 }
 
-class _AnimatedHeartIconState extends State<AnimatedHeartIcon> with SingleTickerProviderStateMixin {
+class _AnimatedHeartIconState extends State<AnimatedHeartIcon>
+    with SingleTickerProviderStateMixin {
   late AnimationController _controller;
   late Animation<double> _animation;
 
@@ -2090,7 +2150,7 @@ class _AnimatedHeartIconState extends State<AnimatedHeartIcon> with SingleTicker
     int speed = 1000;
     if (widget.percentage > 70) speed = 600;
     if (widget.percentage > 40 && widget.percentage <= 70) speed = 850;
-    
+
     _controller.duration = Duration(milliseconds: speed);
   }
 
@@ -2126,13 +2186,15 @@ class AnimatedTempIcon extends StatefulWidget {
   final Color color;
   final int percentage;
 
-  const AnimatedTempIcon({super.key, required this.color, required this.percentage});
+  const AnimatedTempIcon(
+      {super.key, required this.color, required this.percentage});
 
   @override
   State<AnimatedTempIcon> createState() => _AnimatedTempIconState();
 }
 
-class _AnimatedTempIconState extends State<AnimatedTempIcon> with SingleTickerProviderStateMixin {
+class _AnimatedTempIconState extends State<AnimatedTempIcon>
+    with SingleTickerProviderStateMixin {
   late AnimationController _controller;
   late Animation<double> _animation;
 
@@ -2140,13 +2202,10 @@ class _AnimatedTempIconState extends State<AnimatedTempIcon> with SingleTickerPr
   void initState() {
     super.initState();
     _controller = AnimationController(
-        duration: const Duration(milliseconds: 2000),
-        vsync: this
-    )..repeat(reverse: true);
-    _animation = Tween<double>(begin: 0.95, end: 1.05).animate(CurvedAnimation(
-        parent: _controller,
-        curve: Curves.easeInOut
-    ));
+        duration: const Duration(milliseconds: 2000), vsync: this)
+      ..repeat(reverse: true);
+    _animation = Tween<double>(begin: 0.95, end: 1.05)
+        .animate(CurvedAnimation(parent: _controller, curve: Curves.easeInOut));
   }
 
   @override
@@ -2234,15 +2293,19 @@ class PulsingShield extends StatefulWidget {
   State<PulsingShield> createState() => _PulsingShieldState();
 }
 
-class _PulsingShieldState extends State<PulsingShield> with SingleTickerProviderStateMixin {
+class _PulsingShieldState extends State<PulsingShield>
+    with SingleTickerProviderStateMixin {
   late AnimationController _controller;
   late Animation<double> _animation;
 
   @override
   void initState() {
     super.initState();
-    _controller = AnimationController(duration: const Duration(seconds: 2), vsync: this)..repeat(reverse: true);
-    _animation = Tween<double>(begin: 1.0, end: 1.15).animate(CurvedAnimation(parent: _controller, curve: Curves.easeInOut));
+    _controller =
+        AnimationController(duration: const Duration(seconds: 2), vsync: this)
+          ..repeat(reverse: true);
+    _animation = Tween<double>(begin: 1.0, end: 1.15)
+        .animate(CurvedAnimation(parent: _controller, curve: Curves.easeInOut));
   }
 
   @override
@@ -2275,14 +2338,17 @@ class ScanningEffect extends StatefulWidget {
   State<ScanningEffect> createState() => _ScanningEffectState();
 }
 
-class _ScanningEffectState extends State<ScanningEffect> with SingleTickerProviderStateMixin {
+class _ScanningEffectState extends State<ScanningEffect>
+    with SingleTickerProviderStateMixin {
   late AnimationController _controller;
   late Animation<double> _animation;
 
   @override
   void initState() {
     super.initState();
-    _controller = AnimationController(duration: const Duration(seconds: 3), vsync: this)..repeat();
+    _controller =
+        AnimationController(duration: const Duration(seconds: 3), vsync: this)
+          ..repeat();
     _animation = Tween<double>(begin: -1.0, end: 2.0).animate(_controller);
   }
 
@@ -2338,9 +2404,10 @@ class SemiCircularGaugePainter extends CustomPainter {
       ..strokeWidth = strokeWidth
       ..strokeCap = StrokeCap.round;
 
-    final Rect arcRect = Rect.fromCircle(center: center, radius: radius - strokeWidth / 2);
-    const startAngle = 0.75 * 3.14159; 
-    const sweepAngle = 1.5 * 3.14159; 
+    final Rect arcRect =
+        Rect.fromCircle(center: center, radius: radius - strokeWidth / 2);
+    const startAngle = 0.75 * 3.14159;
+    const sweepAngle = 1.5 * 3.14159;
 
     // SEAM-SAFE DYNAMIC GRADIENT (Green -> Yellow -> Orange -> Red)
     // We map the colors to the 270 degree sweep, and use the 90 degree gap to loop back to Green.
@@ -2356,7 +2423,7 @@ class SemiCircularGaugePainter extends CustomPainter {
           Color(0xFF34C759), // Green (Loop back for seam-safety)
         ],
         // Sweep is 270 deg = 0.75 of circle. Stops are adjusted to match.
-        stops: const [0.0, 0.1, 0.35, 0.55, 0.75, 1.0], 
+        stops: const [0.0, 0.1, 0.35, 0.55, 0.75, 1.0],
         startAngle: 0.0,
         endAngle: 3.14159 * 2,
         transform: GradientRotation(startAngle),

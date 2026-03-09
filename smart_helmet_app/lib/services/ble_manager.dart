@@ -13,7 +13,7 @@ class BleManager extends ChangeNotifier {
   final Map<String, BluetoothDevice> _connectedDevices = {};
   final Map<String, bool> _connectionStatus = {};
   final Map<String, StreamController<List<int>>> _dataControllers = {};
-  
+
   // Track subscriptions
   final Map<String, StreamSubscription> _valueSubscriptions = {};
   StreamSubscription? _adapterStateSubscription;
@@ -21,25 +21,25 @@ class BleManager extends ChangeNotifier {
   // Standard Heart Rate Service & Characteristic UUIDs
   static const String hrServiceUuid = "180d";
   static const String hrCharUuid = "2a37";
-  
+
   // Nordic UART Service (common for ESP32 serial bridge)
   static const String nusServiceUuid = "6e400001-b5a3-f393-e0a9-e50e24dcca9e";
   static const String nusRxCharUuid = "6e400003-b5a3-f393-e0a9-e50e24dcca9e";
 
   bool isConnected(String deviceName) => _connectionStatus[deviceName] ?? false;
 
-  BleManager() {
-    // Listen to adapter state
-    _adapterStateSubscription = FlutterBluePlus.adapterState.listen((state) {
-      if (state != BluetoothAdapterState.on) {
-        debugPrint("BLE Adapter is: $state");
-        // Handle global disconnection if needed
-      }
-    });
-    
-    // Set verbose logging for thorough debugging
-    FlutterBluePlus.setLogLevel(LogLevel.verbose, color: true);
-  }
+  // BleManager() {
+  //   // Listen to adapter state
+  //   _adapterStateSubscription = FlutterBluePlus.adapterState.listen((state) {
+  //     if (state != BluetoothAdapterState.on) {
+  //       debugPrint("BLE Adapter is: $state");
+  //       // Handle global disconnection if needed
+  //     }
+  //   });
+
+  //   // Set verbose logging for thorough debugging
+  //   FlutterBluePlus.setLogLevel(LogLevel.verbose, color: true);
+  // }
 
   Stream<List<int>>? getDataStream(String deviceName) {
     return _dataControllers[deviceName]?.stream;
@@ -56,7 +56,7 @@ class BleManager extends ChangeNotifier {
         Permission.bluetoothConnect,
         Permission.location, // Critical for scanning on many Android versions
       ].request();
-      
+
       bool granted = statuses.values.every((status) => status.isGranted);
       debugPrint("BLE Permissions: $granted | $statuses");
       return granted;
@@ -81,10 +81,12 @@ class BleManager extends ChangeNotifier {
       BluetoothDevice? targetDevice;
 
       // 1. Check already connected devices
-      List<BluetoothDevice> connected = await FlutterBluePlus.connectedSystemDevices;
+      List<BluetoothDevice> connected =
+          await FlutterBluePlus.connectedSystemDevices;
       for (var d in connected) {
         debugPrint("System device: ${d.platformName} | ${d.advName}");
         if (d.platformName == deviceName || d.advName == deviceName) {
+          // ← d.advName is correct here!
           targetDevice = d;
           break;
         }
@@ -93,24 +95,27 @@ class BleManager extends ChangeNotifier {
       // 2. Scan if not found
       if (targetDevice == null) {
         debugPrint("Starting diagnostic scan for $deviceName...");
-        
+
         try {
           await FlutterBluePlus.stopScan();
         } catch (_) {}
 
         final deviceCompleter = Completer<BluetoothDevice?>();
-        final scanResults = <String>{}; // To avoid flooding logs with duplicates
-        
+        final scanResults =
+            <String>{}; // To avoid flooding logs with duplicates
+
         final scanSubscription = FlutterBluePlus.scanResults.listen((results) {
           for (ScanResult r in results) {
-            String logEntry = "[Found] Name: ${r.device.platformName} | AdvName: ${r.advName} | RSSI: ${r.rssi} | ID: ${r.device.remoteId}";
+            String logEntry =
+                "[Found] Name: ${r.device.platformName} | AdvName: ${r.advertisementData.advName} | RSSI: ${r.rssi} | ID: ${r.device.remoteId}";
             if (scanResults.add(logEntry)) {
               debugPrint(logEntry);
             }
-            
-            if (r.device.platformName == deviceName || 
-                r.advName == deviceName || 
+
+            if (r.device.platformName == deviceName ||
+                r.advertisementData.advName == deviceName ||
                 r.advertisementData.localName == deviceName) {
+              // localName is usually null/empty now {
               if (!deviceCompleter.isCompleted) {
                 debugPrint(">>> MATCH FOUND: $deviceName <<<");
                 deviceCompleter.complete(r.device);
@@ -120,15 +125,13 @@ class BleManager extends ChangeNotifier {
         });
 
         await FlutterBluePlus.startScan(
-          timeout: const Duration(seconds: 15), 
+          timeout: const Duration(seconds: 15),
           androidUsesFineLocation: true,
           // Scanning for specific names is sometimes unreliable, scan all and filter manually
         );
 
-        targetDevice = await deviceCompleter.future.timeout(
-          const Duration(seconds: 15), 
-          onTimeout: () => null
-        );
+        targetDevice = await deviceCompleter.future
+            .timeout(const Duration(seconds: 15), onTimeout: () => null);
 
         await scanSubscription.cancel();
         await FlutterBluePlus.stopScan();
@@ -140,14 +143,14 @@ class BleManager extends ChangeNotifier {
 
       // 3. Connect with aggressive parameters
       debugPrint("Connecting to ${targetDevice.remoteId}...");
-      
+
       // Retry connection up to 2 times
       int retry = 0;
       bool success = false;
       while (retry < 2 && !success) {
         try {
           await targetDevice.connect(
-            timeout: const Duration(seconds: 10), 
+            timeout: const Duration(seconds: 10),
             autoConnect: false,
           );
           success = true;
@@ -158,7 +161,8 @@ class BleManager extends ChangeNotifier {
         }
       }
 
-      if (!success) return "Connection handshake failed. Try toggling watch Bluetooth.";
+      if (!success)
+        return "Connection handshake failed. Try toggling watch Bluetooth.";
 
       _connectedDevices[deviceName] = targetDevice;
       _connectionStatus[deviceName] = true;
@@ -166,7 +170,9 @@ class BleManager extends ChangeNotifier {
       // Request MTU (don't fail if this fails)
       if (defaultTargetPlatform == TargetPlatform.android) {
         try {
-          await targetDevice.requestMtu(512).timeout(const Duration(seconds: 3));
+          await targetDevice
+              .requestMtu(512)
+              .timeout(const Duration(seconds: 3));
           debugPrint("MTU set to 512");
         } catch (e) {
           debugPrint("MTU request refused: $e");
@@ -181,10 +187,10 @@ class BleManager extends ChangeNotifier {
       for (var service in services) {
         String sUuid = service.uuid.toString().toLowerCase();
         debugPrint("Service found: $sUuid");
-        
+
         if (sUuid.contains(hrServiceUuid)) {
           for (var char in service.characteristics) {
-             debugPrint("  Characteristic: ${char.uuid}");
+            debugPrint("  Characteristic: ${char.uuid}");
             if (char.uuid.toString().toLowerCase().contains(hrCharUuid)) {
               targetChar = char;
               debugPrint("  Target: Heart Rate found!");
@@ -192,11 +198,11 @@ class BleManager extends ChangeNotifier {
             }
           }
         }
-        
+
         if (targetChar == null && sUuid.contains(nusServiceUuid)) {
           for (var char in service.characteristics) {
             debugPrint("  Characteristic (NUS): ${char.uuid}");
-             if (char.uuid.toString().toLowerCase().contains(nusRxCharUuid)) {
+            if (char.uuid.toString().toLowerCase().contains(nusRxCharUuid)) {
               targetChar = char;
               debugPrint("  Target: NUS Data found!");
               break;
@@ -207,14 +213,16 @@ class BleManager extends ChangeNotifier {
 
       if (targetChar != null) {
         await targetChar.setNotifyValue(true);
-        _valueSubscriptions[deviceName] = targetChar.onValueReceived.listen((value) {
+        _valueSubscriptions[deviceName] =
+            targetChar.onValueReceived.listen((value) {
           if (_dataControllers[deviceName]?.isClosed == false) {
-             _dataControllers[deviceName]!.add(value);
+            _dataControllers[deviceName]!.add(value);
           }
         });
         debugPrint("Notifications enabled for $deviceName");
       } else {
-        debugPrint("Check watch firmware: No Heart Rate or NUS service detected.");
+        debugPrint(
+            "Check watch firmware: No Heart Rate or NUS service detected.");
       }
 
       // 5. Monitor State
