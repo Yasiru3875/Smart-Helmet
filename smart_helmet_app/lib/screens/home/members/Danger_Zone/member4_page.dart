@@ -10,6 +10,8 @@ import 'package:google_maps_flutter_platform_interface/google_maps_flutter_platf
 import 'package:flutter_tts/flutter_tts.dart';
 import 'package:http/http.dart' as http;
 import 'package:tflite_flutter/tflite_flutter.dart';
+import '../../../../models/journey_model.dart';
+import '../../../../services/journey_service.dart';
 import 'dummy_data.dart';
 
 class Member4Page extends StatefulWidget {
@@ -49,6 +51,13 @@ class _Member4PageState extends State<Member4Page> {
     zoom: 12,
   );
   late FlutterTts flutterTts;
+
+  // Past Journey Risk Zones
+  final JourneyService _journeyService = JourneyService();
+  final Set<Circle> riskCircles = {};
+  List<TurnEvent> pastTurnEvents = [];
+  List<BrakingEvent> pastBrakingEvents = [];
+  final Set<String> warnedEventIds = {};
 
   // Live sensor data (simulated)
   int heartRate = 78;
@@ -185,6 +194,11 @@ class _Member4PageState extends State<Member4Page> {
       }
     });
 
+    // Load past risky events to visualize risk zones
+    _loadPastRiskyEvents().then((_) {
+      print("[DangerZone] _loadPastRiskyEvents completes. Total circles: \${riskCircles.length}");
+    });
+
     if (widget.isJourneyActive) {
       _startLiveUpdates(); // only start live location & sensors if journey active
     }
@@ -204,6 +218,148 @@ class _Member4PageState extends State<Member4Page> {
       print('❌ Failed to load model: $e');
       print(stack);
     }
+  }
+
+  Future<void> _loadPastRiskyEvents() async {
+    print("[DangerZone] ENTERED _loadPastRiskyEvents");
+
+    // Clear previous data
+    pastTurnEvents.clear();
+    pastBrakingEvents.clear();
+    warnedEventIds.clear();
+    riskCircles.clear();
+
+    try {
+      print("[DangerZone] Fetching journeys from Firebase...");
+      final allJourneys = await _journeyService.getAllJourneys();
+      print("[DangerZone] Received ${allJourneys.length} total journeys from Firebase");
+
+      // ── Filter journeys that match the current route ──
+      // Match by destination/start location keywords
+      final currentDest = (widget.destinationName ?? '').toLowerCase();
+      
+      List<JourneyData> matchingJourneys;
+      
+      if (currentDest.isEmpty) {
+        // No destination set — show ALL past risky events
+        matchingJourneys = allJourneys;
+        print("[DangerZone] No destination set. Using all ${matchingJourneys.length} journeys");
+      } else {
+        // Filter journeys whose DESTINATION matches the current route destination
+        matchingJourneys = allJourneys.where((journey) {
+          final journeyDest = (journey.destination ?? '').toLowerCase();
+          
+          // Only match on journey DESTINATION — not startLocation
+          // This prevents e.g. a Kaduwela journey (starting from "SLIIT, Malabe")
+          // from appearing when riding to Malabe
+          bool destinationMatch = _routeKeywordsMatch(currentDest, journeyDest);
+          
+          // Log for debugging
+          if (destinationMatch) {
+            print("[DangerZone] ✓ Journey '${journey.startLocation} → ${journey.destination}' MATCHES destination '$currentDest'");
+          }
+          
+          return destinationMatch;
+        }).toList();
+        
+        print("[DangerZone] Filtered to ${matchingJourneys.length} journeys matching destination '$currentDest'");
+      }
+
+      // ── Extract risk events from matching journeys ──
+      for (var journey in matchingJourneys) {
+        print("[DangerZone] Processing journey: ${journey.startLocation} → ${journey.destination} (${journey.turnEvents.length} turns, ${journey.brakingEvents.length} brakes)");
+        
+        // Collect severe turns
+        for (var turn in journey.turnEvents) {
+          if (turn.severity == 'risky' || turn.severity == 'sharp') {
+            pastTurnEvents.add(turn);
+            Color color = turn.severity == 'sharp' ? Colors.red : Colors.orange;
+            _createRiskCircle(turn.latitude, turn.longitude, color);
+            print("[DangerZone] ⚠ Turn at ${turn.latitude}, ${turn.longitude} (${turn.severity})");
+          }
+        }
+        // Collect severe brakes
+        for (var brake in journey.brakingEvents) {
+          if (brake.severity == 'emergency' || brake.severity == 'hard') {
+            pastBrakingEvents.add(brake);
+            _createRiskCircle(brake.latitude, brake.longitude, Colors.redAccent);
+            print("[DangerZone] 🛑 Brake at ${brake.latitude}, ${brake.longitude} (${brake.severity})");
+          }
+        }
+      }
+
+      print("[DangerZone] Total: ${pastTurnEvents.length} turns, ${pastBrakingEvents.length} brakes, ${riskCircles.length} circles");
+
+      if (mounted) {
+        setState(() {});
+        print("[DangerZone] Map updated with ${riskCircles.length} risk circles");
+      }
+    } catch (e) {
+      print('[DangerZone] Error loading past risky events: $e');
+    }
+  }
+
+  /// Check if two location strings share meaningful keywords (city/area names)
+  bool _routeKeywordsMatch(String location1, String location2) {
+    if (location1.isEmpty || location2.isEmpty) return false;
+    
+    // Extract meaningful words (skip common words like "Sri Lanka", commas, etc.)
+    final skipWords = {'sri', 'lanka', 'road', 'street', 'avenue', 'lane', 'no', 'the', 'and'};
+    
+    final words1 = location1
+        .replaceAll(',', ' ')
+        .split(RegExp(r'\s+'))
+        .where((w) => w.length > 2 && !skipWords.contains(w))
+        .toSet();
+    
+    final words2 = location2
+        .replaceAll(',', ' ')
+        .split(RegExp(r'\s+'))
+        .where((w) => w.length > 2 && !skipWords.contains(w))
+        .toSet();
+    
+    // If any meaningful keyword matches, consider it the same route area
+    return words1.intersection(words2).isNotEmpty;
+  }
+
+  /// Check if any of a journey's risk events are near the current planned route
+  bool _journeyOverlapsRoute(JourneyData journey, List<LatLng> route) {
+    const double proximityThresholdKm = 0.5; // 500 meters
+    
+    for (var turn in journey.turnEvents) {
+      for (var routePoint in route) {
+        double dist = Geolocator.distanceBetween(
+          turn.latitude, turn.longitude,
+          routePoint.latitude, routePoint.longitude,
+        );
+        if (dist < proximityThresholdKm * 1000) return true;
+      }
+    }
+    for (var brake in journey.brakingEvents) {
+      for (var routePoint in route) {
+        double dist = Geolocator.distanceBetween(
+          brake.latitude, brake.longitude,
+          routePoint.latitude, routePoint.longitude,
+        );
+        if (dist < proximityThresholdKm * 1000) return true;
+      }
+    }
+    return false;
+  }
+
+  void _createRiskCircle(double lat, double lng, Color color) {
+    String circleIdStr = 'risk_${lat}_$lng';
+    riskCircles.add(
+      Circle(
+        circleId: CircleId(circleIdStr),
+        center: LatLng(lat, lng),
+        radius: 25, // 25 meters - fits road width
+        fillColor: color.withOpacity(0.5),
+        strokeColor: color,
+        strokeWidth: 3,
+        zIndex: 10,
+      ),
+    );
   }
 
   Future<void> _loadMotorcycleIcon() async {
@@ -255,9 +411,15 @@ class _Member4PageState extends State<Member4Page> {
 
     if (routeChanged || nameChanged || activeChanged) {
       print(
-          "[DangerZone] Props changed → syncing (active: ${widget.isJourneyActive})");
+          "[DangerZone] Props changed → syncing (active: ${widget.isJourneyActive}, dest: ${widget.destinationName})");
 
       _syncJourneyData();
+      
+      // Re-filter risk zones when destination changes
+      if (nameChanged || routeChanged) {
+        print("[DangerZone] Destination/route changed → reloading risk zones");
+        _loadPastRiskyEvents();
+      }
 
       if (widget.isJourneyActive && !oldWidget.isJourneyActive) {
         print("[DangerZone] Journey STARTED → starting live updates");
@@ -369,6 +531,7 @@ class _Member4PageState extends State<Member4Page> {
             desiredAccuracy: LocationAccuracy.high);
         setState(() => currentPosition = pos);
         _updateCurrentMarker();
+        _checkProximityToRiskZones(pos);
         mapController?.animateCamera(
           CameraUpdate.newCameraPosition(
             CameraPosition(
@@ -391,6 +554,53 @@ class _Member4PageState extends State<Member4Page> {
         dangerAlert = r.nextDouble() > 0.88;
       });
     });
+  }
+
+  void _checkProximityToRiskZones(Position currentPos) {
+    if (!widget.isJourneyActive) return;
+
+    final double warningDistance = 100.0; // 100 meters
+
+    // Check Turn Events
+    for (var turn in pastTurnEvents) {
+      String eventId = 'turn_\${turn.timestamp.millisecondsSinceEpoch}';
+      if (!warnedEventIds.contains(eventId)) {
+        double distance = Geolocator.distanceBetween(
+          currentPos.latitude,
+          currentPos.longitude,
+          turn.latitude,
+          turn.longitude,
+        );
+        if (distance <= warningDistance) {
+          warnedEventIds.add(eventId);
+          _triggerAudioWarning(
+              "Warning: Approaching a zone where a \${turn.severity} turn occurred previously.");
+        }
+      }
+    }
+
+    // Check Braking Events
+    for (var brake in pastBrakingEvents) {
+      String eventId = 'brake_\${brake.timestamp.millisecondsSinceEpoch}';
+      if (!warnedEventIds.contains(eventId)) {
+        double distance = Geolocator.distanceBetween(
+          currentPos.latitude,
+          currentPos.longitude,
+          brake.latitude,
+          brake.longitude,
+        );
+        if (distance <= warningDistance) {
+          warnedEventIds.add(eventId);
+          _triggerAudioWarning(
+              "Warning: Approaching a zone where \${brake.severity} braking occurred previously.");
+        }
+      }
+    }
+  }
+
+  Future<void> _triggerAudioWarning(String message) async {
+    print("[DangerZone] TTS Warning triggered: \$message");
+    await flutterTts.speak(message);
   }
 
   void _stopLiveUpdates() {
@@ -946,12 +1156,26 @@ class _Member4PageState extends State<Member4Page> {
             },
             markers: markers,
             polylines: polylines,
+            circles: riskCircles,
             myLocationEnabled: false,
             myLocationButtonEnabled: true,
             compassEnabled: true,
             zoomControlsEnabled: true,
             trafficEnabled: true, // Show live traffic layer on map
             mapToolbarEnabled: false,
+          ),
+          Positioned(
+            top: MediaQuery.of(context).padding.top + 16,
+            right: 16,
+            child: FloatingActionButton(
+              mini: true,
+              backgroundColor: Colors.deepPurple,
+              child: const Icon(Icons.refresh, color: Colors.white),
+              onPressed: () {
+                print("[DangerZone] Manual refresh triggered");
+                _loadPastRiskyEvents();
+              },
+            ),
           ),
           if (widget.isJourneyActive)
             Positioned(

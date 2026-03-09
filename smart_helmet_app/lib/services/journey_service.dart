@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import '../models/journey_model.dart';
 
@@ -31,20 +32,54 @@ class JourneyService {
     }
   }
 
-  // Get all journeys
+  // Get all journeys - fetches from server to avoid stale cache
   Future<List<JourneyData>> getAllJourneys() async {
     try {
+      print('[JourneyService] Fetching all journeys from Firestore server...');
+      
       QuerySnapshot snapshot = await _firestore
           .collection(_collection)
-          .orderBy('startTime', descending: true)
-          .get();
+          .get(const GetOptions(source: Source.server))
+          .timeout(const Duration(seconds: 15));
 
-      return snapshot.docs
-          .map((doc) =>
-              JourneyData.fromMap(doc.data() as Map<String, dynamic>, doc.id))
-          .toList();
-    } catch (e) {
-      print('Error getting journeys: $e');
+      print('[JourneyService] Got ${snapshot.docs.length} documents from Firestore');
+
+      final journeys = <JourneyData>[];
+      for (var doc in snapshot.docs) {
+        try {
+          final journey = JourneyData.fromMap(
+            doc.data() as Map<String, dynamic>,
+            doc.id,
+          );
+          journeys.add(journey);
+          print('[JourneyService] Parsed journey: ${journey.id} | turns: ${journey.turnEvents.length} | brakes: ${journey.brakingEvents.length}');
+        } catch (parseError) {
+          print('[JourneyService] Failed to parse doc ${doc.id}: $parseError');
+        }
+      }
+
+      print('[JourneyService] Successfully parsed ${journeys.length} journeys');
+      return journeys;
+    } on TimeoutException {
+      print('[JourneyService] TIMEOUT: Firestore took too long. Trying cache...');
+      // Fallback to cache if server times out
+      try {
+        QuerySnapshot snapshot = await _firestore
+            .collection(_collection)
+            .get(const GetOptions(source: Source.cache));
+        
+        print('[JourneyService] Cache returned ${snapshot.docs.length} documents');
+        return snapshot.docs
+            .map((doc) => JourneyData.fromMap(
+                doc.data() as Map<String, dynamic>, doc.id))
+            .toList();
+      } catch (cacheError) {
+        print('[JourneyService] Cache also failed: $cacheError');
+        return [];
+      }
+    } catch (e, stacktrace) {
+      print('[JourneyService] ERROR getting journeys: $e');
+      print(stacktrace);
       return [];
     }
   }
@@ -74,5 +109,4 @@ class JourneyService {
       rethrow;
     }
   }
-
 }
