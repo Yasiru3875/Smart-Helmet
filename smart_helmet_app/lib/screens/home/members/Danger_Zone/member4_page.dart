@@ -17,7 +17,7 @@ class Member4Page extends StatefulWidget {
   final LatLng? predefinedEnd;
   final List<LatLng>? predefinedRoute;
   final String? destinationName;
-  final bool startJourney;
+  final bool isJourneyActive;
 
   const Member4Page({
     super.key,
@@ -25,7 +25,7 @@ class Member4Page extends StatefulWidget {
     this.predefinedEnd,
     this.predefinedRoute,
     this.destinationName,
-    this.startJourney = false,
+    this.isJourneyActive = false,
   });
 
   @override
@@ -185,8 +185,8 @@ class _Member4PageState extends State<Member4Page> {
       }
     });
 
-    if (widget.startJourney) {
-      _startLiveUpdates();
+    if (widget.isJourneyActive) {
+      _startLiveUpdates(); // only start live location & sensors if journey active
     }
   }
 
@@ -244,6 +244,116 @@ class _Member4PageState extends State<Member4Page> {
     }
   }
 
+  @override
+  void didUpdateWidget(covariant Member4Page oldWidget) {
+    super.didUpdateWidget(oldWidget);
+
+    final routeChanged =
+        !listEquals(widget.predefinedRoute, oldWidget.predefinedRoute);
+    final nameChanged = widget.destinationName != oldWidget.destinationName;
+    final activeChanged = widget.isJourneyActive != oldWidget.isJourneyActive;
+
+    if (routeChanged || nameChanged || activeChanged) {
+      print(
+          "[DangerZone] Props changed → syncing (active: ${widget.isJourneyActive})");
+
+      _syncJourneyData();
+
+      if (widget.isJourneyActive && !oldWidget.isJourneyActive) {
+        print("[DangerZone] Journey STARTED → starting live updates");
+        _startLiveUpdates();
+      } else if (!widget.isJourneyActive && oldWidget.isJourneyActive) {
+        print("[DangerZone] Journey ENDED → cleaning up");
+        _stopLiveUpdatesAndClearMap();
+      }
+    }
+  }
+
+  void _stopLiveUpdatesAndClearMap() {
+    _locationTimer?.cancel();
+    _sensorTimer?.cancel();
+    _locationTimer = null;
+    _sensorTimer = null;
+
+    setState(() {
+      // Clear live position marker
+      markers.removeWhere((m) => m.markerId.value == 'current');
+      currentPosition = null;
+
+      // Optional: keep start/end markers if you want, or clear everything
+      // markers.clear();   ← only if you want full reset
+
+      // Clear polylines & risk state (recommended when journey ends)
+      polylines.clear();
+      safetyTips.clear();
+      _predictedRisk = null;
+      showTips = false;
+    });
+
+    // Optional: move camera back to initial position or Colombo
+    mapController?.animateCamera(
+      CameraUpdate.newCameraPosition(initialPosition),
+    );
+
+    print("[DangerZone] Cleanup complete – map & sensors reset");
+  }
+
+  void _syncJourneyData() {
+    setState(() {
+      isPredefined =
+          widget.predefinedRoute != null && widget.predefinedRoute!.isNotEmpty;
+
+      final destLower = (widget.destinationName ?? '').toLowerCase();
+      if (destLower.contains('kaduwela')) {
+        destKey = 'kaduwela';
+        recentlyUsed = true;
+      } else if (destLower.contains('malabe')) {
+        destKey = 'malabe';
+        recentlyUsed = false;
+      } else {
+        destKey = null;
+        recentlyUsed = false;
+      }
+      isDummyRoute = destKey != null;
+
+      // Only add start/end markers when journey is active or route exists
+      if (widget.isJourneyActive && widget.predefinedStart != null) {
+        markers.add(
+          Marker(
+            markerId: const MarkerId('start'),
+            position: widget.predefinedStart!,
+            icon: BitmapDescriptor.defaultMarkerWithHue(
+                BitmapDescriptor.hueGreen),
+            infoWindow: const InfoWindow(title: 'Start'),
+          ),
+        );
+      }
+      if (widget.isJourneyActive && widget.predefinedEnd != null) {
+        markers.add(
+          Marker(
+            markerId: const MarkerId('end'),
+            position: widget.predefinedEnd!,
+            icon:
+                BitmapDescriptor.defaultMarkerWithHue(BitmapDescriptor.hueRed),
+            infoWindow:
+                InfoWindow(title: widget.destinationName ?? 'Destination'),
+          ),
+        );
+      }
+    });
+
+    // Only analyze when journey is active AND route exists
+    if (widget.isJourneyActive &&
+        isPredefined &&
+        widget.predefinedRoute != null) {
+      print(
+          "[DangerZone] Analyzing route (length: ${widget.predefinedRoute!.length})");
+      analyzeRoute(widget.predefinedRoute!);
+    } else if (!widget.isJourneyActive) {
+      print("[DangerZone] Journey inactive → skipping analysis");
+    }
+  }
+
   void _startLiveUpdates() async {
     try {
       currentPosition = await Geolocator.getCurrentPosition(
@@ -280,6 +390,15 @@ class _Member4PageState extends State<Member4Page> {
         stressLevel = r.nextInt(85);
         dangerAlert = r.nextDouble() > 0.88;
       });
+    });
+  }
+
+  void _stopLiveUpdates() {
+    _locationTimer?.cancel();
+    _sensorTimer?.cancel();
+    setState(() {
+      currentPosition = null;
+      markers.removeWhere((m) => m.markerId.value == 'current');
     });
   }
 
@@ -800,6 +919,8 @@ class _Member4PageState extends State<Member4Page> {
   void dispose() {
     _locationTimer?.cancel();
     _sensorTimer?.cancel();
+    _locationTimer = null;
+    _sensorTimer = null;
     flutterTts.stop();
     _interpreter?.close();
     mapController?.dispose();
@@ -810,6 +931,8 @@ class _Member4PageState extends State<Member4Page> {
   Widget build(BuildContext context) {
     return Scaffold(
       backgroundColor: Colors.transparent,
+      resizeToAvoidBottomInset:
+          false, // ← prevents keyboard from pushing map up
       body: Stack(
         children: [
           GoogleMap(
@@ -830,7 +953,7 @@ class _Member4PageState extends State<Member4Page> {
             trafficEnabled: true, // Show live traffic layer on map
             mapToolbarEnabled: false,
           ),
-          if (widget.startJourney)
+          if (widget.isJourneyActive)
             Positioned(
               top: MediaQuery.of(context).padding.top + 16,
               left: 16,

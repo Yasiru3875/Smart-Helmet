@@ -12,34 +12,14 @@ class JourneyData {
   // IMU-derived metrics
   final int sharpTurns;
   final int riskyTurns;
-  final int suddenBrakes;
   final double averageSpeed;
   final double maxSpeed;
+  final double maxTurnRate;
   final double totalDistance;
-
-  // EEG-derived metrics
-  final double averageStressLevel;
-  final int stressPeakCount;
-  final double maxStressLevel;
-
-  // Overall risk score (0-100)
-  final double riskScore;
-
-  // Events
   final List<TurnEvent> turnEvents;
-  final List<BrakeEvent> brakeEvents;
-  final List<StressPeakEvent> stressPeaks;
-  final List<CriticalEvent> criticalEvents;
   final List<SensorReading> sensorReadings;
   final List<GpsPoint> gpsTrack;
-
-  // Context
-  final WeatherContext? weatherContext;
-  final String? trafficCondition;
-
-  // Recommendations
-  final List<String> recommendations;
-
+  
   JourneyData({
     required this.id,
     required this.startTime,
@@ -48,37 +28,15 @@ class JourneyData {
     this.destination,
     this.sharpTurns = 0,
     this.riskyTurns = 0,
-    this.suddenBrakes = 0,
     this.averageSpeed = 0.0,
     this.maxSpeed = 0.0,
+    this.maxTurnRate = 0.0,
     this.totalDistance = 0.0,
-    this.averageStressLevel = 0.0,
-    this.stressPeakCount = 0,
-    this.maxStressLevel = 0.0,
-    this.riskScore = 75.0,
     this.turnEvents = const [],
-    this.brakeEvents = const [],
-    this.stressPeaks = const [],
-    this.criticalEvents = const [],
     this.sensorReadings = const [],
     this.gpsTrack = const [],
-    this.weatherContext,
-    this.trafficCondition,
-    this.recommendations = const [],
   });
-
-  // Computed properties
-  Duration get duration => endTime != null 
-      ? endTime!.difference(startTime) 
-      : Duration.zero;
-
-  String get riskLabel {
-    if (riskScore >= 80) return 'Safe';
-    if (riskScore >= 60) return 'Moderate';
-    if (riskScore >= 40) return 'Caution';
-    return 'High Risk';
-  }
-
+  
   Map<String, dynamic> toMap() {
     return {
       'id': id,
@@ -88,23 +46,13 @@ class JourneyData {
       'destination': destination,
       'sharpTurns': sharpTurns,
       'riskyTurns': riskyTurns,
-      'suddenBrakes': suddenBrakes,
       'averageSpeed': averageSpeed,
       'maxSpeed': maxSpeed,
+      'maxTurnRate': maxTurnRate,
       'totalDistance': totalDistance,
-      'averageStressLevel': averageStressLevel,
-      'stressPeakCount': stressPeakCount,
-      'maxStressLevel': maxStressLevel,
-      'riskScore': riskScore,
       'turnEvents': turnEvents.map((e) => e.toMap()).toList(),
-      'brakeEvents': brakeEvents.map((e) => e.toMap()).toList(),
-      'stressPeaks': stressPeaks.map((e) => e.toMap()).toList(),
-      'criticalEvents': criticalEvents.map((e) => e.toMap()).toList(),
       'sensorReadings': sensorReadings.map((e) => e.toMap()).toList(),
       'gpsTrack': gpsTrack.map((e) => e.toMap()).toList(),
-      'weatherContext': weatherContext?.toMap(),
-      'trafficCondition': trafficCondition,
-      'recommendations': recommendations,
     };
   }
 
@@ -117,37 +65,20 @@ class JourneyData {
       destination: map['destination'],
       sharpTurns: map['sharpTurns'] ?? 0,
       riskyTurns: map['riskyTurns'] ?? 0,
-      suddenBrakes: map['suddenBrakes'] ?? 0,
       averageSpeed: (map['averageSpeed'] ?? 0.0).toDouble(),
       maxSpeed: (map['maxSpeed'] ?? 0.0).toDouble(),
+      maxTurnRate: (map['maxTurnRate'] ?? 0.0).toDouble(),
       totalDistance: (map['totalDistance'] ?? 0.0).toDouble(),
-      averageStressLevel: (map['averageStressLevel'] ?? 0.0).toDouble(),
-      stressPeakCount: map['stressPeakCount'] ?? 0,
-      maxStressLevel: (map['maxStressLevel'] ?? 0.0).toDouble(),
-      riskScore: (map['riskScore'] ?? 75.0).toDouble(),
       turnEvents: (map['turnEvents'] as List?)
           ?.map((e) => TurnEvent.fromMap(e))
           .toList() ?? [],
-      brakeEvents: (map['brakeEvents'] as List?)
-          ?.map((e) => BrakeEvent.fromMap(e))
-          .toList() ?? [],
-      stressPeaks: (map['stressPeaks'] as List?)
-          ?.map((e) => StressPeakEvent.fromMap(e))
-          .toList() ?? [],
-      criticalEvents: (map['criticalEvents'] as List?)
-          ?.map((e) => CriticalEvent.fromMap(e))
-          .toList() ?? [],
       sensorReadings: (map['sensorReadings'] as List?)
-          ?.map((e) => SensorReading.fromMap(e))
-          .toList() ?? [],
+              ?.map((e) => SensorReading.fromMap(e))
+              .toList() ??
+          [],
       gpsTrack: (map['gpsTrack'] as List?)
           ?.map((e) => GpsPoint.fromMap(e))
           .toList() ?? [],
-      weatherContext: map['weatherContext'] != null
-          ? WeatherContext.fromMap(map['weatherContext'])
-          : null,
-      trafficCondition: map['trafficCondition'],
-      recommendations: List<String>.from(map['recommendations'] ?? []),
     );
   }
 }
@@ -310,12 +241,18 @@ class SensorReading {
   final int heartRate;
   final double temperature;
   final int stressLevel;
-
+  
   SensorReading({
     required this.timestamp,
     required this.heartRate,
     required this.temperature,
     required this.stressLevel,
+    this.accelX = 0.0,
+    this.accelY = 0.0,
+    this.accelZ = 0.0,
+    this.gyroX = 0.0,
+    this.gyroY = 0.0,
+    this.gyroZ = 0.0,
   });
 
   Map<String, dynamic> toMap() {
@@ -324,6 +261,12 @@ class SensorReading {
       'heartRate': heartRate,
       'temperature': temperature,
       'stressLevel': stressLevel,
+      'accelX': accelX,
+      'accelY': accelY,
+      'accelZ': accelZ,
+      'gyroX': gyroX,
+      'gyroY': gyroY,
+      'gyroZ': gyroZ,
     };
   }
 
@@ -333,6 +276,12 @@ class SensorReading {
       heartRate: map['heartRate'] ?? 0,
       temperature: (map['temperature'] ?? 0.0).toDouble(),
       stressLevel: map['stressLevel'] ?? 0,
+      accelX: (map['accelX'] ?? 0.0).toDouble(),
+      accelY: (map['accelY'] ?? 0.0).toDouble(),
+      accelZ: (map['accelZ'] ?? 0.0).toDouble(),
+      gyroX: (map['gyroX'] ?? 0.0).toDouble(),
+      gyroY: (map['gyroY'] ?? 0.0).toDouble(),
+      gyroZ: (map['gyroZ'] ?? 0.0).toDouble(),
     );
   }
 }
@@ -344,15 +293,11 @@ class GpsPoint {
   final double latitude;
   final double longitude;
   final DateTime? timestamp;
-  final double speed; // km/h
-  final double heading; // degrees 0-360
-
+  
   GpsPoint({
     required this.latitude,
     required this.longitude,
     this.timestamp,
-    this.speed = 0.0,
-    this.heading = 0.0,
   });
 
   Map<String, dynamic> toMap() {
@@ -360,8 +305,6 @@ class GpsPoint {
       'latitude': latitude,
       'longitude': longitude,
       'timestamp': timestamp?.toIso8601String(),
-      'speed': speed,
-      'heading': heading,
     };
   }
 
@@ -370,67 +313,8 @@ class GpsPoint {
       latitude: (map['latitude'] ?? 0.0).toDouble(),
       longitude: (map['longitude'] ?? 0.0).toDouble(),
       timestamp: map['timestamp'] != null ? DateTime.parse(map['timestamp']) : null,
-      speed: (map['speed'] ?? 0.0).toDouble(),
-      heading: (map['heading'] ?? 0.0).toDouble(),
     );
   }
+
 }
 
-// ============================================================
-// WeatherContext - Weather conditions during ride
-// ============================================================
-class WeatherContext {
-  final String condition; // e.g. 'Rain', 'Clear', 'Cloudy'
-  final String description;
-  final double temperature; // °C
-  final double humidity; // %
-  final double windSpeed; // km/h
-  final double visibility; // km
-  final String icon;
-
-  WeatherContext({
-    required this.condition,
-    required this.description,
-    required this.temperature,
-    required this.humidity,
-    required this.windSpeed,
-    required this.visibility,
-    this.icon = '',
-  });
-
-  bool get isAdverseWeather =>
-      condition.toLowerCase().contains('rain') ||
-      condition.toLowerCase().contains('storm') ||
-      condition.toLowerCase().contains('fog') ||
-      visibility < 5.0;
-
-  Map<String, dynamic> toMap() => {
-    'condition': condition,
-    'description': description,
-    'temperature': temperature,
-    'humidity': humidity,
-    'windSpeed': windSpeed,
-    'visibility': visibility,
-    'icon': icon,
-  };
-
-  factory WeatherContext.fromMap(Map<String, dynamic> m) => WeatherContext(
-    condition: m['condition'] ?? 'Unknown',
-    description: m['description'] ?? '',
-    temperature: (m['temperature'] ?? 0.0).toDouble(),
-    humidity: (m['humidity'] ?? 0.0).toDouble(),
-    windSpeed: (m['windSpeed'] ?? 0.0).toDouble(),
-    visibility: (m['visibility'] ?? 10.0).toDouble(),
-    icon: m['icon'] ?? '',
-  );
-
-  factory WeatherContext.dummy() => WeatherContext(
-    condition: 'Clear',
-    description: 'clear sky',
-    temperature: 29.5,
-    humidity: 78,
-    windSpeed: 12,
-    visibility: 10,
-    icon: '01d',
-  );
-}

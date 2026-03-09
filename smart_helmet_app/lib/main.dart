@@ -1,89 +1,122 @@
 import 'package:flutter/material.dart';
 import 'package:firebase_core/firebase_core.dart';
-import 'firebase_options.dart'; // This file is generated when you connect Flutter to Firebase
+import 'firebase_options.dart'; // Generated Firebase config file
 import 'package:provider/provider.dart';
 
-// Import necessary files for your application's structure
-import 'services/auth_service.dart'; // Manages authentication state
-import 'services/bluetooth_manager.dart'; // Manages Bluetooth connections
-import 'screens/auth/login_screen.dart'; // User login interface
-import 'screens/home/home_screen.dart'; // Main application screen
-import 'screens/home/members/Health_Monitoring/member1_page.dart'; // Your BLE dashboard
+// ────────────────────────────────────────────────
+// Services & Providers
+// ────────────────────────────────────────────────
+import 'services/auth_service.dart';
+import 'services/bluetooth_manager.dart';
 import 'providers/journey_provider.dart';
+import 'providers/sensor_data_provider.dart'; // ← NEW: Live sensor values
+import 'providers/ride_session_provider.dart';
+import 'providers/emotion_provider.dart';
+
+// ────────────────────────────────────────────────
+// Screens
+// ────────────────────────────────────────────────
+import 'screens/auth/login_screen.dart';
+import 'screens/home/home_screen.dart';
+import 'screens/home/members/Health_Monitoring/member1_page.dart';
 
 void main() async {
-  // Ensure that Flutter widgets binding is initialized before calling native code (like Firebase)
   WidgetsFlutterBinding.ensureInitialized();
 
-  // Initialize Firebase with your project's configuration
-  await Firebase.initializeApp(options: DefaultFirebaseOptions.currentPlatform);
+  // Initialize Firebase
+  await Firebase.initializeApp(
+    options: DefaultFirebaseOptions.currentPlatform,
+  );
 
-  // Run the main application widget
   runApp(const SmartHelmetApp());
 }
 
-// --- Main Application Widget ---
 class SmartHelmetApp extends StatelessWidget {
   const SmartHelmetApp({super.key});
 
   @override
   Widget build(BuildContext context) {
-    // MultiProvider makes the AuthService and BluetoothManager available throughout the app
     return MultiProvider(
       providers: [
+        // Authentication state
         ChangeNotifierProvider(create: (_) => AuthService()),
+
+        // Bluetooth connection manager
         ChangeNotifierProvider(create: (_) => BluetoothManager()),
+
+        // Journey/route state (start/end journey, route points, etc.)
         ChangeNotifierProvider(create: (_) => JourneyProvider()),
-        // Add other providers for state management here if needed
+
+        // NEW: Shared live sensor data (heart rate, temp, stress, alerts)
+        ChangeNotifierProvider(create: (_) => SensorDataProvider()),
+
+        ChangeNotifierProvider(create: (_) => RideSessionProvider()),
+
+        ChangeNotifierProvider(create: (_) => EmotionProvider()),
       ],
       child: MaterialApp(
         debugShowCheckedModeBanner: false,
         title: 'Smart Helmet',
         theme: ThemeData(
           useMaterial3: true,
-          primarySwatch: Colors.indigo, // Set a primary color palette
+          primarySwatch: Colors.indigo,
+          colorScheme: ColorScheme.fromSeed(seedColor: Colors.indigo),
+          scaffoldBackgroundColor: Colors.grey[50],
+          appBarTheme: const AppBarTheme(
+            backgroundColor: Colors.indigo,
+            foregroundColor: Colors.white,
+            elevation: 0,
+          ),
+          elevatedButtonTheme: ElevatedButtonThemeData(
+            style: ElevatedButton.styleFrom(
+              shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(12)),
+            ),
+          ),
+          cardTheme: CardThemeData(
+            elevation: 4,
+            shape:
+                RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+          ),
         ),
-        // The EntryPoint handles the initial routing decision (Logged In vs. Logged Out)
         home: const EntryPoint(),
 
-        // Define routes for easy navigation (Optional, but good practice)
+        // Named routes (optional but recommended)
         routes: {
           '/member1': (context) => const Member1Page(),
-          // Add other member screens or pages here
+          // Add more routes here when needed (member2, member3, etc.)
         },
       ),
     );
   }
 }
 
-// --- Authentication Routing Widget ---
-// This widget listens to the user's authentication state in real-time.
+// ────────────────────────────────────────────────
+// Entry point that decides Login vs Home based on auth state
+// ────────────────────────────────────────────────
 class EntryPoint extends StatelessWidget {
   const EntryPoint({super.key});
 
   @override
   Widget build(BuildContext context) {
-    // Access the AuthService instance
     final auth = Provider.of<AuthService>(context);
 
-    // StreamBuilder listens for changes in the user's login status
     return StreamBuilder(
       stream: auth.authStateChanges,
       builder: (context, snapshot) {
-        // Show loading indicator while connecting to Firebase Auth
+        // Still connecting to Firebase Auth → show loader
         if (snapshot.connectionState == ConnectionState.waiting) {
           return const Scaffold(
             body: Center(child: CircularProgressIndicator()),
           );
         }
 
-        // If snapshot has data (user is logged in)
+        // User is logged in → go to main app
         if (snapshot.hasData) {
-          // Send the user to the main application screen
           return const HomeScreen();
         }
 
-        // If no user data (user is logged out)
+        // No user → show login screen
         return const LoginScreen();
       },
     );

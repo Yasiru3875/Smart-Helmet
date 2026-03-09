@@ -16,7 +16,7 @@ dependencies:
   flutter_blue_plus: ^1.31.0
   shared_preferences: ^2.2.3
   fl_chart: ^0.68.0 # post-ride graphs
-  flutter_tts: ^3.8.5 # text-to-speech
+  flutter_tts: ^4.0.2 # text-to-speech
   geolocator: ^10.1.0 # GPS
   firebase_core: ^3.15.2
   firebase_auth: ^5.3.0
@@ -27,9 +27,15 @@ dependencies:
   tflite_flutter: ^0.12.1
   fftea: ^1.5.0+1
 
+  path_provider: ^2.1.2
+  pdf: ^3.10.8
+  printing: ^5.11.1
+  share_plus: ^7.2.2
+
   flutter_bluetooth_serial: ^0.4.0
 
   permission_handler: ^11.3.1
+  collection: ^1.18.0
 
   cupertino_icons: ^1.0.8
   firebase_database: ^11.3.10
@@ -38,9 +44,6 @@ dependencies:
 
   flutter_staggered_animations: ^1.1.1
   percent_indicator: ^4.2.3
-  pdf: ^3.11.3
-  path_provider: ^2.1.5
-  share_plus: ^12.0.1
 
 dev_dependencies:
   flutter_test:
@@ -58,6 +61,7 @@ flutter:
     - assets/icons/g-logo.png
     - assets/model.tflite
     - assets/icons/dev_team.png
+    - assets/eeg_stress_model_float32.tflite
 
 flutter_icons:
   android: true
