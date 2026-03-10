@@ -16,6 +16,7 @@ class JourneyData {
   final String? dangerPrediction; // ML Result
   final List<TurnEvent> turnEvents;
   final List<BrakingEvent> brakingEvents;
+  final List<LeanEvent> leanEvents;
   final List<SensorReading> sensorReadings;
   final List<GpsPoint> gpsTrack;
 
@@ -35,6 +36,7 @@ class JourneyData {
     this.dangerPrediction,
     this.turnEvents = const [],
     this.brakingEvents = const [],
+    this.leanEvents = const [],
     this.sensorReadings = const [],
     this.gpsTrack = const [],
   });
@@ -56,6 +58,7 @@ class JourneyData {
       'dangerPrediction': dangerPrediction,
       'turnEvents': turnEvents.map((e) => e.toMap()).toList(),
       'brakingEvents': brakingEvents.map((e) => e.toMap()).toList(),
+      'leanEvents': leanEvents.map((e) => e.toMap()).toList(),
       // 'sensorReadings' and 'gpsTrack' are explicitly removed to prevent
       // uploading thousands of normal datapoints to Firebase, saving bandwidth.
     };
@@ -82,6 +85,10 @@ class JourneyData {
           [],
       brakingEvents: (map['brakingEvents'] as List?)
               ?.map((e) => BrakingEvent.fromMap(e))
+              .toList() ??
+          [],
+      leanEvents: (map['leanEvents'] as List?)
+              ?.map((e) => LeanEvent.fromMap(e))
               .toList() ??
           [],
       sensorReadings: (map['sensorReadings'] as List?)
@@ -260,6 +267,43 @@ class BrakingEvent {
       longitude: (map['longitude'] ?? 0.0).toDouble(),
       speedBefore: (map['speedBefore'] ?? 0.0).toDouble(),
       severity: map['severity'] ?? 'hard',
+    );
+  }
+}
+
+/// A dangerous lean angle event detected during the ride
+class LeanEvent {
+  final DateTime timestamp;
+  final double leanAngle; // in degrees (positive = right, negative = left)
+  final String severity; // 'risky' (35°-45°) or 'critical' (>45°)
+  final double latitude;
+  final double longitude;
+
+  LeanEvent({
+    required this.timestamp,
+    required this.leanAngle,
+    required this.severity,
+    required this.latitude,
+    required this.longitude,
+  });
+
+  Map<String, dynamic> toMap() {
+    return {
+      'timestamp': timestamp.toIso8601String(),
+      'leanAngle': leanAngle,
+      'severity': severity,
+      'latitude': latitude,
+      'longitude': longitude,
+    };
+  }
+
+  factory LeanEvent.fromMap(Map<String, dynamic> map) {
+    return LeanEvent(
+      timestamp: DateTime.parse(map['timestamp']),
+      leanAngle: (map['leanAngle'] ?? 0.0).toDouble(),
+      severity: map['severity'] ?? 'risky',
+      latitude: (map['latitude'] ?? 0.0).toDouble(),
+      longitude: (map['longitude'] ?? 0.0).toDouble(),
     );
   }
 }

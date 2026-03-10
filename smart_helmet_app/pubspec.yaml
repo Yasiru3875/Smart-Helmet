@@ -44,7 +44,6 @@ dependencies:
   flutter_staggered_animations: ^1.1.1
   percent_indicator: ^4.2.3
 
-  screenshot: ^3.0.0
 
   pdf: ^3.11.1 # required for creating PDF documents
   printing: ^5.13.3 # required for preview/share/print PDF
