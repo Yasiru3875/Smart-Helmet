@@ -10,6 +10,8 @@ import 'package:google_maps_flutter_platform_interface/google_maps_flutter_platf
 import 'package:flutter_tts/flutter_tts.dart';
 import 'package:http/http.dart' as http;
 import 'package:tflite_flutter/tflite_flutter.dart';
+import '../../../../models/journey_model.dart';
+import '../../../../services/journey_service.dart';
 import 'dummy_data.dart';
 
 class Member4Page extends StatefulWidget {
@@ -49,6 +51,13 @@ class _Member4PageState extends State<Member4Page> {
     zoom: 12,
   );
   late FlutterTts flutterTts;
+
+  // Past Journey Risk Zones
+  final JourneyService _journeyService = JourneyService();
+  final Set<Circle> riskCircles = {};
+  List<TurnEvent> pastTurnEvents = [];
+  List<BrakingEvent> pastBrakingEvents = [];
+  final Set<String> warnedEventIds = {};
 
   // Live sensor data (simulated)
   int heartRate = 78;
@@ -146,9 +155,17 @@ class _Member4PageState extends State<Member4Page> {
     'Travel_Time_Estimate': 30.0,
   };
 
+  bool _historyDataLoaded = false;
+  int _totalJourneysInDB = 0;
+  String _historyFetchError = '';
+  List<String> _availableDestinations = [];
+  Completer<void>? _historyCompleter;
+
   @override
   void initState() {
     super.initState();
+    _historyDataLoaded = false;
+    _historyCompleter = Completer<void>();
     if (defaultTargetPlatform == TargetPlatform.android) {
       final GoogleMapsFlutterPlatform mapsImplementation =
           GoogleMapsFlutterPlatform.instance;
@@ -159,35 +176,254 @@ class _Member4PageState extends State<Member4Page> {
     flutterTts = FlutterTts();
     _loadMotorcycleIcon();
 
-    isPredefined = widget.predefinedRoute != null;
-    final String destLower = (widget.destinationName ?? '').toLowerCase();
-    if (destLower.contains('kaduwela')) {
-      destKey = 'kaduwela';
-      recentlyUsed = true;
-    } else if (destLower.contains('malabe')) {
-      destKey = 'malabe';
-      recentlyUsed = false;
-    } else {
-      destKey = null;
-      recentlyUsed = false;
-    }
-    isDummyRoute = destKey != null;
-
-    if (isPredefined) {
-      startPoint = widget.predefinedStart;
-      endPoint = widget.predefinedEnd;
-      _addStartEndMarkers();
-    }
+    // Initialize state markers and route info
+    _syncJourneyData();
 
     _loadModel().then((_) {
-      if (isPredefined && widget.predefinedRoute != null) {
-        analyzeRoute(widget.predefinedRoute!);
-      }
+      // Logic handled in _syncJourneyData
     });
+
+    // Load past risky events to visualize risk zones
+    _historyCompleter = Completer<void>();
+    _loadPastRiskyEvents().then((_) {
+      if (_historyCompleter != null && !_historyCompleter!.isCompleted) {
+        _historyCompleter!.complete();
+      }
+      print("[DangerZone] _loadPastRiskyEvents completes. Total circles: ${riskCircles.length}");
+    });
+
+    // Fetch and display the latest specific journey
+    _fetchAndDisplayLatestJourney();
 
     if (widget.isJourneyActive) {
       _startLiveUpdates(); // only start live location & sensors if journey active
     }
+  }
+
+  Future<void> _fetchAndDisplayLatestJourney() async {
+    try {
+      final latestJourney = await _journeyService.getLatestJourney();
+      if (latestJourney != null && mounted) {
+        setState(() {
+          _displayJourneyData(latestJourney);
+        });
+      }
+    } catch (e) {
+      print("[DangerZone] Error fetching latest journey: $e");
+    }
+  }
+
+  Future<void> _displayJourneyData(JourneyData journey) async {
+    print("[DangerZone] Displaying journey data for ID: ${journey.id}");
+    // 1. Clear previous analysis if any
+    // 1. Clear only historical markers/polylines to preserve planned route
+    polylines.removeWhere((p) => p.polylineId.value == 'fetched_route');
+    markers.removeWhere((m) => m.markerId.value.startsWith('event_'));
+    
+    // We keep 'current', 'start', 'end', 'full_route', 'segment_X' markers/polylines
+    
+    safetyTips.clear();
+    _historyDataLoaded = true;
+    
+    if (mounted) {
+      setState(() {
+        safetyTips.add("🔍 Fetching road-bound route for history...");
+      });
+    }
+
+    // 2. Extract points for route (use GPS track if available, else turn events)
+    List<LatLng> routePoints = [];
+    if (journey.gpsTrack.isNotEmpty) {
+      print("[DangerZone] Using ${journey.gpsTrack.length} points from GPS track");
+      routePoints = journey.gpsTrack.map((p) => LatLng(p.latitude, p.longitude)).toList();
+    } else if (journey.turnEvents.isNotEmpty) {
+      print("[DangerZone] GPS track empty. Reconstructing route from turn events...");
+      
+      // Use the first and last turn events as origin/destination for Directions API
+      // to get a user-friendly road-following path.
+      try {
+        LatLng start = LatLng(journey.turnEvents.first.latitude, journey.turnEvents.first.longitude);
+        LatLng end = LatLng(journey.turnEvents.last.latitude, journey.turnEvents.last.longitude);
+        
+        // If they are the same point, try the strings
+        if (start == end && journey.startLocation != null && journey.destination != null) {
+           // Directions API handles strings too if we modify _fetchTrafficAwareRoute
+           // but for now let's hope the coords are different or just use them.
+        }
+
+        routePoints = await _fetchTrafficAwareRoute(start, end);
+        print("[DangerZone] Successfully reconstructed path with ${routePoints.length} points");
+      } catch (e) {
+        print("[DangerZone] Path reconstruction failed: $e. Falling back to discrete points.");
+        routePoints = journey.turnEvents.map((e) => LatLng(e.latitude, e.longitude)).toList();
+      }
+    } else {
+       print("[DangerZone] WARNING: No GPS points OR turn events found for this journey!");
+    }
+
+    if (routePoints.isNotEmpty) {
+      // 3. Add Polyline
+      polylines.add(
+        Polyline(
+          polylineId: const PolylineId('fetched_route'),
+          points: routePoints,
+          color: journey.dangerPrediction == 'DANGEROUS' ? Colors.orange : Colors.deepPurple,
+          width: 8, // Thicker than planned route
+          jointType: JointType.round,
+          zIndex: 20, // Higher than planned route
+        ),
+      );
+
+      // 3.1 Add START and END markers
+      markers.add(
+        Marker(
+          markerId: const MarkerId('event_start'),
+          position: routePoints.first,
+          icon: BitmapDescriptor.defaultMarkerWithHue(BitmapDescriptor.hueGreen),
+          infoWindow: InfoWindow(
+            title: 'START',
+            snippet: journey.startLocation ?? 'Start Location',
+          ),
+        ),
+      );
+
+      markers.add(
+        Marker(
+          markerId: const MarkerId('event_end'),
+          position: routePoints.last,
+          icon: BitmapDescriptor.defaultMarkerWithHue(BitmapDescriptor.hueRed),
+          infoWindow: InfoWindow(
+            title: 'END',
+            snippet: journey.destination ?? 'Destination',
+          ),
+        ),
+      );
+
+      // 4. Add Markers for events
+      for (var i = 0; i < journey.turnEvents.length; i++) {
+        final event = journey.turnEvents[i];
+        markers.add(
+          Marker(
+            markerId: MarkerId('event_turn_$i'),
+            position: LatLng(event.latitude, event.longitude),
+            icon: BitmapDescriptor.defaultMarkerWithHue(
+              event.severity == 'risky' ? BitmapDescriptor.hueOrange : BitmapDescriptor.hueRed,
+            ),
+            infoWindow: InfoWindow(
+              title: '${event.severity.toUpperCase()} Turn',
+              snippet: 'Rate: ${event.turnRate.toStringAsFixed(1)}',
+            ),
+          ),
+        );
+      }
+
+      for (var i = 0; i < journey.brakingEvents.length; i++) {
+        final event = journey.brakingEvents[i];
+        markers.add(
+          Marker(
+            markerId: MarkerId('event_brake_$i'),
+            position: LatLng(event.latitude, event.longitude),
+            icon: BitmapDescriptor.defaultMarkerWithHue(BitmapDescriptor.hueYellow),
+            infoWindow: InfoWindow(
+              title: '${event.severity.toUpperCase()} Braking',
+              snippet: 'Decel: ${event.deceleration.toStringAsFixed(1)} m/s²',
+            ),
+          ),
+        );
+      }
+
+      // 5. Center Camera to encompass EVERYTHING
+      _fitMapToAllRoutes();
+    }
+
+    // 6. Generate Safety Tips based on fetched data
+    _generateSafetyTipsFromData(journey);
+    
+    // Trigger UI refresh explicitly
+    if (mounted) setState(() {});
+
+    // 7. Speak the fetched tips
+    _speakSafetyTips();
+  }
+
+  void _fitMapToPoints(List<LatLng> points) {
+    if (mapController == null || points.isEmpty) return;
+
+    double minLat = points.first.latitude;
+    double maxLat = points.first.latitude;
+    double minLng = points.first.longitude;
+    double maxLng = points.first.longitude;
+
+    for (var p in points) {
+      if (p.latitude < minLat) minLat = p.latitude;
+      if (p.latitude > maxLat) maxLat = p.latitude;
+      if (p.longitude < minLng) minLng = p.longitude;
+      if (p.longitude > maxLng) maxLng = p.longitude;
+    }
+
+    final bounds = LatLngBounds(
+      southwest: LatLng(minLat, minLng),
+      northeast: LatLng(maxLat, maxLng),
+    );
+
+    mapController?.animateCamera(CameraUpdate.newLatLngBounds(bounds, 80));
+  }
+
+  void _fitMapToAllRoutes() {
+    if (mapController == null || (polylines.isEmpty && markers.isEmpty)) return;
+    
+    List<LatLng> allPoints = [];
+    for (var poly in polylines) {
+      allPoints.addAll(poly.points);
+    }
+    for (var marker in markers) {
+      // Don't include the 'current' motorcycle marker in the bounds if it's far away
+      if (marker.markerId.value != 'current') {
+        allPoints.add(marker.position);
+      }
+    }
+    
+    if (allPoints.isNotEmpty) {
+      _fitMapToPoints(allPoints);
+    }
+  }
+
+  void _generateSafetyTipsFromData(JourneyData journey) {
+    setState(() {
+      safetyTips.clear();
+      
+      // 1. Context Header
+      safetyTips.add("✅ RIDE HISTORY: ${journey.startLocation?.split(',').first ?? 'Origin'} to ${journey.destination?.split(',').first ?? 'Destination'}");
+      // safetyTips.add("Journey ID: ${journey.id}");
+      safetyTips.add("----------------------------");
+
+      // 2. Exact Location Data
+      safetyTips.add("📍 Start: ${journey.startLocation ?? 'Unknown Location'}");
+      safetyTips.add("📍 End: ${journey.destination ?? 'Unknown Location'}");
+      safetyTips.add("----------------------------");
+
+      // 3. Performance Data (Directly from Firestore)
+      safetyTips.add("Performance Summary:");
+      safetyTips.add("• Prediction: ${journey.dangerPrediction?.toUpperCase() ?? 'NORMAL'}");
+      safetyTips.add("• Total Distance: ${journey.totalDistance.toStringAsFixed(3)} km");
+      safetyTips.add("• Avg Speed: ${journey.averageSpeed.toStringAsFixed(1)} km/h");
+      safetyTips.add("• Max Speed: ${journey.maxSpeed.toStringAsFixed(1)} km/h");
+      safetyTips.add("• Max Turn Rate: ${journey.maxTurnRate.toStringAsFixed(1)}");
+      safetyTips.add("• Risky Turns: ${journey.riskyTurns}");
+      safetyTips.add("• Braking Events: ${journey.totalBrakingEvents}");
+      safetyTips.add("----------------------------");
+
+      // 4. Data-Driven Advice
+      if (journey.dangerPrediction == 'DANGEROUS' || journey.riskyTurns > 0) {
+        safetyTips.add("⚠️ HISTORY WARNING:");
+        safetyTips.add("Your previous ride had ${journey.riskyTurns} risky turns and reached a turn rate of ${journey.maxTurnRate.toStringAsFixed(1)}.");
+        safetyTips.add("Recommended: Reduce speed at intersections and avoid sudden maneuvers.");
+      } else {
+        safetyTips.add("Safe history recorded. Continue following standard safety rules.");
+      }
+      
+      safetyTips.add("• Review the orange/red markers on the map for risk locations from your history.");
+    });
   }
 
   Future<void> _loadModel() async {
@@ -204,6 +440,200 @@ class _Member4PageState extends State<Member4Page> {
       print('❌ Failed to load model: $e');
       print(stack);
     }
+  }
+
+  Future<void> _loadPastRiskyEvents() async {
+    print("[DangerZone] ENTERED _loadPastRiskyEvents");
+
+    // Clear previous data
+    pastTurnEvents.clear();
+    pastBrakingEvents.clear();
+    warnedEventIds.clear();
+    riskCircles.clear();
+
+    try {
+      if (mounted) setState(() => _historyFetchError = '');
+      print("[DangerZone] Fetching journeys from Firebase...");
+      final allJourneys = await _journeyService.getAllJourneys();
+      
+      if (mounted) {
+        setState(() {
+          _totalJourneysInDB = allJourneys.length;
+        });
+      }
+      
+      print("[DangerZone] Received ${allJourneys.length} total journeys from Firebase");
+
+      // ── Filter journeys that match the current route ──
+      // Match by destination/start location keywords
+      final currentDest = (widget.destinationName ?? '').toLowerCase();
+      
+      List<JourneyData> matchingJourneys;
+      
+      if (currentDest.isEmpty) {
+        // No destination set — show ALL past risky events
+        matchingJourneys = allJourneys;
+        print("[DangerZone] No destination set. Using all ${matchingJourneys.length} journeys");
+      } else {
+        if (allJourneys.isNotEmpty) {
+          final dbDestinations = allJourneys.map((j) => "${j.startLocation} -> ${j.destination}").toSet().toList();
+          if (mounted) {
+            setState(() {
+              _availableDestinations = dbDestinations;
+            });
+          }
+        }
+
+        // Try to find journeys where either destination matches OR start matches (if destination is ambiguous)
+        matchingJourneys = allJourneys.where((journey) {
+          final journeyDest = (journey.destination ?? '').toLowerCase();
+          final journeyStart = (journey.startLocation ?? '').toLowerCase();
+          
+          bool destMatch = _routeKeywordsMatch(currentDest, journeyDest);
+          bool startMatch = _routeKeywordsMatch(currentDest, journeyStart);
+          
+          // Debug matching
+          print("[DangerZone] Checking match for '$currentDest': DB_Dest: '$journeyDest' (M: $destMatch), DB_Start: '$journeyStart' (M: $startMatch)");
+          
+          return destMatch || startMatch;
+        }).toList();
+        
+        if (matchingJourneys.isEmpty) {
+          print("[DangerZone] NO MATCH for '$currentDest'. Records in DB: ${_availableDestinations.join(' | ')}");
+        }
+        
+        print("[DangerZone] Filtered to ${matchingJourneys.length} journeys matching destination '$currentDest'");
+
+        // ── Identify the latest matching journey for detailed display ──
+        if (matchingJourneys.isNotEmpty) {
+          // Sort to get the most recent journey
+          matchingJourneys.sort((a, b) => b.startTime.compareTo(a.startTime));
+          final latestMatch = matchingJourneys.first;
+          print("[DangerZone] Latest matching journey found: ${latestMatch.id} from ${latestMatch.startTime}");
+          
+          if (mounted) {
+            await _displayJourneyData(latestMatch);
+          }
+        }
+      }
+
+      // ── Extract risk events from matching journeys ──
+      for (var journey in matchingJourneys) {
+        print("[DangerZone] Processing journey: ${journey.startLocation} → ${journey.destination} (${journey.turnEvents.length} turns, ${journey.brakingEvents.length} brakes)");
+        
+        // Collect severe turns
+        for (var turn in journey.turnEvents) {
+          if (turn.severity == 'risky' || turn.severity == 'sharp') {
+            pastTurnEvents.add(turn);
+            Color color = turn.severity == 'sharp' ? Colors.red : Colors.orange;
+            _createRiskCircle(turn.latitude, turn.longitude, color);
+            print("[DangerZone] ⚠ Turn at ${turn.latitude}, ${turn.longitude} (${turn.severity})");
+          }
+        }
+        // Collect severe brakes
+        for (var brake in journey.brakingEvents) {
+          if (brake.severity == 'emergency' || brake.severity == 'hard') {
+            pastBrakingEvents.add(brake);
+            _createRiskCircle(brake.latitude, brake.longitude, Colors.redAccent);
+            print("[DangerZone] 🛑 Brake at ${brake.latitude}, ${brake.longitude} (${brake.severity})");
+          }
+        }
+      }
+
+      print("[DangerZone] Total: ${pastTurnEvents.length} turns, ${pastBrakingEvents.length} brakes, ${riskCircles.length} circles");
+
+      if (_historyCompleter != null && !_historyCompleter!.isCompleted) {
+        _historyCompleter!.complete();
+      }
+
+      if (mounted) {
+        setState(() {});
+        print("[DangerZone] Map updated with ${riskCircles.length} risk circles");
+      }
+    } catch (e) {
+      print('[DangerZone] Error loading past risky events: $e');
+      if (mounted) setState(() => _historyFetchError = e.toString());
+      if (_historyCompleter != null && !_historyCompleter!.isCompleted) {
+        _historyCompleter!.complete();
+      }
+    }
+  }
+
+  /// Check if two location strings share meaningful keywords (city/area names)
+  bool _routeKeywordsMatch(String location1, String location2) {
+    if (location1.isEmpty || location2.isEmpty) return false;
+    
+    // Extract meaningful words (skip common words like "Sri Lanka", commas, etc.)
+    final skipWords = {'sri', 'lanka', 'road', 'street', 'avenue', 'lane', 'no', 'the', 'and', 'city', 'area'};
+    
+    // Split by common delimiters: space, comma, hyphen, slash, dot
+    final delimiters = RegExp(r'[\s,\-\/\.]');
+    
+    final words1 = location1
+        .toLowerCase()
+        .split(delimiters)
+        .where((w) => w.length > 2 && !skipWords.contains(w))
+        .toSet();
+    
+    final words2 = location2
+        .toLowerCase()
+        .split(delimiters)
+        .where((w) => w.length > 2 && !skipWords.contains(w))
+        .toSet();
+    
+    final intersection = words1.intersection(words2);
+    
+    // Check for substring match as well (e.g. "Malabe" matches "Malabe, Sri Lanka")
+    bool substringMatch = location1.toLowerCase().contains(location2.toLowerCase()) || 
+                          location2.toLowerCase().contains(location1.toLowerCase());
+    
+    bool directMatch = location1.toLowerCase().trim() == location2.toLowerCase().trim();
+
+    if (intersection.isNotEmpty || substringMatch || directMatch) {
+      print("[DangerZone] Match found! Keywords: $intersection, Substring: $substringMatch, Direct: $directMatch");
+    }
+    
+    return intersection.isNotEmpty || substringMatch || directMatch;
+  }
+
+  /// Check if any of a journey's risk events are near the current planned route
+  bool _journeyOverlapsRoute(JourneyData journey, List<LatLng> route) {
+    const double proximityThresholdKm = 0.5; // 500 meters
+    
+    for (var turn in journey.turnEvents) {
+      for (var routePoint in route) {
+        double dist = Geolocator.distanceBetween(
+          turn.latitude, turn.longitude,
+          routePoint.latitude, routePoint.longitude,
+        );
+        if (dist < proximityThresholdKm * 1000) return true;
+      }
+    }
+    for (var brake in journey.brakingEvents) {
+      for (var routePoint in route) {
+        double dist = Geolocator.distanceBetween(
+          brake.latitude, brake.longitude,
+          routePoint.latitude, routePoint.longitude,
+        );
+        if (dist < proximityThresholdKm * 1000) return true;
+      }
+    }
+    return false;
+  }
+
+  void _createRiskCircle(double lat, double lng, Color color) {
+    String circleIdStr = 'risk_${lat}_$lng';
+    riskCircles.add(
+      Circle(
+        circleId: CircleId(circleIdStr),
+        center: LatLng(lat, lng),
+        radius: 25, // 25 meters - fits road width
+        fillColor: color.withOpacity(0.5),
+        strokeColor: color,
+        strokeWidth: 3,
+        zIndex: 10,
+      ),
+    );
   }
 
   Future<void> _loadMotorcycleIcon() async {
@@ -255,9 +685,24 @@ class _Member4PageState extends State<Member4Page> {
 
     if (routeChanged || nameChanged || activeChanged) {
       print(
-          "[DangerZone] Props changed → syncing (active: ${widget.isJourneyActive})");
+          "[DangerZone] Props changed → syncing (active: ${widget.isJourneyActive}, dest: ${widget.destinationName})");
+
+      if (nameChanged || routeChanged) {
+        _historyDataLoaded = false;
+        _historyCompleter = Completer<void>();
+      }
 
       _syncJourneyData();
+      
+      // Re-filter risk zones when destination changes
+      if (nameChanged || routeChanged) {
+        print("[DangerZone] Destination/route changed → reloading risk zones");
+        _loadPastRiskyEvents().then((_) {
+          if (_historyCompleter != null && !_historyCompleter!.isCompleted) {
+            _historyCompleter!.complete();
+          }
+        });
+      }
 
       if (widget.isJourneyActive && !oldWidget.isJourneyActive) {
         print("[DangerZone] Journey STARTED → starting live updates");
@@ -316,40 +761,33 @@ class _Member4PageState extends State<Member4Page> {
       }
       isDummyRoute = destKey != null;
 
-      // Only add start/end markers when journey is active or route exists
-      if (widget.isJourneyActive && widget.predefinedStart != null) {
-        markers.add(
-          Marker(
-            markerId: const MarkerId('start'),
-            position: widget.predefinedStart!,
-            icon: BitmapDescriptor.defaultMarkerWithHue(
-                BitmapDescriptor.hueGreen),
-            infoWindow: const InfoWindow(title: 'Start'),
-          ),
-        );
-      }
-      if (widget.isJourneyActive && widget.predefinedEnd != null) {
-        markers.add(
-          Marker(
-            markerId: const MarkerId('end'),
-            position: widget.predefinedEnd!,
-            icon:
-                BitmapDescriptor.defaultMarkerWithHue(BitmapDescriptor.hueRed),
-            infoWindow:
-                InfoWindow(title: widget.destinationName ?? 'Destination'),
-          ),
-        );
-      }
+      // Ensure start/end points are reflected in state
+      startPoint = widget.predefinedStart;
+      endPoint = widget.predefinedEnd;
+
+      // Always add start/end markers if points exist
+      _addStartEndMarkers();
     });
 
-    // Only analyze when journey is active AND route exists
-    if (widget.isJourneyActive &&
-        isPredefined &&
-        widget.predefinedRoute != null) {
-      print(
-          "[DangerZone] Analyzing route (length: ${widget.predefinedRoute!.length})");
-      analyzeRoute(widget.predefinedRoute!);
-    } else if (!widget.isJourneyActive) {
+    // Only analyze when journey is active
+    if (widget.isJourneyActive) {
+      if (isPredefined && widget.predefinedRoute != null) {
+        print("[DangerZone] Using provided predefined route (${widget.predefinedRoute!.length} pts)");
+        analyzeRoute(widget.predefinedRoute!);
+      } else if (widget.predefinedStart != null && widget.predefinedEnd != null) {
+        print("[DangerZone] No route points provided. Fetching road-bound path from API...");
+        _fetchTrafficAwareRoute(widget.predefinedStart!, widget.predefinedEnd!).then((points) {
+          if (mounted) {
+            print("[DangerZone] Fetched planned route with ${points.length} points");
+            analyzeRoute(points);
+          }
+        }).catchError((e) {
+          print("[DangerZone] Failed to fetch planned route: $e");
+        });
+      } else {
+        print("[DangerZone] Warning: Journey active but NO route or start/end points!");
+      }
+    } else {
       print("[DangerZone] Journey inactive → skipping analysis");
     }
   }
@@ -369,6 +807,7 @@ class _Member4PageState extends State<Member4Page> {
             desiredAccuracy: LocationAccuracy.high);
         setState(() => currentPosition = pos);
         _updateCurrentMarker();
+        _checkProximityToRiskZones(pos);
         mapController?.animateCamera(
           CameraUpdate.newCameraPosition(
             CameraPosition(
@@ -391,6 +830,53 @@ class _Member4PageState extends State<Member4Page> {
         dangerAlert = r.nextDouble() > 0.88;
       });
     });
+  }
+
+  void _checkProximityToRiskZones(Position currentPos) {
+    if (!widget.isJourneyActive) return;
+
+    final double warningDistance = 100.0; // 100 meters
+
+    // Check Turn Events
+    for (var turn in pastTurnEvents) {
+      String eventId = 'turn_\${turn.timestamp.millisecondsSinceEpoch}';
+      if (!warnedEventIds.contains(eventId)) {
+        double distance = Geolocator.distanceBetween(
+          currentPos.latitude,
+          currentPos.longitude,
+          turn.latitude,
+          turn.longitude,
+        );
+        if (distance <= warningDistance) {
+          warnedEventIds.add(eventId);
+          _triggerAudioWarning(
+              "Warning: Approaching a zone where a \${turn.severity} turn occurred previously.");
+        }
+      }
+    }
+
+    // Check Braking Events
+    for (var brake in pastBrakingEvents) {
+      String eventId = 'brake_\${brake.timestamp.millisecondsSinceEpoch}';
+      if (!warnedEventIds.contains(eventId)) {
+        double distance = Geolocator.distanceBetween(
+          currentPos.latitude,
+          currentPos.longitude,
+          brake.latitude,
+          brake.longitude,
+        );
+        if (distance <= warningDistance) {
+          warnedEventIds.add(eventId);
+          _triggerAudioWarning(
+              "Warning: Approaching a zone where \${brake.severity} braking occurred previously.");
+        }
+      }
+    }
+  }
+
+  Future<void> _triggerAudioWarning(String message) async {
+    print("[DangerZone] TTS Warning triggered: \$message");
+    await flutterTts.speak(message);
   }
 
   void _stopLiveUpdates() {
@@ -746,8 +1232,19 @@ class _Member4PageState extends State<Member4Page> {
   }
 
   Future<void> analyzeRoute(List<LatLng> routeSegments) async {
-    polylines.clear();
-    safetyTips.clear();
+    // Wait for history load to at least ATTEMPT to finish if it's running
+    if (_historyCompleter != null) {
+      print("[DangerZone] analyzeRoute waiting for history loader...");
+      await _historyCompleter!.future;
+    }
+
+    // Note: We don't return early anymore because we want both routes visible
+    // but we will only clear and add TIPS if history is not loaded.
+    
+    if (!_historyDataLoaded) {
+      polylines.clear(); // Only clear simulation polylines if no history
+      safetyTips.clear();
+    }
     _predictedRisk = null;
 
     if (routeSegments.length < 2) {
@@ -774,6 +1271,10 @@ class _Member4PageState extends State<Member4Page> {
         safetyTips.add("Based on another member's journey data");
       }
       _predictedRisk = predictRouteRisk(routeDict);
+      
+      // Re-check flag before modifying state after async calls
+      if (_historyDataLoaded) return;
+
       Color routeColor = getRiskColor(_predictedRisk ?? 0.5);
       polylines.add(
         Polyline(
@@ -793,7 +1294,19 @@ class _Member4PageState extends State<Member4Page> {
     } else {
       // New route: per-segment analysis for safe/risky parts
       int highRiskCount = 0;
+      
+      if (!_historyDataLoaded && mounted) {
+        setState(() {
+          safetyTips.add("🔍 Analyzing route segments...");
+        });
+      }
+
       for (int i = 0; i < routeSegments.length - 1; i++) {
+        // Small delay to make the "little by little" effect visible
+        await Future.delayed(const Duration(milliseconds: 100));
+        
+        if (!mounted) return;
+
         Map<String, dynamic> segmentDict = await generateRandomRouteDict(
             [routeSegments[i], routeSegments[i + 1]]);
         segmentDict.addAll(weatherData); // Apply real weather
@@ -801,25 +1314,38 @@ class _Member4PageState extends State<Member4Page> {
         double? segmentRisk = predictRouteRisk(segmentDict);
         Color segmentColor = getRiskColor(segmentRisk ?? 0.5);
 
-        polylines.add(
-          Polyline(
-            polylineId: PolylineId('segment_$i'),
-            points: [routeSegments[i], routeSegments[i + 1]],
-            color: segmentColor,
-            width: 10,
-            jointType: JointType.round,
-            zIndex: 10,
-          ),
-        );
+        setState(() {
+          polylines.add(
+            Polyline(
+              polylineId: PolylineId('segment_$i'),
+              points: [routeSegments[i], routeSegments[i + 1]],
+              color: segmentColor,
+              width: 10,
+              jointType: JointType.round,
+              zIndex: 10,
+            ),
+          );
+          
+          if (!_historyDataLoaded && i % 3 == 0) {
+            // Update status periodically
+            int progress = ((i / (routeSegments.length - 1)) * 100).round();
+             safetyTips.removeWhere((t) => t.startsWith("🔍 Analyzing"));
+             safetyTips.add("🔍 Analyzing route: $progress%");
+          }
+        });
 
         if (segmentRisk != null && segmentRisk > 0.7) highRiskCount++;
+      }
+
+      if (!_historyDataLoaded) {
+          safetyTips.removeWhere((t) => t.startsWith("🔍 Analyzing"));
       }
 
       // Overall risk as average
       _predictedRisk =
           highRiskCount / (routeSegments.length - 1); // Simple average example
 
-      if (_predictedRisk != null) {
+      if (_predictedRisk != null && !_historyDataLoaded) {
         safetyTips.addAll(getSafetySuggestions(_predictedRisk!, weatherData));
         if (highRiskCount > 0) {
           safetyTips.add(
@@ -830,37 +1356,22 @@ class _Member4PageState extends State<Member4Page> {
           safetyTips.add('All segments appear safe');
           await flutterTts.speak('Route is safe. Enjoy your ride.');
         }
-      } else {
+      } else if (_predictedRisk == null && !_historyDataLoaded) {
         safetyTips.add('No AI risk prediction available');
       }
     }
 
-    // Improved camera fitting
-    if (mapController != null && routeSegments.isNotEmpty) {
-      double minLat =
-          routeSegments.map((p) => p.latitude).reduce((a, b) => a < b ? a : b);
-      double maxLat =
-          routeSegments.map((p) => p.latitude).reduce((a, b) => a > b ? a : b);
-      double minLng =
-          routeSegments.map((p) => p.longitude).reduce((a, b) => a < b ? a : b);
-      double maxLng =
-          routeSegments.map((p) => p.longitude).reduce((a, b) => a > b ? a : b);
+    // Improved camera fitting to encompass EVERYTHING
+    _fitMapToAllRoutes();
 
-      final bounds = LatLngBounds(
-        southwest: LatLng(minLat, minLng),
-        northeast: LatLng(maxLat, maxLng),
-      );
-
-      WidgetsBinding.instance.addPostFrameCallback((_) {
-        mapController?.animateCamera(
-          CameraUpdate.newLatLngBounds(bounds, 80),
-        );
-      });
+    if (!_historyDataLoaded) {
+      generateSafetyTips();
+      if (mounted) setState(() {});
+      _speakSafetyTips();
+    } else {
+      print("[DangerZone] analyzeRoute FINISHED but skipped tips because history is loaded");
+      if (mounted) setState(() {});
     }
-
-    generateSafetyTips();
-    if (mounted) setState(() {});
-    _speakSafetyTips();
   }
 
   double calculateRiskScore(int segmentIndex, double baseRisk) {
@@ -904,7 +1415,29 @@ class _Member4PageState extends State<Member4Page> {
       }
       safetyTips.add('High-risk zones marked in red — stay extra vigilant');
     } else {
-      safetyTips.insert(0, 'This is a new route');
+      safetyTips.insert(0, '# TRACE: History Check Failed');
+      safetyTips.add('----------------------------');
+      safetyTips.add('DB Status: $_totalJourneysInDB records in "(default)"');
+      safetyTips.add('Search Target: "${(widget.destinationName ?? 'None')}"');
+      
+      if (_historyFetchError.isNotEmpty) {
+        safetyTips.add('❌ ERROR: $_historyFetchError');
+      }
+
+      if (_totalJourneysInDB > 0) {
+        if (_availableDestinations.isNotEmpty) {
+          safetyTips.add('Routes found in Database (${_availableDestinations.length}):');
+          for (var d in _availableDestinations.take(5)) {
+            safetyTips.add('• $d');
+          }
+        } else {
+          safetyTips.add('⚠️ Matching list is empty? (Logic Issue)');
+        }
+      } else {
+        safetyTips.add('⚠️ NO RECORDS FOUND IN FIREBASE (default)');
+        safetyTips.add('Note: Check if Firestore contains "journeys" collection');
+      }
+      safetyTips.add('----------------------------');
     }
   }
 
@@ -946,12 +1479,27 @@ class _Member4PageState extends State<Member4Page> {
             },
             markers: markers,
             polylines: polylines,
+            circles: riskCircles,
             myLocationEnabled: false,
             myLocationButtonEnabled: true,
             compassEnabled: true,
             zoomControlsEnabled: true,
             trafficEnabled: true, // Show live traffic layer on map
             mapToolbarEnabled: false,
+          ),
+          Positioned(
+            top: MediaQuery.of(context).padding.top + 16,
+            right: 16,
+            child: FloatingActionButton(
+              mini: true,
+              backgroundColor: Colors.deepPurple,
+              child: const Icon(Icons.refresh, color: Colors.white),
+              onPressed: () {
+                print("[DangerZone] Manual refresh triggered");
+                _loadPastRiskyEvents();
+                _fetchAndDisplayLatestJourney();
+              },
+            ),
           ),
           if (widget.isJourneyActive)
             Positioned(
