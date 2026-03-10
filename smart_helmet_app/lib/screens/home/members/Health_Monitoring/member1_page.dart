@@ -7,6 +7,7 @@
 
 import 'dart:async';
 import 'dart:convert';
+import 'dart:math' as math;
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
@@ -503,52 +504,22 @@ class _Member1PageState extends State<Member1Page>
     }
 
     try {
-      // ────────────────────────────────────────────────
-      // 1. Get current emotional state from provider
-      // ────────────────────────────────────────────────
-      final emotionProvider = Provider.of<EmotionProvider>(
-        context,
-        listen: false,
-      );
+      final emotionProvider = Provider.of<EmotionProvider>(context, listen: false);
       final currentEmotion = emotionProvider.stressState.emotion;
       final emotionEmoji = emotionProvider.stressState.emoji ?? "😐";
-
       final emotionMultiplier = _getEmotionRiskMultiplier(currentEmotion);
 
-      // ────────────────────────────────────────────────
-      // 2. User Profile (still mocked — replace with real DB fetch later)
-      // ────────────────────────────────────────────────
+      // User Profile (Mocked or from DB)
       double age = 30.0;
       double gender = 0.0; // 0 = Male, 1 = Female
       double weight = 75.0; // kg
       double height = 1.75; // meters
-
-      // ────────────────────────────────────────────────
-      // 3. Feature Engineering
-      // ────────────────────────────────────────────────
       double derivedBMI = weight / (height * height);
+      double derivedHRV = (hr > 100 || hr < 60) ? 30.0 : 60.0;
 
-      // Crude HRV proxy
-      double derivedHRV = 60.0;
-      if (hr > 100 || hr < 60) derivedHRV = 30.0;
-
-      // Scalers (from your original training pipeline)
-      List<double> means = [
-        99.70281639014169,
-        37.07289512301389,
-        50.93246,
-        0.49886,
-        27.610900222144865,
-        47.90562916450637
-      ];
-      List<double> scales = [
-        28.799757731731674,
-        1.1095593883726716,
-        19.336496464016147,
-        0.5000000000147614,
-        8.52047814467008,
-        17.265580269863933
-      ];
+      // Scalers
+      List<double> means = [99.702, 37.072, 50.932, 0.498, 27.610, 47.905];
+      List<double> scales = [28.799, 1.109, 19.336, 0.500, 8.520, 17.265];
 
       double s_hr = (hr - means[0]) / scales[0];
       double s_temp = (temp - means[1]) / scales[1];
@@ -557,42 +528,35 @@ class _Member1PageState extends State<Member1Page>
       double s_bmi = (derivedBMI - means[4]) / scales[4];
       double s_hrv = (derivedHRV - means[5]) / scales[5];
 
-      // Input tensor shape: [1, 6]
-      var input = [
-        [s_hr, s_temp, s_age, s_gender, s_bmi, s_hrv]
-      ];
+      var input = [[s_hr, s_temp, s_age, s_gender, s_bmi, s_hrv]];
       var output = List.filled(1, [0.0]);
 
       _interpreter!.run(input, output);
 
       double baseProbability = output[0][0].clamp(0.0, 1.0);
-
-      // ────────────────────────────────────────────────
-      // 4. Apply emotion adjustment
-      // ────────────────────────────────────────────────
-      final adjustedProbability =
-          (baseProbability * emotionMultiplier).clamp(0.0, 1.0);
+      final adjustedProbability = (baseProbability * emotionMultiplier).clamp(0.0, 1.0);
       final int riskPercentage = (adjustedProbability * 100).round();
 
       String newRisk;
       Color newColor;
 
       if (adjustedProbability > 0.75) {
-        newRisk = "High Risk";
+        newRisk = "CRITICAL";
         newColor = const Color(0xFFFF3B30);
       } else if (adjustedProbability > 0.45) {
-        newRisk = "Medium Risk";
+        newRisk = "ELEVATED";
         newColor = const Color(0xFFFF9500);
       } else {
-        newRisk = "Normal";
+        newRisk = "STABLE";
         newColor = const Color(0xFF34C759);
       }
 
       if (mounted) {
         setState(() {
-          riskLevel =
-              "$newRisk ($riskPercentage%) • $currentEmotion $emotionEmoji";
+          riskLevel = "$newRisk ($riskPercentage%)";
           riskColor = newColor;
+          // Store raw percentage for UI
+          _heartAttackRisk = riskPercentage;
         });
       }
     } catch (e) {
@@ -600,6 +564,9 @@ class _Member1PageState extends State<Member1Page>
       _fallbackLocalRisk(hr, temp);
     }
   }
+
+  // Add this property to the state class
+  int _heartAttackRisk = 0;
 
 // ────────────────────────────────────────────────
 // Helper: Emotion → Acute Risk Multiplier
@@ -638,6 +605,7 @@ class _Member1PageState extends State<Member1Page>
       setState(() {
         riskLevel = "$newRisk ($riskPercentage%)";
         riskColor = newColor;
+        _heartAttackRisk = riskPercentage;
       });
     }
   }
@@ -809,21 +777,17 @@ class _Member1PageState extends State<Member1Page>
                 const SizedBox(height: 24),
                 _buildOverallHealthStatusCard(),
                 const SizedBox(height: 24),
+                _buildEmotionalState(isConnected),
+                const SizedBox(height: 24),
                 _buildTodaySummaryCard(),
                 const SizedBox(height: 24),
                 _buildPersonalizedRecommendations(),
                 const SizedBox(height: 24),
-                _buildEmotionalState(isConnected),
+                
+                // --- Brain Activity Monitor (Real-time from Provider) ---
+                _buildBrainActivityMonitor(),
+
                 const SizedBox(height: 24),
-                const SizedBox(height: 20),
-                //_buildRiskAssessment(),
-                const SizedBox(height: 20),
-
-                // Updated: now uses real emotion from provider
-                _buildEmotionalState(isConnected),
-
-                const SizedBox(height: 20),
-
                 _buildVitalsChart(),
                 const SizedBox(height: 40),
               ],
@@ -1080,50 +1044,9 @@ class _Member1PageState extends State<Member1Page>
     } else if (bodyTemperature > 38.5 || bodyTemperature < 35.0) {
       score -= 30;
     }
-    Widget _buildEmotionalState(
-        bool isConnected, String emotion, String emoji) {
-      return Card(
-        elevation: 2,
-        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
-        child: Padding(
-          padding: const EdgeInsets.all(20),
-          child: Column(
-            children: [
-              const Text(
-                "Emotional State",
-                style: TextStyle(fontSize: 16, fontWeight: FontWeight.w600),
-              ),
-              const SizedBox(height: 16),
-              Text(
-                emoji,
-                style: const TextStyle(fontSize: 64),
-              ),
-              const SizedBox(height: 12),
-              Text(
-                emotion,
-                style: const TextStyle(
-                  fontSize: 20,
-                  fontWeight: FontWeight.w600,
-                  color: Colors.indigo,
-                ),
-              ),
-              const SizedBox(height: 8),
-              Text(
-                isConnected
-                    ? "Analyzing real-time signals..."
-                    : "Connect EEG device to detect emotional state",
-                style: const TextStyle(fontSize: 12, color: Colors.black38),
-                textAlign: TextAlign.center,
-              ),
-            ],
-          ),
-        ),
-      );
-    }
-
     // Risk level impact
-    if (riskLevel.toLowerCase().contains('medium')) score -= 20;
-    if (riskLevel.toLowerCase().contains('high')) score -= 40;
+    if (riskLevel.toLowerCase().contains('elevated')) score -= 20;
+    if (riskLevel.toLowerCase().contains('critical')) score -= 45;
 
     return score.clamp(0, 100);
   }
@@ -1155,39 +1078,38 @@ class _Member1PageState extends State<Member1Page>
           Row(
             mainAxisAlignment: MainAxisAlignment.spaceBetween,
             children: [
-              Column(
+              const Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  const Text(
-                    "Overall Health Status",
+                  Text(
+                    "Heart Attack Risk Prediction",
                     style: TextStyle(
                       fontSize: 16,
                       fontWeight: FontWeight.w900,
                       color: Color(0xFF1C1C1E),
                     ),
                   ),
-                  const SizedBox(height: 4),
+                  SizedBox(height: 4),
                   Text(
-                    "Based on real-time biometrics",
+                    "AI Analysis via TFLite Model",
                     style: TextStyle(
                       fontSize: 12,
-                      color: Colors.grey.shade600,
+                      color: Colors.grey,
                       fontWeight: FontWeight.w500,
                     ),
                   ),
                 ],
               ),
               Container(
-                padding:
-                    const EdgeInsets.symmetric(horizontal: 14, vertical: 6),
+                padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 6),
                 decoration: BoxDecoration(
-                  color: statusColor.withOpacity(0.15),
+                  color: riskColor.withOpacity(0.15),
                   borderRadius: BorderRadius.circular(100),
                 ),
                 child: Text(
-                  statusLabel,
+                  riskLevel.split(' ')[0],
                   style: TextStyle(
-                    color: statusColor,
+                    color: riskColor,
                     fontSize: 11,
                     fontWeight: FontWeight.w900,
                     letterSpacing: 0.5,
@@ -1206,10 +1128,10 @@ class _Member1PageState extends State<Member1Page>
                     width: 100,
                     height: 100,
                     child: CircularProgressIndicator(
-                      value: score / 100,
+                      value: _heartAttackRisk / 100,
                       strokeWidth: 10,
                       backgroundColor: Colors.white,
-                      color: statusColor,
+                      color: riskColor,
                       strokeCap: StrokeCap.round,
                     ),
                   ),
@@ -1217,16 +1139,16 @@ class _Member1PageState extends State<Member1Page>
                     mainAxisSize: MainAxisSize.min,
                     children: [
                       Text(
-                        "$score",
+                        "${_heartAttackRisk}%",
                         style: const TextStyle(
-                          fontSize: 32,
+                          fontSize: 24,
                           fontWeight: FontWeight.w900,
                           color: Color(0xFF1C1C1E),
                           height: 1,
                         ),
                       ),
                       const Text(
-                        "SCORE",
+                        "RISK",
                         style: TextStyle(
                           fontSize: 10,
                           fontWeight: FontWeight.bold,
@@ -1243,19 +1165,18 @@ class _Member1PageState extends State<Member1Page>
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
                     Text(
-                      riskLevel.toUpperCase(),
+                      _getRiskMessage().toUpperCase(),
                       style: TextStyle(
-                        fontSize: 18,
+                        fontSize: 14,
                         fontWeight: FontWeight.bold,
                         color: riskColor,
-                        letterSpacing: -0.5,
                       ),
                     ),
                     const SizedBox(height: 8),
                     Text(
                       _getRiskDescription(riskLevel),
                       style: TextStyle(
-                        fontSize: 13,
+                        fontSize: 12,
                         color: Colors.grey.shade700,
                         height: 1.4,
                       ),
@@ -1504,76 +1425,97 @@ class _Member1PageState extends State<Member1Page>
           ),
         ],
       ),
-      child: ListTile(
-        onTap: () {
-          _tabController.animateTo(1);
-        },
-        contentPadding:
-            const EdgeInsets.symmetric(horizontal: 20, vertical: 12),
-        leading: Container(
-          padding: const EdgeInsets.all(12),
-          decoration: BoxDecoration(
-            color: const Color(0xFF2D62ED).withOpacity(0.1),
-            shape: BoxShape.circle,
-          ),
-          child: const Icon(Icons.history_toggle_off_rounded,
-              color: Color(0xFF2D62ED), size: 28),
-        ),
-        title: const Text(
-          "Today's Average Log",
-          style: TextStyle(
-              fontSize: 14,
-              fontWeight: FontWeight.w600,
-              color: Color(0xFF8E8E93)),
-        ),
-        subtitle: Padding(
-          padding: const EdgeInsets.only(top: 4),
-          child: Row(
-            children: [
-              Text(
-                _isLoadingToday
-                    ? "Calculating..."
-                    : "${_todayAvgHR.toInt()} BPM",
-                style: const TextStyle(
-                    fontSize: 18,
-                    fontWeight: FontWeight.w900,
-                    color: Color(0xFF1C1C1E)),
+      child: Column(
+        children: [
+          ListTile(
+            onTap: () {
+              _tabController.animateTo(1);
+            },
+            contentPadding: const EdgeInsets.symmetric(horizontal: 20, vertical: 12),
+            leading: Container(
+              padding: const EdgeInsets.all(12),
+              decoration: BoxDecoration(
+                color: const Color(0xFF2D62ED).withOpacity(0.1),
+                shape: BoxShape.circle,
               ),
-              const SizedBox(width: 12),
-              Container(
-                  width: 4,
-                  height: 4,
-                  decoration: const BoxDecoration(
-                      color: Colors.grey, shape: BoxShape.circle)),
-              const SizedBox(width: 12),
-              Text(
-                _isLoadingToday
-                    ? "..."
-                    : "${_todayAvgTemp.toStringAsFixed(1)}°C",
-                style: const TextStyle(
-                    fontSize: 18,
-                    fontWeight: FontWeight.w900,
-                    color: Color(0xFF2D62ED)),
+              child: const Icon(Icons.history_toggle_off_rounded,
+                  color: Color(0xFF2D62ED), size: 28),
+            ),
+            title: const Text(
+              "Today's Physiological Baseline",
+              style: TextStyle(
+                  fontSize: 14,
+                  fontWeight: FontWeight.w600,
+                  color: Color(0xFF8E8E93)),
+            ),
+            subtitle: Padding(
+              padding: const EdgeInsets.only(top: 4),
+              child: Row(
+                children: [
+                  Text(
+                    _isLoadingToday
+                        ? "Calculating..."
+                        : "${_todayAvgHR.toInt()} BPM",
+                    style: const TextStyle(
+                        fontSize: 18,
+                        fontWeight: FontWeight.w900,
+                        color: Color(0xFF1C1C1E)),
+                  ),
+                  const SizedBox(width: 12),
+                  Container(
+                      width: 4,
+                      height: 4,
+                      decoration: const BoxDecoration(
+                          color: Colors.grey, shape: BoxShape.circle)),
+                  const SizedBox(width: 12),
+                  Text(
+                    _isLoadingToday
+                        ? "..."
+                        : "${_todayAvgTemp.toStringAsFixed(1)}°C",
+                    style: const TextStyle(
+                        fontSize: 18,
+                        fontWeight: FontWeight.w900,
+                        color: Color(0xFF2D62ED)),
+                  ),
+                ],
               ),
-            ],
+            ),
+            trailing: const Icon(Icons.arrow_forward_ios_rounded,
+                color: Color(0xFF2D62ED), size: 16),
           ),
-        ),
-        trailing: const Icon(Icons.arrow_forward_ios_rounded,
-            color: Color(0xFF2D62ED), size: 16),
+          if (!_isLoadingToday && _todayReadings > 0)
+            Padding(
+              padding: const EdgeInsets.only(left: 72, bottom: 16, right: 20),
+              child: Row(
+                children: [
+                  Icon(Icons.check_circle_outline, size: 12, color: Colors.green.shade600),
+                  const SizedBox(width: 4),
+                  Text(
+                    "Computed from $_todayReadings clinical data points",
+                    style: TextStyle(
+                      fontSize: 11,
+                      color: Colors.grey.shade600,
+                      fontWeight: FontWeight.w500,
+                    ),
+                  ),
+                ],
+              ),
+            ),
+        ],
       ),
     );
   }
 
   String _getRiskDescription(String level) {
-    switch (level.toLowerCase()) {
-      case 'normal':
-        return "All vitals are within safe medical ranges.";
-      case 'medium risk':
-        return "Elevated vitals detected. Monitor closely.";
-      case 'high risk':
-        return "CRITICAL: Immediate attention required.";
+    switch (level.split(' ')[0].toUpperCase()) {
+      case 'STABLE':
+        return "Cardiovascular patterns are within safe ranges.";
+      case 'ELEVATED':
+        return "Suspected cardiac strain. Elevated heart rate/temp detected.";
+      case 'CRITICAL':
+        return "URGENT: AI model indicates high risk of cardiac event.";
       default:
-        return "Analyzing real-time sensor data...";
+        return "Processing real-time physiological telemetry...";
     }
   }
 
@@ -1598,16 +1540,22 @@ class _Member1PageState extends State<Member1Page>
   // --- ENHANCED CHART CODE STARTS HERE ---
 
   Widget _buildEmotionalState(bool isConnected) {
+    // ─── Read real emotional state from provider ───
+    final emotionProvider = context.watch<EmotionProvider>();
+    final currentEmotion = emotionProvider.stressState.emotion;
+    final currentEmoji = emotionProvider.stressState.emoji;
+    final stateColor = emotionProvider.stressState.color;
+
     return Container(
       padding: const EdgeInsets.all(20),
       decoration: BoxDecoration(
-        color: Colors.white.withOpacity(0.9),
+        color: Colors.white,
         borderRadius: BorderRadius.circular(24),
         border: Border.all(
-            color: const Color(0xFF2D62ED).withOpacity(0.2), width: 1.5),
+            color: stateColor.withOpacity(0.2), width: 1.5),
         boxShadow: [
           BoxShadow(
-            color: const Color(0xFF2D62ED).withOpacity(0.06),
+            color: stateColor.withOpacity(0.06),
             blurRadius: 20,
             offset: const Offset(0, 8),
           ),
@@ -1627,8 +1575,8 @@ class _Member1PageState extends State<Member1Page>
                 ),
               ),
               StatusPill(
-                label: "Beta AI",
-                color: const Color(0xFF2D62ED),
+                label: "LIVE EEG SYNC",
+                color: stateColor,
               ),
             ],
           ),
@@ -1636,16 +1584,16 @@ class _Member1PageState extends State<Member1Page>
           Row(
             children: [
               Container(
-                width: 56,
-                height: 56,
+                width: 64,
+                height: 64,
                 decoration: BoxDecoration(
-                  color: const Color(0xFFF2F2F7),
+                  color: stateColor.withOpacity(0.1),
                   shape: BoxShape.circle,
                   border: Border.all(color: Colors.white, width: 2),
                 ),
                 child: Center(
-                  child: Text(frustrationEmoji,
-                      style: const TextStyle(fontSize: 28)),
+                  child: Text(currentEmoji,
+                      style: const TextStyle(fontSize: 32)),
                 ),
               ),
               const SizedBox(width: 16),
@@ -1653,15 +1601,15 @@ class _Member1PageState extends State<Member1Page>
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
                   Text(
-                    frustrationState,
-                    style: const TextStyle(
-                      fontSize: 18,
+                    currentEmotion,
+                    style: TextStyle(
+                      fontSize: 20,
                       fontWeight: FontWeight.w900,
-                      color: Color(0xFF1C1C1E),
+                      color: stateColor,
                     ),
                   ),
                   const Text(
-                    "Physiological Correlation",
+                    "Real-time Mental Feed",
                     style: TextStyle(
                       fontSize: 12,
                       color: Color(0xFF8E8E93),
@@ -1669,6 +1617,136 @@ class _Member1PageState extends State<Member1Page>
                     ),
                   ),
                 ],
+              ),
+            ],
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildBrainActivityMonitor() {
+    final emotionProvider = context.watch<EmotionProvider>();
+    final bands = emotionProvider.eegBands;
+    final attention = emotionProvider.attention;
+    final meditation = emotionProvider.meditation;
+
+    return Container(
+      padding: const EdgeInsets.all(20),
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(24),
+        border: Border.all(color: const Color(0xFF065aa7).withOpacity(0.1), width: 1.5),
+        boxShadow: [
+          BoxShadow(
+            color: Colors.black.withOpacity(0.04),
+            blurRadius: 20,
+            offset: const Offset(0, 8),
+          ),
+        ],
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              const Icon(Icons.psychology_rounded, color: Color(0xFF065aa7), size: 24),
+              const SizedBox(width: 12),
+              const Text(
+                "Brain Activity Monitor",
+                style: TextStyle(
+                  color: Color(0xFF1C1C1E),
+                  fontSize: 16,
+                  fontWeight: FontWeight.w900,
+                ),
+              ),
+              const Spacer(),
+              Container(
+                padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                decoration: BoxDecoration(
+                  color: const Color(0xFF065aa7).withOpacity(0.1),
+                  borderRadius: BorderRadius.circular(6),
+                ),
+                child: const Text("REMOTE FEED",
+                    style: TextStyle(color: Color(0xFF065aa7), fontSize: 9, fontWeight: FontWeight.w800)),
+              ),
+            ],
+          ),
+          const SizedBox(height: 20),
+          Row(
+            children: [
+              _buildBrainStat("Focus", "$attention%", Colors.orange),
+              const SizedBox(width: 16),
+              _buildBrainStat("Calm", "$meditation%", Colors.green),
+            ],
+          ),
+          const SizedBox(height: 24),
+          Text("EEG Power Bands".toUpperCase(),
+              style: TextStyle(color: Colors.grey.shade600, fontSize: 10, fontWeight: FontWeight.w900, letterSpacing: 0.5)),
+          const SizedBox(height: 16),
+          _buildBandBar("Alpha (Relax)", bands['Alpha'] ?? 0, const Color(0xFF00C7BE)),
+          _buildBandBar("Beta (Focus)", bands['Beta'] ?? 0, const Color(0xFF007AFF)),
+          _buildBandBar("Theta (Dream)", bands['Theta'] ?? 0, const Color(0xFF5856D6)),
+          _buildBandBar("Delta (Sleep)", bands['Delta'] ?? 0, const Color(0xFFFF2D55)),
+          _buildBandBar("Gamma (Insight)", bands['Gamma'] ?? 0, const Color(0xFFFF9500)),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildBrainStat(String label, String value, Color color) {
+    return Expanded(
+      child: Container(
+        padding: const EdgeInsets.symmetric(vertical: 14),
+        decoration: BoxDecoration(
+          color: color.withOpacity(0.08),
+          borderRadius: BorderRadius.circular(16),
+          border: Border.all(color: color.withOpacity(0.2), width: 1),
+        ),
+        child: Column(
+          children: [
+            Text(value, style: TextStyle(color: color, fontSize: 20, fontWeight: FontWeight.w900)),
+            const SizedBox(height: 2),
+            Text(label, style: TextStyle(color: color.withOpacity(0.7), fontSize: 10, fontWeight: FontWeight.w700)),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _buildBandBar(String label, double power, Color color) {
+    // Simple normalization for display: power values can be large, we use a log-base visual
+    final double displayWidth = (power > 0 ? (math.log(power + 1) / 15.0) : 0.0).clamp(0.05, 1.0);
+    
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 12),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+            children: [
+              Text(label, style: TextStyle(color: Colors.grey.shade700, fontSize: 11, fontWeight: FontWeight.w600)),
+              Text(power > 1000000 ? "${(power/1000000).toStringAsFixed(1)}M" : power.toInt().toString(), 
+                style: TextStyle(color: color, fontSize: 11, fontWeight: FontWeight.w800)),
+            ],
+          ),
+          const SizedBox(height: 6),
+          Stack(
+            children: [
+              Container(height: 6, width: double.infinity, decoration: BoxDecoration(color: const Color(0xFFF2F2F7), borderRadius: BorderRadius.circular(3))),
+              FractionallySizedBox(
+                widthFactor: displayWidth,
+                child: Container(
+                  height: 6, 
+                  decoration: BoxDecoration(
+                    color: color, 
+                    borderRadius: BorderRadius.circular(3),
+                    boxShadow: [
+                      BoxShadow(color: color.withOpacity(0.3), blurRadius: 4, offset: const Offset(0, 2))
+                    ]
+                  )
+                ),
               ),
             ],
           ),
@@ -1929,13 +2007,13 @@ class _Member1PageState extends State<Member1Page>
   }
 
   String _getRiskMessage() {
-    if (riskLevel.contains("High"))
-      return "Immediate attention recommended. Elevated vitals detected.";
-    if (riskLevel.contains("Medium"))
-      return "Monitor closely. Rest and stay hydrated.";
-    if (riskLevel.contains("Low"))
-      return "Vitals within normal range. Continue monitoring.";
-    return "Waiting for sensor data...";
+    if (riskLevel.contains("CRITICAL"))
+      return "Immediate medical attention recommended. AI detected high cardiovascular risk.";
+    if (riskLevel.contains("ELEVATED"))
+      return "Cardiovascular strain detected. Please rest and monitor vitals closely.";
+    if (riskLevel.contains("STABLE"))
+      return "Heart rhythm and biometrics appear stable. Continue regular monitoring.";
+    return "Analyzing clinical sensor feed...";
   }
 
   // --- UI Redesign Helper Methods ---
