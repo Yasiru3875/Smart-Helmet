@@ -20,6 +20,7 @@ class DummyJourneyData {
       turnEvents: _generateTurnEvents(startTime),
       gpsTrack: _generateGPSTrack(startTime),
       sensorReadings: _generateSensorReadings(startTime),
+      leanEvents: _generateLeanEvents(startTime),
     );
   }
 
@@ -340,5 +341,32 @@ class DummyJourneyData {
     }
     
     return track;
+  }
+
+  /// Generate sample lean events for testing
+  static List<LeanEvent> _generateLeanEvents(DateTime startTime) {
+    return [
+      LeanEvent(
+        timestamp: startTime.add(const Duration(minutes: 12)),
+        leanAngle: 38.5,
+        severity: 'risky',
+        latitude: 7.2180,
+        longitude: 79.8480,
+      ),
+      LeanEvent(
+        timestamp: startTime.add(const Duration(minutes: 25)),
+        leanAngle: -47.2,
+        severity: 'critical',
+        latitude: 7.2350,
+        longitude: 79.8660,
+      ),
+      LeanEvent(
+        timestamp: startTime.add(const Duration(minutes: 38)),
+        leanAngle: 42.1,
+        severity: 'risky',
+        latitude: 7.2530,
+        longitude: 79.8830,
+      ),
+    ];
   }
 }

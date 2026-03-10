@@ -25,7 +25,6 @@ import 'package:smart_helmet_app/providers/emotion_provider.dart';
 // If you have auth:
 // import '../../../../services/auth_service.dart';
 
-
 class Member2Page extends StatefulWidget {
   const Member2Page({super.key});
 
@@ -40,6 +39,8 @@ class _Member2PageState extends State<Member2Page> {
   String? errorMessage = "";
 
   Interpreter? interpreter;
+
+  String _lastSentStressKey = ""; // To avoid sending the same value repeatedly
 
   double stressScore = 0.0;
   double relaxedScore = 0.0;
@@ -212,6 +213,7 @@ class _Member2PageState extends State<Member2Page> {
     tg.onAttention = (att) {
       if (mounted && poorSignalLevel <= 50) {
         setState(() => attention = att);
+        Provider.of<EmotionProvider>(context, listen: false).updateEEG(attention: att);
         _updateStressAndMood();
       }
     };
@@ -219,6 +221,7 @@ class _Member2PageState extends State<Member2Page> {
     tg.onMeditation = (med) {
       if (mounted && poorSignalLevel <= 50) {
         setState(() => meditation = med);
+        Provider.of<EmotionProvider>(context, listen: false).updateEEG(meditation: med);
         _updateStressAndMood();
       }
     };
@@ -233,6 +236,10 @@ class _Member2PageState extends State<Member2Page> {
           eegBands['Beta'] = powerBands[4] + powerBands[5];
           eegBands['Gamma'] = powerBands[6] + powerBands[7];
         });
+
+        // Push to shared provider for Member 1 to see
+        Provider.of<EmotionProvider>(context, listen: false).updateEEG(bands: eegBands);
+
         _updateStressAndMood();
         _updateEmotionalStates();
       }
@@ -610,7 +617,7 @@ class _Member2PageState extends State<Member2Page> {
       relaxedScore = hybridRelaxed;
     });
 
-    // Persistence alert (now uses hybridStress > 0.7)
+    // Persistence alert
     if (hybridStress > 0.7) {
       _stressTimer ??= Timer(stressPersistenceThreshold, () {
         if (mounted) setState(() => showRestAlert = true);
@@ -621,7 +628,7 @@ class _Member2PageState extends State<Member2Page> {
       if (mounted) setState(() => showRestAlert = false);
     }
 
-    // Firestore save
+    // Firestore save logic (unchanged)
     final now = DateTime.now();
     final timeToSave = _lastSavedTime == null ||
         now.difference(_lastSavedTime!) >= _saveInterval;
@@ -633,6 +640,51 @@ class _Member2PageState extends State<Member2Page> {
       _saveToFirestore();
       _lastSavedTime = now;
     }
+
+    // ────────────────────────────────────────────────────────────────
+    // NEW: Send stress data to SmartWatch_ESP32 when it changes
+    // ────────────────────────────────────────────────────────────────
+    _sendStressToWatchIfChanged(
+      stressLevel: newStressLevel,
+      emoji: newStressEmoji,
+      percent: (hybridStress * 100).round(),
+    );
+  }
+
+// ────────────────────────────────────────────────────────────────
+// New helper method
+// ────────────────────────────────────────────────────────────────
+  void _sendStressToWatchIfChanged({
+    required String stressLevel,
+    required String emoji,
+    required int percent,
+  }) {
+    const watchName = "SmartWatch_ESP32";
+
+    final btManager = context.read<BluetoothManager>();
+
+    if (!btManager.isConnected(watchName)) {
+      return; // Watch not connected → skip silently
+    }
+
+    // Create unique key to detect real changes
+    final currentKey = "$stressLevel|$percent|$emoji";
+
+    if (currentKey == _lastSentStressKey) {
+      return; // No change → don't spam the watch
+    }
+
+    final jsonData = {
+      "stress": stressLevel,
+      "emoji": emoji,
+      "score": percent,
+    };
+
+    btManager.sendJson(watchName, jsonData);
+
+    _lastSentStressKey = currentKey;
+
+    debugPrint("Sent stress to watch: $jsonData");
   }
 
   void _saveToFirestoreIfNeeded(bool moodChanged) {
@@ -863,7 +915,10 @@ class _Member2PageState extends State<Member2Page> {
           children: [
             Text(
               '${value.toInt()}',
-              style: TextStyle(fontSize: 10, color: color.withOpacity(0.8), fontWeight: FontWeight.bold),
+              style: TextStyle(
+                  fontSize: 10,
+                  color: color.withOpacity(0.8),
+                  fontWeight: FontWeight.bold),
             ),
             const SizedBox(height: 6),
             Container(
@@ -885,7 +940,10 @@ class _Member2PageState extends State<Member2Page> {
                         gradient: LinearGradient(
                           begin: Alignment.bottomCenter,
                           end: Alignment.topCenter,
-                          colors: [color.withOpacity(0.8), color.withOpacity(0.4)],
+                          colors: [
+                            color.withOpacity(0.8),
+                            color.withOpacity(0.4)
+                          ],
                         ),
                         borderRadius: BorderRadius.circular(30),
                       ),
@@ -897,7 +955,10 @@ class _Member2PageState extends State<Member2Page> {
             const SizedBox(height: 12),
             Text(
               label,
-              style: const TextStyle(fontSize: 13, fontWeight: FontWeight.bold, letterSpacing: -0.5),
+              style: const TextStyle(
+                  fontSize: 13,
+                  fontWeight: FontWeight.bold,
+                  letterSpacing: -0.5),
               textAlign: TextAlign.center,
             ),
             Text(
@@ -964,7 +1025,8 @@ class _Member2PageState extends State<Member2Page> {
                 getTitlesWidget: (value, meta) {
                   return Text(
                     value.toStringAsFixed(1),
-                    style: TextStyle(color: Colors.white.withOpacity(0.5), fontSize: 10),
+                    style: TextStyle(
+                        color: Colors.white.withOpacity(0.5), fontSize: 10),
                   );
                 },
               ),
@@ -977,7 +1039,8 @@ class _Member2PageState extends State<Member2Page> {
                 getTitlesWidget: (value, meta) {
                   return Text(
                     '${(value / waveformMaxPoints * 1.5).toStringAsFixed(1)}s',
-                    style: TextStyle(color: Colors.white.withOpacity(0.5), fontSize: 10),
+                    style: TextStyle(
+                        color: Colors.white.withOpacity(0.5), fontSize: 10),
                   );
                 },
               ),
@@ -1063,7 +1126,8 @@ class _Member2PageState extends State<Member2Page> {
     return Scaffold(
       backgroundColor: const Color(0xFFF8F9FA),
       appBar: AppBar(
-        title: const Text("Cognitive Mind Monitor", style: TextStyle(fontWeight: FontWeight.bold, letterSpacing: 0.5)),
+        title: const Text("Cognitive Mind Monitor",
+            style: TextStyle(fontWeight: FontWeight.bold, letterSpacing: 0.5)),
         flexibleSpace: Container(
           decoration: const BoxDecoration(
             gradient: LinearGradient(
@@ -1159,7 +1223,7 @@ class _Member2PageState extends State<Member2Page> {
                             ),
                             borderRadius: BorderRadius.circular(16),
                             border: Border.all(
-                              color: Colors.red.shade200, 
+                              color: Colors.red.shade200,
                               width: 1.5,
                             ),
                             boxShadow: [
@@ -1181,14 +1245,15 @@ class _Member2PageState extends State<Member2Page> {
                                       color: Colors.red.shade100,
                                       shape: BoxShape.circle,
                                     ),
-                                    child: Icon(Icons.error_outline_rounded, color: Colors.red.shade700, size: 24),
+                                    child: Icon(Icons.error_outline_rounded,
+                                        color: Colors.red.shade700, size: 24),
                                   ),
                                   const SizedBox(width: 12),
                                   const Text(
                                     "Connection Issue",
                                     style: TextStyle(
-                                      color: Colors.red, 
-                                      fontSize: 16, 
+                                      color: Colors.red,
+                                      fontSize: 16,
                                       fontWeight: FontWeight.bold,
                                       letterSpacing: 0.3,
                                     ),
@@ -1199,8 +1264,8 @@ class _Member2PageState extends State<Member2Page> {
                               Text(
                                 errorMessage!,
                                 style: TextStyle(
-                                  color: Colors.brown.shade800, 
-                                  fontSize: 14, 
+                                  color: Colors.brown.shade800,
+                                  fontSize: 14,
                                   fontWeight: FontWeight.w500,
                                   height: 1.4,
                                 ),
@@ -1215,28 +1280,41 @@ class _Member2PageState extends State<Member2Page> {
                                         errorMessage = null;
                                       });
                                     },
-                                    icon: Icon(Icons.close_rounded, size: 18, color: Colors.grey.shade700),
+                                    icon: Icon(Icons.close_rounded,
+                                        size: 18, color: Colors.grey.shade700),
                                     label: Text(
-                                      "Dismiss", 
-                                      style: TextStyle(color: Colors.grey.shade700, fontWeight: FontWeight.bold),
+                                      "Dismiss",
+                                      style: TextStyle(
+                                          color: Colors.grey.shade700,
+                                          fontWeight: FontWeight.bold),
                                     ),
                                     style: TextButton.styleFrom(
-                                      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
-                                      backgroundColor: Colors.white.withOpacity(0.5),
-                                      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+                                      padding: const EdgeInsets.symmetric(
+                                          horizontal: 16, vertical: 8),
+                                      backgroundColor:
+                                          Colors.white.withOpacity(0.5),
+                                      shape: RoundedRectangleBorder(
+                                          borderRadius:
+                                              BorderRadius.circular(10)),
                                     ),
                                   ),
                                   const SizedBox(width: 8),
                                   ElevatedButton.icon(
                                     onPressed: _autoConnectSensor,
-                                    icon: const Icon(Icons.build_circle_rounded, size: 18),
-                                    label: const Text("Fix Now", style: TextStyle(fontWeight: FontWeight.bold)),
+                                    icon: const Icon(Icons.build_circle_rounded,
+                                        size: 18),
+                                    label: const Text("Fix Now",
+                                        style: TextStyle(
+                                            fontWeight: FontWeight.bold)),
                                     style: ElevatedButton.styleFrom(
                                       backgroundColor: Colors.red.shade600,
                                       foregroundColor: Colors.white,
                                       elevation: 0,
-                                      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
-                                      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+                                      padding: const EdgeInsets.symmetric(
+                                          horizontal: 16, vertical: 8),
+                                      shape: RoundedRectangleBorder(
+                                          borderRadius:
+                                              BorderRadius.circular(10)),
                                     ),
                                   ),
                                 ],
@@ -1253,11 +1331,14 @@ class _Member2PageState extends State<Member2Page> {
                             style: ElevatedButton.styleFrom(
                               backgroundColor: const Color(0xFF3A1C71),
                               foregroundColor: Colors.white,
-                              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                              shape: RoundedRectangleBorder(
+                                  borderRadius: BorderRadius.circular(12)),
                               padding: const EdgeInsets.symmetric(vertical: 12),
                             ),
                             icon: const Icon(Icons.refresh, size: 20),
-                            label: const Text("Retry Connection", style: TextStyle(fontWeight: FontWeight.bold, fontSize: 16)),
+                            label: const Text("Retry Connection",
+                                style: TextStyle(
+                                    fontWeight: FontWeight.bold, fontSize: 16)),
                             onPressed: _autoConnectSensor,
                           ),
                         ),
@@ -1290,7 +1371,8 @@ class _Member2PageState extends State<Member2Page> {
                     ),
                   ),
                   child: Container(
-                    padding: const EdgeInsets.symmetric(vertical: 40, horizontal: 24),
+                    padding: const EdgeInsets.symmetric(
+                        vertical: 40, horizontal: 24),
                     decoration: BoxDecoration(
                       borderRadius: BorderRadius.circular(30),
                       gradient: LinearGradient(
@@ -1316,7 +1398,9 @@ class _Member2PageState extends State<Member2Page> {
                               ),
                             ],
                           ),
-                          child: Text(moodEmoji, style: const TextStyle(fontSize: 80, height: 1.1)),
+                          child: Text(moodEmoji,
+                              style:
+                                  const TextStyle(fontSize: 80, height: 1.1)),
                         ),
                         const SizedBox(height: 24),
                         Text(
@@ -1330,7 +1414,8 @@ class _Member2PageState extends State<Member2Page> {
                         ),
                         const SizedBox(height: 12),
                         Container(
-                          padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+                          padding: const EdgeInsets.symmetric(
+                              horizontal: 16, vertical: 8),
                           decoration: BoxDecoration(
                             color: Colors.black.withOpacity(0.15),
                             borderRadius: BorderRadius.circular(20),
@@ -1341,8 +1426,8 @@ class _Member2PageState extends State<Member2Page> {
                                 : "Waiting for stable brain signal...",
                             textAlign: TextAlign.center,
                             style: const TextStyle(
-                              fontSize: 15, 
-                              color: Colors.white, 
+                              fontSize: 15,
+                              color: Colors.white,
                               fontWeight: FontWeight.w500,
                               height: 1.3,
                             ),
@@ -1421,14 +1506,20 @@ class _Member2PageState extends State<Member2Page> {
                       Row(
                         mainAxisAlignment: MainAxisAlignment.center,
                         children: [
-                          Icon(Icons.monitor_heart, color: hasGoodSignal ? Colors.black87 : Colors.grey, size: 22),
+                          Icon(Icons.monitor_heart,
+                              color:
+                                  hasGoodSignal ? Colors.black87 : Colors.grey,
+                              size: 22),
                           const SizedBox(width: 8),
                           Text(
-                            hasGoodSignal ? "Current Stress Index" : "Signal Quality Required",
+                            hasGoodSignal
+                                ? "Current Stress Index"
+                                : "Signal Quality Required",
                             style: TextStyle(
                               fontSize: 18,
                               fontWeight: FontWeight.bold,
-                              color: hasGoodSignal ? Colors.black87 : Colors.grey,
+                              color:
+                                  hasGoodSignal ? Colors.black87 : Colors.grey,
                             ),
                           ),
                         ],
@@ -1443,7 +1534,9 @@ class _Member2PageState extends State<Member2Page> {
                             child: TweenAnimationBuilder<double>(
                               duration: const Duration(milliseconds: 800),
                               curve: Curves.easeOutCubic,
-                              tween: Tween<double>(begin: 0, end: hasGoodSignal ? stressScore : 0.0),
+                              tween: Tween<double>(
+                                  begin: 0,
+                                  end: hasGoodSignal ? stressScore : 0.0),
                               builder: (context, value, _) {
                                 return CircularProgressIndicator(
                                   value: value,
@@ -1451,7 +1544,9 @@ class _Member2PageState extends State<Member2Page> {
                                   backgroundColor: Colors.grey.shade100,
                                   strokeCap: StrokeCap.round,
                                   valueColor: AlwaysStoppedAnimation(
-                                    hasGoodSignal ? _getStressColor() : Colors.grey.shade300,
+                                    hasGoodSignal
+                                        ? _getStressColor()
+                                        : Colors.grey.shade300,
                                   ),
                                 );
                               },
@@ -1460,11 +1555,15 @@ class _Member2PageState extends State<Member2Page> {
                           Column(
                             children: [
                               Text(
-                                hasGoodSignal ? "${(stressScore * 100).toStringAsFixed(0)}%" : "—",
+                                hasGoodSignal
+                                    ? "${(stressScore * 100).toStringAsFixed(0)}%"
+                                    : "—",
                                 style: TextStyle(
                                   fontSize: 48,
                                   fontWeight: FontWeight.w900,
-                                  color: hasGoodSignal ? _getStressColor() : Colors.grey,
+                                  color: hasGoodSignal
+                                      ? _getStressColor()
+                                      : Colors.grey,
                                   height: 1.1,
                                 ),
                               ),
@@ -1474,7 +1573,9 @@ class _Member2PageState extends State<Member2Page> {
                                   fontSize: 14,
                                   fontWeight: FontWeight.w600,
                                   letterSpacing: 0.5,
-                                  color: hasGoodSignal ? Colors.black54 : Colors.grey,
+                                  color: hasGoodSignal
+                                      ? Colors.black54
+                                      : Colors.grey,
                                 ),
                               ),
                             ],
@@ -1509,7 +1610,8 @@ class _Member2PageState extends State<Member2Page> {
                               color: Colors.cyan.withOpacity(0.1),
                               borderRadius: BorderRadius.circular(10),
                             ),
-                            child: const Icon(Icons.waves, color: Colors.cyan, size: 20),
+                            child: const Icon(Icons.waves,
+                                color: Colors.cyan, size: 20),
                           ),
                           const SizedBox(width: 12),
                           const Column(
@@ -1524,7 +1626,8 @@ class _Member2PageState extends State<Member2Page> {
                               ),
                               Text(
                                 "~1.5s sliding window",
-                                style: TextStyle(fontSize: 13, color: Colors.black54),
+                                style: TextStyle(
+                                    fontSize: 13, color: Colors.black54),
                               ),
                             ],
                           ),
@@ -1533,18 +1636,19 @@ class _Member2PageState extends State<Member2Page> {
                       const SizedBox(height: 24),
                       Container(
                         height: 220,
-                        padding: const EdgeInsets.only(top: 20, right: 10, bottom: 5),
+                        padding: const EdgeInsets.only(
+                            top: 20, right: 10, bottom: 5),
                         decoration: BoxDecoration(
-                          color: const Color(0xFF1E1E2C), // modern dark bluish gray
-                          borderRadius: BorderRadius.circular(20),
-                          boxShadow: [
-                            BoxShadow(
-                              color: const Color(0xFF1E1E2C).withOpacity(0.3),
-                              blurRadius: 10,
-                              offset: const Offset(0, 5),
-                            )
-                          ]
-                        ),
+                            color: const Color(
+                                0xFF1E1E2C), // modern dark bluish gray
+                            borderRadius: BorderRadius.circular(20),
+                            boxShadow: [
+                              BoxShadow(
+                                color: const Color(0xFF1E1E2C).withOpacity(0.3),
+                                blurRadius: 10,
+                                offset: const Offset(0, 5),
+                              )
+                            ]),
                         child: hasGoodSignal
                             ? _buildWaveformChart()
                             : Center(
@@ -1597,7 +1701,8 @@ class _Member2PageState extends State<Member2Page> {
                               color: Colors.indigo.withOpacity(0.1),
                               borderRadius: BorderRadius.circular(10),
                             ),
-                            child: const Icon(Icons.bar_chart, color: Colors.indigo, size: 20),
+                            child: const Icon(Icons.bar_chart,
+                                color: Colors.indigo, size: 20),
                           ),
                           const SizedBox(width: 12),
                           const Column(
@@ -1612,7 +1717,8 @@ class _Member2PageState extends State<Member2Page> {
                               ),
                               Text(
                                 "Frequency bands analysis",
-                                style: TextStyle(fontSize: 13, color: Colors.black54),
+                                style: TextStyle(
+                                    fontSize: 13, color: Colors.black54),
                               ),
                             ],
                           ),
@@ -1623,11 +1729,24 @@ class _Member2PageState extends State<Member2Page> {
                         Row(
                           crossAxisAlignment: CrossAxisAlignment.end,
                           children: [
-                            _buildBandBar('Delta', eegBands['Delta']!, const Color(0xFF7B1FA2), '0.5–4 Hz', 'Deep relax'),
-                            _buildBandBar('Theta', eegBands['Theta']!, const Color(0xFF1976D2), '4–8 Hz', 'Drowsy'),
-                            _buildBandBar('Alpha', eegBands['Alpha']!, const Color(0xFF388E3C), '8–13 Hz', 'Calm focus'),
-                            _buildBandBar('Beta', eegBands['Beta']!, const Color(0xFFF57C00), '13–30 Hz', 'Active'),
-                            _buildBandBar('Gamma', eegBands['Gamma']!, const Color(0xFFD32F2F), '>30 Hz', 'Peak'),
+                            _buildBandBar(
+                                'Delta',
+                                eegBands['Delta']!,
+                                const Color(0xFF7B1FA2),
+                                '0.5–4 Hz',
+                                'Deep relax'),
+                            _buildBandBar('Theta', eegBands['Theta']!,
+                                const Color(0xFF1976D2), '4–8 Hz', 'Drowsy'),
+                            _buildBandBar(
+                                'Alpha',
+                                eegBands['Alpha']!,
+                                const Color(0xFF388E3C),
+                                '8–13 Hz',
+                                'Calm focus'),
+                            _buildBandBar('Beta', eegBands['Beta']!,
+                                const Color(0xFFF57C00), '13–30 Hz', 'Active'),
+                            _buildBandBar('Gamma', eegBands['Gamma']!,
+                                const Color(0xFFD32F2F), '>30 Hz', 'Peak'),
                           ],
                         )
                       else
@@ -1636,7 +1755,10 @@ class _Member2PageState extends State<Member2Page> {
                           alignment: Alignment.center,
                           child: const Text(
                             "Waiting for stable connection...",
-                            style: TextStyle(color: Colors.grey, fontSize: 16, fontWeight: FontWeight.w500),
+                            style: TextStyle(
+                                color: Colors.grey,
+                                fontSize: 16,
+                                fontWeight: FontWeight.w500),
                           ),
                         ),
                     ],
@@ -1708,7 +1830,10 @@ class _Member2PageState extends State<Member2Page> {
                     icon: const Icon(Icons.analytics_rounded, size: 24),
                     label: const Text(
                       'View Weekly Diagnostics',
-                      style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold, letterSpacing: 0.5),
+                      style: TextStyle(
+                          fontSize: 16,
+                          fontWeight: FontWeight.bold,
+                          letterSpacing: 0.5),
                     ),
                     style: ElevatedButton.styleFrom(
                       backgroundColor: Colors.transparent,

@@ -27,10 +27,12 @@ dependencies:
   tflite_flutter: ^0.12.1
   fftea: ^1.5.0+1
 
-  path_provider: ^2.1.2   # kept once, higher version
+
+  # kept once, higher version
   pdf: ^3.11.1             # kept once, higher version
   printing: ^5.13.3        # kept once, higher version
-  share_plus: ^7.2.2       # kept once, higher version
+    # kept once, higher version
+
 
   flutter_bluetooth_serial: ^0.4.0
 
@@ -44,7 +46,13 @@ dependencies:
 
   flutter_staggered_animations: ^1.1.1
   percent_indicator: ^4.2.3
+
   screenshot: ^3.0.0
+
+
+
+
+
 
 dev_dependencies:
   flutter_test:

@@ -202,6 +202,7 @@ class _Member3PageState extends State<Member3Page>
           dangerPrediction: baseJourney.dangerPrediction,
           turnEvents: baseJourney.turnEvents,
           brakingEvents: baseJourney.brakingEvents,
+          leanEvents: baseJourney.leanEvents,
           sensorReadings: baseJourney.sensorReadings,
           gpsTrack: baseJourney.gpsTrack,
         );
@@ -407,7 +408,9 @@ class _Member3PageState extends State<Member3Page>
       int label = (eventType == 'harsh_brake' ||
               eventType == 'emergency_brake' ||
               eventType == 'high_speed' ||
-              eventType == 'risky_turn')
+              eventType == 'risky_turn' ||
+              eventType == 'risky_lean' ||
+              eventType == 'critical_lean')
           ? 1
           : 0;
       // Format: accelX, accelY, accelZ, gyroX, gyroY, gyroZ, speedKmh, LABEL
@@ -508,6 +511,8 @@ class _Member3PageState extends State<Member3Page>
             longitude: currentLng,
           );
         }
+        // Lean events are auto-detected inside journeyProvider.addSensorReading()
+        // via atan2(accelY, accelZ) with 2-second debounce — no manual call needed
       }
     });
   }
@@ -1984,6 +1989,8 @@ class _Member3PageState extends State<Member3Page>
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
           _buildConnectionCard(),
+          const SizedBox(height: 12),
+          _buildSensorDiagnosticCard(),
           const SizedBox(height: 16),
           _buildStatusCard(),
           const SizedBox(height: 16),
@@ -2033,6 +2040,159 @@ class _Member3PageState extends State<Member3Page>
           const SizedBox(height: 16),
         ],
       ),
+    );
+  }
+
+  Widget _buildSensorDiagnosticCard() {
+    final btManager = context.read<BluetoothManager>();
+    final connectedDevices = btManager.getConnectedDevices();
+    final isBtConnected = connectedDevices.isNotEmpty;
+
+    // MPU6050: accelZ ~ 9.81 when upright, gyro values fluctuate
+    final bool hasAccelData = accelX != 0.0 || accelY != 0.0 || accelZ != 0.0;
+    final bool accelZValid = accelZ.abs() > 5.0 && accelZ.abs() < 15.0; // roughly gravity
+    final bool hasGyroData = gyroX != 0.0 || gyroY != 0.0 || gyroZ != 0.0;
+    final bool mpuWorking = hasAccelData && accelZValid;
+
+    // GPS: non-zero lat/lng means fix acquired
+    final bool hasGpsFix = currentLat != 0.0 && currentLng != 0.0;
+    final bool hasSpeed = currentSpeed > 0.0;
+
+    return Card(
+      elevation: 2,
+      color: _cardBg,
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+      child: Padding(
+        padding: const EdgeInsets.all(16),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Row(
+              children: [
+                Icon(Icons.medical_services_rounded, color: _primary, size: 20),
+                const SizedBox(width: 8),
+                const Text('Sensor Diagnostics',
+                    style: TextStyle(
+                        fontSize: 16,
+                        fontWeight: FontWeight.bold,
+                        color: _textPrimary)),
+                const Spacer(),
+                Container(
+                  padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+                  decoration: BoxDecoration(
+                    color: (isBtConnected && mpuWorking)
+                        ? Colors.green.withOpacity(0.1)
+                        : Colors.red.withOpacity(0.1),
+                    borderRadius: BorderRadius.circular(20),
+                  ),
+                  child: Text(
+                    (isBtConnected && mpuWorking) ? 'ALL OK' : 'CHECK',
+                    style: TextStyle(
+                      fontSize: 11,
+                      fontWeight: FontWeight.bold,
+                      color: (isBtConnected && mpuWorking)
+                          ? Colors.green[700]
+                          : Colors.red[700],
+                    ),
+                  ),
+                ),
+              ],
+            ),
+            const SizedBox(height: 12),
+            Divider(color: Colors.grey[200], height: 1),
+            const SizedBox(height: 12),
+
+            // ── Bluetooth ──
+            _buildDiagRow(
+              icon: Icons.bluetooth,
+              label: 'Bluetooth',
+              value: isBtConnected
+                  ? connectedDevices.join(', ')
+                  : 'Not connected',
+              status: isBtConnected ? 'ok' : 'error',
+            ),
+            const SizedBox(height: 8),
+
+            // ── MPU6050 Accelerometer ──
+            _buildDiagRow(
+              icon: Icons.screen_rotation_alt_rounded,
+              label: 'Accelerometer',
+              value: hasAccelData
+                  ? 'X:${accelX.toStringAsFixed(1)}  Y:${accelY.toStringAsFixed(1)}  Z:${accelZ.toStringAsFixed(1)}'
+                  : 'No data',
+              status: mpuWorking ? 'ok' : (hasAccelData ? 'warn' : 'error'),
+            ),
+            const SizedBox(height: 8),
+
+            // ── MPU6050 Gyroscope ──
+            _buildDiagRow(
+              icon: Icons.rotate_90_degrees_ccw_rounded,
+              label: 'Gyroscope',
+              value: hasGyroData
+                  ? 'X:${gyroX.toStringAsFixed(1)}  Y:${gyroY.toStringAsFixed(1)}  Z:${gyroZ.toStringAsFixed(1)}'
+                  : 'No data',
+              status: hasGyroData ? 'ok' : (isBtConnected ? 'warn' : 'error'),
+            ),
+            const SizedBox(height: 8),
+
+            // ── Neo GPS ──
+            _buildDiagRow(
+              icon: Icons.gps_fixed_rounded,
+              label: 'GPS Module',
+              value: hasGpsFix
+                  ? '${currentLat.toStringAsFixed(4)}, ${currentLng.toStringAsFixed(4)}${hasSpeed ? ' @ ${currentSpeed.toStringAsFixed(1)} km/h' : ''}'
+                  : 'No fix (try outdoors)',
+              status: hasGpsFix ? 'ok' : (isBtConnected ? 'warn' : 'error'),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _buildDiagRow({
+    required IconData icon,
+    required String label,
+    required String value,
+    required String status, // 'ok', 'warn', 'error'
+  }) {
+    final Color statusColor;
+    final IconData statusIcon;
+    switch (status) {
+      case 'ok':
+        statusColor = Colors.green;
+        statusIcon = Icons.check_circle_rounded;
+        break;
+      case 'warn':
+        statusColor = Colors.orange;
+        statusIcon = Icons.warning_amber_rounded;
+        break;
+      default:
+        statusColor = Colors.red;
+        statusIcon = Icons.cancel_rounded;
+    }
+    return Row(
+      children: [
+        Icon(statusIcon, color: statusColor, size: 18),
+        const SizedBox(width: 8),
+        Icon(icon, color: _textSecondary, size: 16),
+        const SizedBox(width: 6),
+        Text(label,
+            style: const TextStyle(
+                fontSize: 13,
+                fontWeight: FontWeight.w600,
+                color: _textPrimary)),
+        const SizedBox(width: 8),
+        Expanded(
+          child: Text(value,
+              textAlign: TextAlign.end,
+              overflow: TextOverflow.ellipsis,
+              style: TextStyle(
+                  fontSize: 12,
+                  fontFamily: 'monospace',
+                  color: statusColor)),
+        ),
+      ],
     );
   }
 
