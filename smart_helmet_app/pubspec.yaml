@@ -48,8 +48,8 @@ dependencies:
   percent_indicator: ^4.2.3
 
   screenshot: ^3.0.0
-
-
+  path_provider: ^2.1.5
+  share_plus: ^7.2.2
 
 
 
@@ -71,6 +71,8 @@ flutter:
     - assets/model.tflite
     - assets/icons/dev_team.png
     - assets/eeg_stress_model_float32.tflite
+    - assets/post_journey_risk_model.tflite
+    - assets/risk_thresholds.json
 
 flutter_icons:
   android: true

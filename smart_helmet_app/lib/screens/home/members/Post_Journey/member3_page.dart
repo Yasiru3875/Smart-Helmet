@@ -11,6 +11,7 @@ import 'package:smart_helmet_app/providers/journey_provider.dart';
 import 'package:smart_helmet_app/providers/ride_session_provider.dart';
 import 'package:smart_helmet_app/services/journey_service.dart';
 import 'package:smart_helmet_app/services/bluetooth_manager.dart';
+import 'package:smart_helmet_app/services/post_journey.dart';
 import 'JourneyReportScreen.dart';
 import 'dummy_journey_data.dart';
 
@@ -1210,6 +1211,38 @@ class _Member3PageState extends State<Member3Page>
             ),
             tooltip: _isSimulating ? 'Stop Simulation' : 'Simulate Ride Data',
             onPressed: _startSimulatedRide,
+          ),
+          // DEBUG: Test TFLite model with sample data
+          IconButton(
+            icon: const Icon(Icons.bug_report, color: Colors.lightGreenAccent),
+            tooltip: 'Test Risk Model',
+            onPressed: () async {
+              final service = DangerZoneService();
+              final result = await service.runDiagnostics();
+              service.dispose();
+              if (!mounted) return;
+              showDialog(
+                context: context,
+                builder: (_) => AlertDialog(
+                  title: const Text('🧪 Model Diagnostics'),
+                  content: SingleChildScrollView(
+                    child: SelectableText(
+                      result,
+                      style: const TextStyle(
+                        fontFamily: 'monospace',
+                        fontSize: 11,
+                      ),
+                    ),
+                  ),
+                  actions: [
+                    TextButton(
+                      onPressed: () => Navigator.pop(context),
+                      child: const Text('Close'),
+                    ),
+                  ],
+                ),
+              );
+            },
           ),
           // Connection status indicator in AppBar (read-only, connect from Home)
           Consumer<BluetoothManager>(

@@ -6,7 +6,7 @@ import 'package:google_maps_flutter/google_maps_flutter.dart';
 import 'package:percent_indicator/percent_indicator.dart';
 import 'package:intl/intl.dart';
 import '../../../../models/journey_model.dart';
-import '../../../../services/danger_zone_service.dart';
+import '../../../../services/post_journey.dart';
 
 class JourneyReportScreen extends StatefulWidget {
   final JourneyData journey;
