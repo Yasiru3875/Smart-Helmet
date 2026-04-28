@@ -14,10 +14,12 @@ import 'Side_Panel_Screens/AboutUsPage.dart';
 import 'Side_Panel_Screens/PrivacyPolicyPage.dart';
 import 'Side_Panel_Screens/TermsOfServicePage.dart';
 import 'Side_Panel_Screens/ContactSupportPage.dart';
+import 'emergency_screen.dart';
 
 // If bluetooth_connect_dialog.dart is in lib/services/
 import '../../services/bluetooth_manager.dart';
 import '../../services/bluetooth_connect_dialog.dart';
+import '../../providers/sos_controller.dart';
 
 class HomeScreen extends StatefulWidget {
   const HomeScreen({super.key});
@@ -44,6 +46,19 @@ class _HomeScreenState extends State<HomeScreen> {
   void initState() {
     super.initState();
     _initializePages();
+    _listenToSOS();
+  }
+
+  void _listenToSOS() {
+    final sosController = Provider.of<SOSController>(context, listen: false);
+    sosController.addListener(_onSOSStateChanged);
+  }
+
+  void _onSOSStateChanged() {
+    final sosController = Provider.of<SOSController>(context, listen: false);
+    if (sosController.state.isActive) {
+      Navigator.pushNamed(context, '/emergency');
+    }
   }
 
   void _initializePages() {
@@ -61,7 +76,7 @@ class _HomeScreenState extends State<HomeScreen> {
         predefinedEnd: _routeEnd,
         predefinedRoute: _routePoints,
         destinationName: _destinationName,
-        isJourneyActive: _isJourneyActive, // ← changed name
+        isJourneyActive: _isJourneyActive,
       ),
     ];
   }
@@ -86,7 +101,7 @@ class _HomeScreenState extends State<HomeScreen> {
         predefinedEnd: _routeEnd,
         predefinedRoute: _routePoints?.toList(),
         destinationName: _destinationName,
-        isJourneyActive: _isJourneyActive, // ← correct name
+        isJourneyActive: _isJourneyActive,
       );
     });
   }
@@ -103,7 +118,7 @@ class _HomeScreenState extends State<HomeScreen> {
       _routePoints = List.from(route); // defensive copy
       _destinationName = destinationName;
       _isJourneyActive = true;
-      _index = 4; // Auto-switch to Danger Zone tab
+      _index = 3; // Auto-switch to Danger Zone tab
     });
     _updateJourneyDependentPages();
   }
@@ -117,6 +132,13 @@ class _HomeScreenState extends State<HomeScreen> {
       _destinationName = null;
     });
     _updateJourneyDependentPages();
+  }
+
+  @override
+  void dispose() {
+    final sosController = Provider.of<SOSController>(context, listen: false);
+    sosController.removeListener(_onSOSStateChanged);
+    super.dispose();
   }
 
   Future<void> _launchURL(String url) async {
