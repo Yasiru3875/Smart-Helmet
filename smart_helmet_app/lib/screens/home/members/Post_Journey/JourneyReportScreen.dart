@@ -27,7 +27,7 @@ import 'package:pdf/widgets.dart' as pw;
 import 'package:path_provider/path_provider.dart';
 import 'package:share_plus/share_plus.dart';
 import '../../../../models/journey_model.dart';
-import '../../../../services/danger_zone_service.dart';
+import '../../../../services/post_journey.dart';
 
 class JourneyReportScreen extends StatefulWidget {
   final JourneyData journey;
@@ -107,12 +107,24 @@ class _JourneyReportScreenState extends State<JourneyReportScreen> {
   List<LatLng> _allMapPoints = [];
 
   void _prepareMapData() {
+    List<LatLng> routePoints = [];
+    
     // Create polyline from GPS track
     if (widget.journey.gpsTrack.isNotEmpty) {
-      List<LatLng> routePoints = widget.journey.gpsTrack
+      routePoints = widget.journey.gpsTrack
           .map((point) => LatLng(point.latitude, point.longitude))
           .toList();
-
+    } else {
+      // Also add lean event coordinates for route reconstruction
+      for (final lean in widget.journey.leanEvents) {
+        if (lean.latitude != 0.0 && lean.longitude != 0.0) {
+          routePoints.add(LatLng(lean.latitude, lean.longitude));
+        }
+      }
+    }
+    
+    // Create polyline from available points
+    if (routePoints.isNotEmpty) {
       _polylines.add(
         Polyline(
           polylineId: const PolylineId('route'),
@@ -140,6 +152,23 @@ class _JourneyReportScreenState extends State<JourneyReportScreen> {
         );
       }
     }
+
+    // 🩷 Lean event markers (magenta)
+    for (int i = 0; i < widget.journey.leanEvents.length; i++) {
+      final lean = widget.journey.leanEvents[i];
+      if (lean.latitude == 0.0 && lean.longitude == 0.0) continue;
+      _markers.add(
+        Marker(
+          markerId: MarkerId('lean_$i'),
+          position: LatLng(lean.latitude, lean.longitude),
+          icon: BitmapDescriptor.defaultMarkerWithHue(330), // magenta
+          infoWindow: InfoWindow(
+            title: lean.severity == 'critical' ? '🩷 Critical Lean' : '🩷 Risky Lean',
+            snippet: '${lean.leanAngle.toStringAsFixed(1)}° lean',
+          ),
+        ),
+      );
+    }
   }
 
   // Calculate safety score (0-100)
@@ -151,6 +180,14 @@ class _JourneyReportScreenState extends State<JourneyReportScreen> {
     
     // Deduct points for sharp turns
     score -= widget.journey.sharpTurns * 3;
+    
+    // Deduct points for critical lean events (8 per critical lean)
+    score -= widget.journey.leanEvents
+        .where((e) => e.severity == 'critical').length * 8;
+    
+    // Deduct points for risky lean events (4 per risky lean)
+    score -= widget.journey.leanEvents
+        .where((e) => e.severity == 'risky').length * 4;
     
     // Deduct points for high average speed
     if (widget.journey.averageSpeed > 60) {
@@ -209,6 +246,9 @@ class _JourneyReportScreenState extends State<JourneyReportScreen> {
 
             // 4. Event Breakdown
             _buildEventBreakdown(),
+
+            // 5. Danger Zone Log
+            _buildDangerZoneLog(),
 
             // Additional Info
             _buildAdditionalInfo(),
@@ -737,6 +777,14 @@ class _JourneyReportScreenState extends State<JourneyReportScreen> {
                     Icons.flash_on,
                     Colors.purple,
                   ),
+                  const SizedBox(height: 14),
+                  Row(
+                    children: [
+                      Expanded(child: _buildEventCard('Lean Events', widget.journey.leanEvents.length.toString(), Icons.screen_rotation_alt_rounded, const Color(0xFFE040FB))),
+                      const SizedBox(width: 14),
+                      Expanded(child: Container()), // placeholder for alignment
+                    ],
+                  ),
                 ],
               ),
             ],
@@ -799,21 +847,51 @@ class _JourneyReportScreenState extends State<JourneyReportScreen> {
                   ),
                 ],
               ),
-              const Divider(height: 24),
-              _buildDetailRow('Total Events', widget.journey.turnEvents.length.toString()),
-              _buildDetailRow('Start Time', DateFormat('HH:mm:ss').format(widget.journey.startTime)),
-              _buildDetailRow('End Time', widget.journey.endTime != null 
-                  ? DateFormat('HH:mm:ss').format(widget.journey.endTime!)
-                  : 'N/A'),
-              _buildDetailRow('GPS Points', widget.journey.gpsTrack.length.toString()),
-              const SizedBox(height: 12),
-              Row(
-                children: [
-                  Icon(Icons.wb_sunny, color: Colors.orange[600], size: 20),
-                  const SizedBox(width: 8),
-                  const Text('Weather: Clear', style: TextStyle(fontSize: 14)),
-                ],
-              ),
+              const SizedBox(height: 16),
+              Divider(color: Colors.grey[200], height: 1),
+              const SizedBox(height: 16),
+              _buildDetailRow('Start Time',
+                  DateFormat('HH:mm:ss').format(widget.journey.startTime)),
+              _buildDetailRow(
+                  'End Time',
+                  widget.journey.endTime != null
+                      ? DateFormat('HH:mm:ss').format(widget.journey.endTime!)
+                      : 'N/A'),
+              _buildDetailRow(
+                  'Duration',
+                  widget.journey.endTime != null
+                      ? '${widget.journey.endTime!.difference(widget.journey.startTime).inMinutes} min'
+                      : 'N/A'),
+              _buildDetailRow(
+                  'Total Distance',
+                  '${widget.journey.totalDistance.toStringAsFixed(2)} km'),
+              _buildDetailRow(
+                  'Avg Speed',
+                  '${widget.journey.averageSpeed.toStringAsFixed(1)} km/h'),
+              _buildDetailRow(
+                  'Max Speed',
+                  '${widget.journey.maxSpeed.toStringAsFixed(1)} km/h'),
+              _buildDetailRow(
+                  'Max Turn Rate',
+                  '${widget.journey.maxTurnRate.toStringAsFixed(1)} °/s'),
+              _buildDetailRow(
+                  'Sharp Turns', widget.journey.sharpTurns.toString()),
+              _buildDetailRow(
+                  'Risky Turns', widget.journey.riskyTurns.toString()),
+              _buildDetailRow(
+                  'Braking Events',
+                  widget.journey.totalBrakingEvents.toString()),
+              _buildDetailRow(
+                  'Lean Events',
+                  widget.journey.leanEvents.length.toString()),
+              _buildDetailRow(
+                  'Total Events',
+                  (widget.journey.turnEvents.length +
+                          widget.journey.brakingEvents.length +
+                          widget.journey.leanEvents.length)
+                      .toString()),
+              _buildDetailRow(
+                  'GPS Points', widget.journey.gpsTrack.length.toString()),
             ],
           ),
         ),
@@ -836,9 +914,148 @@ class _JourneyReportScreenState extends State<JourneyReportScreen> {
       ),
     );
   }
+
+  // 5. Danger Zone Log — chronological list of all danger events
+  Widget _buildDangerZoneLog() {
+    // Gather all events into a single sortable list
+    final List<Map<String, dynamic>> allEvents = [];
+
+    for (final turn in widget.journey.turnEvents) {
+      allEvents.add({
+        'time': turn.timestamp,
+        'type': 'turn',
+        'severity': turn.severity,
+        'detail': '${turn.turnRate.toStringAsFixed(1)}°/s',
+        'icon': Icons.turn_sharp_right_rounded,
+        'color': turn.severity == 'risky' ? Colors.redAccent : Colors.orangeAccent,
+      });
+    }
+    for (final brake in widget.journey.brakingEvents) {
+      allEvents.add({
+        'time': brake.timestamp,
+        'type': 'brake',
+        'severity': brake.severity,
+        'detail': '${brake.deceleration.toStringAsFixed(2)}g @ ${brake.speedBefore.toStringAsFixed(0)} km/h',
+        'icon': Icons.stop_circle_outlined,
+        'color': Colors.purpleAccent,
+      });
+    }
+    for (final lean in widget.journey.leanEvents) {
+      allEvents.add({
+        'time': lean.timestamp,
+        'type': 'lean',
+        'severity': lean.severity,
+        'detail': '${lean.leanAngle.toStringAsFixed(1)}° lean',
+        'icon': Icons.screen_rotation_alt_rounded,
+        'color': const Color(0xFFE040FB),
+      });
+    }
+
+    // Sort by time
+    allEvents.sort((a, b) => (a['time'] as DateTime).compareTo(b['time'] as DateTime));
+
+    if (allEvents.isEmpty) {
+      return const SizedBox.shrink();
+    }
+
+    return Container(
+      margin: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+      child: Card(
+        elevation: 3,
+        color: Colors.white,
+        shadowColor: Colors.black.withOpacity(0.08),
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
+        child: Padding(
+          padding: const EdgeInsets.all(20),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Row(
+                children: [
+                  Container(
+                    padding: const EdgeInsets.all(8),
+                    decoration: BoxDecoration(
+                      color: Colors.redAccent.withOpacity(0.2),
+                      borderRadius: BorderRadius.circular(10),
+                    ),
+                    child: const Icon(Icons.warning_amber_rounded, color: Colors.redAccent, size: 24),
+                  ),
+                  const SizedBox(width: 16),
+                  const Text(
+                    'Danger Zone Log',
+                    style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold, color: Color(0xFF1E1E2E)),
+                  ),
+                ],
+              ),
+              const SizedBox(height: 16),
+              Divider(color: Colors.grey[200], height: 1),
+              const SizedBox(height: 8),
+              ...allEvents.map((event) {
+                final time = event['time'] as DateTime;
+                final String label;
+                if (event['type'] == 'turn') {
+                  label = event['severity'] == 'risky' ? 'Risky Turn' : 'Sharp Turn';
+                } else if (event['type'] == 'brake') {
+                  label = event['severity'] == 'emergency' ? 'Emergency Brake' : 'Hard Brake';
+                } else {
+                  label = event['severity'] == 'critical' ? 'Critical Lean' : 'Risky Lean';
+                }
+
+                return Container(
+                  padding: const EdgeInsets.symmetric(vertical: 10, horizontal: 4),
+                  decoration: BoxDecoration(
+                    border: Border(bottom: BorderSide(color: Colors.grey[100]!, width: 0.5)),
+                  ),
+                  child: Row(
+                    children: [
+                      Container(
+                        padding: const EdgeInsets.all(6),
+                        decoration: BoxDecoration(
+                          color: (event['color'] as Color).withOpacity(0.12),
+                          borderRadius: BorderRadius.circular(8),
+                        ),
+                        child: Icon(event['icon'] as IconData, color: event['color'] as Color, size: 18),
+                      ),
+                      const SizedBox(width: 12),
+                      Expanded(
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Text(label, style: TextStyle(
+                              fontSize: 14,
+                              fontWeight: FontWeight.w600,
+                              color: event['color'] as Color,
+                            )),
+                            Text(event['detail'] as String, style: TextStyle(
+                              fontSize: 12,
+                              color: Colors.grey[500],
+                            )),
+                          ],
+                        ),
+                      ),
+                      Container(
+                        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                        decoration: BoxDecoration(
+                          color: (event['color'] as Color).withOpacity(0.08),
+                          borderRadius: BorderRadius.circular(6),
+                        ),
+                        child: Text(
+                          DateFormat('HH:mm:ss').format(time),
+                          style: TextStyle(fontSize: 11, color: Colors.grey[600], fontWeight: FontWeight.w500),
+                        ),
+                      ),
+                    ],
+                  ),
+                );
+              }),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
 }
 
-// Custom painters for legend
 class SolidLinePainter extends CustomPainter {
   final Color color;
   SolidLinePainter(this.color);

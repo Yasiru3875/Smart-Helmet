@@ -22,6 +22,8 @@ import 'package:smart_helmet_app/providers/ride_session_provider.dart';
 import '../../../../services/auth_service.dart';
 
 import 'package:smart_helmet_app/providers/emotion_provider.dart';
+import 'vital_signs_card.dart'; // NEW: Vital signs from smartwatch
+import '../../../../services/combined_stress_service.dart'; // NEW: Fallback stress calculation
 // If you have auth:
 // import '../../../../services/auth_service.dart';
 
@@ -95,6 +97,9 @@ class _Member2PageState extends State<Member2Page> {
 
   final List<double> modelWindow = [];
   final int modelWindowSize = 64;
+
+  // NEW: Fallback stress service for when EEG is unavailable
+  final CombinedStressService _fallbackStressService = CombinedStressService();
 
   // ────────────────────────────────────────────────
   // Firestore integration
@@ -213,6 +218,7 @@ class _Member2PageState extends State<Member2Page> {
     tg.onAttention = (att) {
       if (mounted && poorSignalLevel <= 50) {
         setState(() => attention = att);
+        Provider.of<EmotionProvider>(context, listen: false).updateEEG(attention: att);
         _updateStressAndMood();
       }
     };
@@ -220,6 +226,7 @@ class _Member2PageState extends State<Member2Page> {
     tg.onMeditation = (med) {
       if (mounted && poorSignalLevel <= 50) {
         setState(() => meditation = med);
+        Provider.of<EmotionProvider>(context, listen: false).updateEEG(meditation: med);
         _updateStressAndMood();
       }
     };
@@ -234,6 +241,10 @@ class _Member2PageState extends State<Member2Page> {
           eegBands['Beta'] = powerBands[4] + powerBands[5];
           eegBands['Gamma'] = powerBands[6] + powerBands[7];
         });
+
+        // Push to shared provider for Member 1 to see
+        Provider.of<EmotionProvider>(context, listen: false).updateEEG(bands: eegBands);
+
         _updateStressAndMood();
         _updateEmotionalStates();
       }
@@ -1117,6 +1128,17 @@ class _Member2PageState extends State<Member2Page> {
     final isConnected = btManager.isConnected(deviceName);
     final bool hasGoodSignal = poorSignalLevel <= 50;
 
+    // NEW: Get sensor data for fallback stress calculation
+    final sensorProvider = Provider.of<SensorDataProvider>(context);
+    _fallbackStressService.updateHeartRate(sensorProvider.heartRate.toDouble());
+    _fallbackStressService.updateTemperature(sensorProvider.temperature);
+
+    // Use fallback stress when EEG is not available
+    final displayStressScore = hasGoodSignal ? stressScore : _fallbackStressService.combinedStressScore;
+    final displayMood = hasGoodSignal ? currentMood : _fallbackStressService.getStressLevelText();
+    final displayMoodEmoji = hasGoodSignal ? moodEmoji : _fallbackStressService.getStressEmoji();
+    final displayMoodColor = hasGoodSignal ? moodColor : _fallbackStressService.getStressColor();
+
     return Scaffold(
       backgroundColor: const Color(0xFFF8F9FA),
       appBar: AppBar(
@@ -1343,14 +1365,21 @@ class _Member2PageState extends State<Member2Page> {
 
                 const SizedBox(height: 30),
 
+                // ─── NEW: Vital Signs from Smartwatch ─────────────────────────────────
+                VitalSignsCardWithStress(
+                  eegAvailable: hasGoodSignal,
+                ),
+
+                const SizedBox(height: 30),
+
                 // Stress Card (updated with dynamic color)
-                // Enhanced Stress Card
+                // Shows EEG-based stress when available, otherwise falls back to HR+Temp
                 Container(
                   decoration: BoxDecoration(
                     borderRadius: BorderRadius.circular(30),
                     boxShadow: [
                       BoxShadow(
-                        color: moodColor.withOpacity(0.3),
+                        color: displayMoodColor.withOpacity(0.3),
                         blurRadius: 20,
                         offset: const Offset(0, 10),
                       ),
@@ -1359,8 +1388,8 @@ class _Member2PageState extends State<Member2Page> {
                       begin: Alignment.topLeft,
                       end: Alignment.bottomRight,
                       colors: [
-                        moodColor,
-                        moodColor.withOpacity(0.7),
+                        displayMoodColor,
+                        displayMoodColor.withOpacity(0.7),
                       ],
                     ),
                   ),
@@ -1392,13 +1421,13 @@ class _Member2PageState extends State<Member2Page> {
                               ),
                             ],
                           ),
-                          child: Text(moodEmoji,
+                          child: Text(displayMoodEmoji,
                               style:
                                   const TextStyle(fontSize: 80, height: 1.1)),
                         ),
                         const SizedBox(height: 24),
                         Text(
-                          currentMood.toUpperCase(),
+                          displayMood.toUpperCase(),
                           style: const TextStyle(
                             fontSize: 32,
                             fontWeight: FontWeight.w900,
@@ -1417,7 +1446,7 @@ class _Member2PageState extends State<Member2Page> {
                           child: Text(
                             hasGoodSignal
                                 ? _getStressMessage()
-                                : "Waiting for stable brain signal...",
+                                : "Stress estimated using heart rate and body temperature. Helmet removed or no EEG signal.",
                             textAlign: TextAlign.center,
                             style: const TextStyle(
                               fontSize: 15,
@@ -1500,24 +1529,57 @@ class _Member2PageState extends State<Member2Page> {
                       Row(
                         mainAxisAlignment: MainAxisAlignment.center,
                         children: [
-                          Icon(Icons.monitor_heart,
-                              color:
-                                  hasGoodSignal ? Colors.black87 : Colors.grey,
-                              size: 22),
+                          Icon(
+                            hasGoodSignal ? Icons.psychology : Icons.monitor_heart,
+                            color: hasGoodSignal ? Colors.black87 : Colors.orange,
+                            size: 22,
+                          ),
                           const SizedBox(width: 8),
                           Text(
                             hasGoodSignal
-                                ? "Current Stress Index"
-                                : "Signal Quality Required",
+                                ? "EEG-Based Stress Index"
+                                : "HR-Based Stress (Fallback)",
                             style: TextStyle(
                               fontSize: 18,
                               fontWeight: FontWeight.bold,
-                              color:
-                                  hasGoodSignal ? Colors.black87 : Colors.grey,
+                              color: hasGoodSignal ? Colors.black87 : Colors.orange.shade800,
                             ),
                           ),
                         ],
                       ),
+                      if (!hasGoodSignal) ...[
+                        const SizedBox(height: 8),
+                        Container(
+                          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+                          decoration: BoxDecoration(
+                            color: Colors.orange.withOpacity(0.1),
+                            borderRadius: BorderRadius.circular(8),
+                            border: Border.all(
+                              color: Colors.orange.withOpacity(0.3),
+                              width: 1,
+                            ),
+                          ),
+                          child: const Row(
+                            mainAxisSize: MainAxisSize.min,
+                            children: [
+                              Icon(
+                                Icons.info_outline,
+                                size: 14,
+                                color: Colors.orange,
+                              ),
+                              SizedBox(width: 6),
+                              Text(
+                                "Helmet removed. Using heart rate data for stress estimation.",
+                                style: TextStyle(
+                                  fontSize: 12,
+                                  color: Colors.orange,
+                                  fontWeight: FontWeight.w500,
+                                ),
+                              ),
+                            ],
+                          ),
+                        ),
+                      ],
                       const SizedBox(height: 30),
                       Stack(
                         alignment: Alignment.center,
@@ -1530,7 +1592,7 @@ class _Member2PageState extends State<Member2Page> {
                               curve: Curves.easeOutCubic,
                               tween: Tween<double>(
                                   begin: 0,
-                                  end: hasGoodSignal ? stressScore : 0.0),
+                                  end: displayStressScore),
                               builder: (context, value, _) {
                                 return CircularProgressIndicator(
                                   value: value,
@@ -1538,9 +1600,7 @@ class _Member2PageState extends State<Member2Page> {
                                   backgroundColor: Colors.grey.shade100,
                                   strokeCap: StrokeCap.round,
                                   valueColor: AlwaysStoppedAnimation(
-                                    hasGoodSignal
-                                        ? _getStressColor()
-                                        : Colors.grey.shade300,
+                                    displayMoodColor,
                                   ),
                                 );
                               },
@@ -1549,15 +1609,11 @@ class _Member2PageState extends State<Member2Page> {
                           Column(
                             children: [
                               Text(
-                                hasGoodSignal
-                                    ? "${(stressScore * 100).toStringAsFixed(0)}%"
-                                    : "—",
+                                "${(displayStressScore * 100).toStringAsFixed(0)}%",
                                 style: TextStyle(
                                   fontSize: 48,
                                   fontWeight: FontWeight.w900,
-                                  color: hasGoodSignal
-                                      ? _getStressColor()
-                                      : Colors.grey,
+                                  color: displayMoodColor,
                                   height: 1.1,
                                 ),
                               ),
@@ -1567,9 +1623,7 @@ class _Member2PageState extends State<Member2Page> {
                                   fontSize: 14,
                                   fontWeight: FontWeight.w600,
                                   letterSpacing: 0.5,
-                                  color: hasGoodSignal
-                                      ? Colors.black54
-                                      : Colors.grey,
+                                  color: hasGoodSignal ? Colors.black54 : Colors.orange.shade800,
                                 ),
                               ),
                             ],

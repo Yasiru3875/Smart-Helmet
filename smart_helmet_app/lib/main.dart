@@ -12,6 +12,7 @@ import 'providers/journey_provider.dart';
 import 'providers/sensor_data_provider.dart'; // ← NEW: Live sensor values
 import 'providers/ride_session_provider.dart';
 import 'providers/emotion_provider.dart';
+import 'providers/sos_controller.dart';
 
 // ────────────────────────────────────────────────
 // Screens
@@ -19,6 +20,7 @@ import 'providers/emotion_provider.dart';
 import 'screens/auth/login_screen.dart';
 import 'screens/home/home_screen.dart';
 import 'screens/home/members/Health_Monitoring/member1_page.dart';
+import 'screens/home/emergency_screen.dart';
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
@@ -53,6 +55,9 @@ class SmartHelmetApp extends StatelessWidget {
         ChangeNotifierProvider(create: (_) => RideSessionProvider()),
 
         ChangeNotifierProvider(create: (_) => EmotionProvider()),
+
+        // SOS Emergency System
+        ChangeNotifierProvider(create: (_) => SOSController()),
       ],
       child: MaterialApp(
         debugShowCheckedModeBanner: false,
@@ -84,6 +89,7 @@ class SmartHelmetApp extends StatelessWidget {
         // Named routes (optional but recommended)
         routes: {
           '/member1': (context) => const Member1Page(),
+          '/emergency': (context) => const EmergencyScreen(),
           // Add more routes here when needed (member2, member3, etc.)
         },
       ),

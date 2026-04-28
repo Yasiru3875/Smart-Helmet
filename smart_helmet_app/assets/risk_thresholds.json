@@ -1,0 +1,83 @@
+{
+  "model_version": "2.0.0",
+  "dataset": "TU Wien IMU Motorcycle Behaviour",
+  "doi": "10.48436/re6xk-ydq75",
+  "license": "CC BY 4.0",
+  "label_map": {
+    "0": "Safe",
+    "1": "Risky"
+  },
+  "feature_order": [
+    "Acc_X",
+    "Acc_Y",
+    "Acc_Z",
+    "Gyr_X",
+    "Gyr_Y",
+    "Gyr_Z",
+    "Roll",
+    "lean_abs",
+    "gyrZ_abs",
+    "accelX_abs",
+    "resultant_accel",
+    "resultant_gyro"
+  ],
+  "top3_thresholds": {
+    "lean_abs": {
+      "importance": 0.173895,
+      "safe_mean": 7.138,
+      "risky_mean": 12.9273,
+      "boundary": 10.0327,
+      "unit": "\u00b0"
+    },
+    "resultant_gyro": {
+      "importance": 0.120694,
+      "safe_mean": 14.8232,
+      "risky_mean": 21.9915,
+      "boundary": 18.4073,
+      "unit": "\u00b0/s"
+    },
+    "gyrZ_abs": {
+      "importance": 0.103432,
+      "safe_mean": 4.3753,
+      "risky_mean": 7.6897,
+      "boundary": 6.0325,
+      "unit": "m/s\u00b2"
+    }
+  },
+  "scaler": {
+    "mean": [
+      0.081575,
+      0.126298,
+      9.840321,
+      -0.015702,
+      -1.110636,
+      -0.307245,
+      0.701306,
+      8.409398,
+      5.103149,
+      1.769899,
+      10.215316,
+      16.397422
+    ],
+    "scale": [
+      2.447383,
+      1.170494,
+      1.710779,
+      16.230145,
+      12.258078,
+      8.052585,
+      11.501457,
+      7.87765,
+      6.236698,
+      1.692276,
+      1.66984,
+      14.524976
+    ],
+    "note": "Apply z = (x - mean) / scale to each feature before TFLite inference"
+  },
+  "improvements_over_v1": [
+    "class_weight=balanced added to RandomForest",
+    "SMOTE oversampling applied before training",
+    "StandardScaler parameters now exported for Flutter"
+  ]
+}

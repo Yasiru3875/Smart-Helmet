@@ -8,6 +8,8 @@ class JourneyProvider with ChangeNotifier {
   List<SensorReading> _currentSensorReadings = [];
   List<GpsPoint> _gpsTrack = [];
   List<BrakingEvent> _brakingEvents = [];
+  List<LeanEvent> _leanEvents = [];
+  DateTime? _lastLeanEventTime; // 2-second debounce for lean events
 
   double _totalDistance = 0.0;
   List<double> _speedReadings = [];
@@ -20,9 +22,14 @@ class JourneyProvider with ChangeNotifier {
   // Threshold: sudden deceleration > 0.5 g (approx 4.9 m/s²) triggers a braking event
   static const double _brakingThreshold = 0.5;
 
+  // Lean angle thresholds (degrees)
+  static const double _riskyLeanThreshold = 35.0;
+  static const double _criticalLeanThreshold = 45.0;
+
   JourneyData? get currentJourney => _currentJourney;
   List<TurnEvent> get currentTurnEvents => _currentTurnEvents;
   List<SensorReading> get currentSensorReadings => _currentSensorReadings;
+  List<LeanEvent> get currentLeanEvents => _leanEvents;
 
   // Start a new journey
   void startJourney(String? startLocation, String? destination) {
@@ -36,6 +43,8 @@ class JourneyProvider with ChangeNotifier {
     _currentSensorReadings = [];
     _gpsTrack = [];
     _brakingEvents = [];
+    _leanEvents = [];
+    _lastLeanEventTime = null;
     _totalDistance = 0.0;
     _speedReadings = [];
     _maxSpeed = 0.0;
@@ -109,6 +118,33 @@ class JourneyProvider with ChangeNotifier {
     notifyListeners();
   }
 
+  // Add a lean event (called from member3_page when lean angle exceeds thresholds)
+  void addLeanEvent({
+    required double leanAngle,
+    required String severity,
+    required double latitude,
+    required double longitude,
+  }) {
+    if (_currentJourney == null) return;
+
+    // 2-second debounce: skip if last lean event was less than 2 seconds ago
+    final now = DateTime.now();
+    if (_lastLeanEventTime != null &&
+        now.difference(_lastLeanEventTime!).inMilliseconds < 2000) {
+      return;
+    }
+    _lastLeanEventTime = now;
+
+    _leanEvents.add(LeanEvent(
+      timestamp: now,
+      leanAngle: leanAngle,
+      severity: severity,
+      latitude: latitude,
+      longitude: longitude,
+    ));
+    notifyListeners();
+  }
+
   // Add sensor reading (braking is detected in member3_page with correct thresholds)
   void addSensorReading({
     required int heartRate,
@@ -138,6 +174,28 @@ class JourneyProvider with ChangeNotifier {
       gyroY: gyroY,
       gyroZ: gyroZ,
     ));
+
+    // ── Lean angle detection ─────────────────────────────
+    // Formula: atan2(lateral accel, vertical accel) → degrees
+    final double computedLeanAngle = atan2(accelY, accelZ) * (180.0 / pi);
+    final double absLean = computedLeanAngle.abs();
+
+    if (absLean > _criticalLeanThreshold) {
+      addLeanEvent(
+        leanAngle: computedLeanAngle,
+        severity: 'critical',
+        latitude: latitude,
+        longitude: longitude,
+      );
+    } else if (absLean > _riskyLeanThreshold) {
+      addLeanEvent(
+        leanAngle: computedLeanAngle,
+        severity: 'risky',
+        latitude: latitude,
+        longitude: longitude,
+      );
+    }
+
     notifyListeners();
   }
 
@@ -157,6 +215,8 @@ class JourneyProvider with ChangeNotifier {
         _currentTurnEvents.where((e) => e.severity == 'sharp').length;
     final int riskyTurns =
         _currentTurnEvents.where((e) => e.severity == 'risky').length;
+    final int criticalLeans =
+        _leanEvents.where((e) => e.severity == 'critical').length;
 
     final double averageSpeed = _speedReadings.isNotEmpty
         ? _speedReadings.reduce((a, b) => a + b) / _speedReadings.length
@@ -167,10 +227,12 @@ class JourneyProvider with ChangeNotifier {
     if (_currentSensorReadings.length > 5) {
       if (riskyTurns > 2 ||
           _brakingEvents.where((b) => b.severity == 'emergency').length > 1 ||
+          criticalLeans > 1 ||
           _maxSpeed > 100.0) {
         dangerPrediction = 'DANGEROUS';
       } else if (riskyTurns > 0 ||
           _brakingEvents.isNotEmpty ||
+          _leanEvents.isNotEmpty ||
           sharpTurns > 3 ||
           _maxSpeed > 80.0) {
         dangerPrediction = 'MODERATE RISK';
@@ -197,6 +259,7 @@ class JourneyProvider with ChangeNotifier {
       dangerPrediction: dangerPrediction,
       turnEvents: List.from(_currentTurnEvents),
       brakingEvents: List.from(_brakingEvents),
+      leanEvents: List.from(_leanEvents),
       sensorReadings: List.from(_currentSensorReadings),
       gpsTrack: List.from(_gpsTrack),
     );
@@ -206,6 +269,8 @@ class JourneyProvider with ChangeNotifier {
     _currentSensorReadings = [];
     _gpsTrack = [];
     _brakingEvents = [];
+    _leanEvents = [];
+    _lastLeanEventTime = null;
     _totalDistance = 0.0;
     _speedReadings = [];
     _maxSpeed = 0.0;

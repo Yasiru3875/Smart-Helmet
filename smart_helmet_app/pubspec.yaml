@@ -15,9 +15,9 @@ dependencies:
   provider: ^6.1.1
   flutter_blue_plus: ^1.31.0
   shared_preferences: ^2.2.3
-  fl_chart: ^0.68.0 # post-ride graphs
-  flutter_tts: ^4.0.2 # text-to-speech
-  geolocator: ^10.1.0 # GPS
+  fl_chart: ^0.68.0
+  flutter_tts: ^4.0.2
+  geolocator: ^10.1.0
   firebase_core: ^3.15.2
   firebase_auth: ^5.3.0
   cloud_firestore: ^5.6.5
@@ -27,14 +27,19 @@ dependencies:
   tflite_flutter: ^0.12.1
   fftea: ^1.5.0+1
 
-  path_provider: ^2.1.2
 
-  share_plus: ^7.2.2
+  # kept once, higher version
+  pdf: ^3.11.1             # kept once, higher version
+  printing: ^5.13.3        # kept once, higher version
+    # kept once, higher version
+
 
   flutter_bluetooth_serial: ^0.4.0
 
   permission_handler: ^11.3.1
   collection: ^1.18.0
+  sensors_plus: ^4.0.2
+  vibration: ^2.0.0
 
   cupertino_icons: ^1.0.8
   firebase_database: ^11.3.10
@@ -46,8 +51,10 @@ dependencies:
 
   screenshot: ^3.0.0
 
-  pdf: ^3.11.1 # required for creating PDF documents
-  printing: ^5.13.3 # required for preview/share/print PDF
+  path_provider: ^2.1.5
+  share_plus: ^12.0.2
+
+
 
 dev_dependencies:
   flutter_test:
@@ -66,6 +73,8 @@ flutter:
     - assets/model.tflite
     - assets/icons/dev_team.png
     - assets/eeg_stress_model_float32.tflite
+    - assets/post_journey_risk_model.tflite
+    - assets/risk_thresholds.json
 
 flutter_icons:
   android: true

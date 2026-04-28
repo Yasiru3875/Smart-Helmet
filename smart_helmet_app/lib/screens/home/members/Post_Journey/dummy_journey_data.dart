@@ -216,37 +216,14 @@ class DummyJourneyData {
       destination: 'Malabe',
       sharpTurns: turns.where((t) => t.severity == 'sharp').length,
       riskyTurns: turns.where((t) => t.severity == 'risky').length,
-      suddenBrakes: brakes.length,
+      totalBrakingEvents: brakes.length,
       averageSpeed: 38.4,
       maxSpeed: 67.2,
       totalDistance: 12.48,
-      averageStressLevel: 42.6,
-      stressPeakCount: stressPeaks.length,
-      maxStressLevel: 81.0,
-      riskScore: 54.0,
       turnEvents: turns,
-      brakeEvents: brakes,
-      stressPeaks: stressPeaks,
-      criticalEvents: criticals,
+      brakingEvents: brakes,
       sensorReadings: sensors,
       gpsTrack: gps,
-      weatherContext: WeatherContext(
-        condition: 'Rain',
-        description: 'light rain',
-        temperature: 27.5,
-        humidity: 84.0,
-        windSpeed: 14.2,
-        visibility: 6.8,
-        icon: '10d',
-      ),
-      trafficCondition: 'Heavy — morning rush hour',
-      recommendations: [
-        'Reduce speed through the Battaramulla Hospital junction — this was your highest-risk zone today.',
-        'You made 3 risky turns. Practice wider entry angles to reduce gyroscope spikes above 150°/s.',
-        'Your stress peaked to 81% at the hospital junction. Consider leaving 5 min earlier to avoid rush-hour anxiety.',
-        'Rain reduced safe speed thresholds. Maintain ≥2s following distance in wet conditions.',
-        'Good recovery after each critical event — keep building awareness of the Malabe roundabout exit.',
-      ],
     );
   }
 
@@ -562,5 +539,32 @@ class DummyJourneyData {
         speed: 30.0 + 20.0 * (0.5 - (t - 0.5).abs()),
       );
     });
+  }
+
+  /// Generate sample lean events for testing
+  static List<LeanEvent> _generateLeanEvents(DateTime startTime) {
+    return [
+      LeanEvent(
+        timestamp: startTime.add(const Duration(minutes: 12)),
+        leanAngle: 38.5,
+        severity: 'risky',
+        latitude: 7.2180,
+        longitude: 79.8480,
+      ),
+      LeanEvent(
+        timestamp: startTime.add(const Duration(minutes: 25)),
+        leanAngle: -47.2,
+        severity: 'critical',
+        latitude: 7.2350,
+        longitude: 79.8660,
+      ),
+      LeanEvent(
+        timestamp: startTime.add(const Duration(minutes: 38)),
+        leanAngle: 42.1,
+        severity: 'risky',
+        latitude: 7.2530,
+        longitude: 79.8830,
+      ),
+    ];
   }
 }
