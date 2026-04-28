@@ -13,12 +13,19 @@ class JourneyData {
   final int sharpTurns;
   final int riskyTurns;
   final int totalBrakingEvents;
+  final int suddenBrakes;
   final double averageSpeed;
   final double maxSpeed;
   final double maxTurnRate;
   final double totalDistance;
   final String? dangerPrediction;
   
+  final double riskScore;
+  final double averageStressLevel;
+  final int stressPeakCount;
+  final double maxStressLevel;
+  final List<String> recommendations;
+
   final List<TurnEvent> turnEvents;
   final List<BrakingEvent> brakingEvents;
   final List<LeanEvent> leanEvents;
@@ -34,17 +41,24 @@ class JourneyData {
     this.sharpTurns = 0,
     this.riskyTurns = 0,
     this.totalBrakingEvents = 0,
+    this.suddenBrakes = 0,
     this.averageSpeed = 0.0,
     this.maxSpeed = 0.0,
     this.maxTurnRate = 0.0,
     this.totalDistance = 0.0,
     this.dangerPrediction,
+    this.riskScore = 100.0,
+    this.averageStressLevel = 0.0,
+    this.stressPeakCount = 0,
+    this.maxStressLevel = 0.0,
+    this.recommendations = const [],
     this.turnEvents = const [],
-    this.brakingEvents = const [],
+    List<BrakingEvent>? brakingEvents,
+    List<BrakingEvent>? brakeEvents,
     this.leanEvents = const [],
     this.sensorReadings = const [],
     this.gpsTrack = const [],
-  });
+  })  : this.brakingEvents = brakingEvents ?? brakeEvents ?? const [];
   
   Map<String, dynamic> toMap() {
     return {
@@ -266,6 +280,13 @@ class SensorReading {
   final double temperature;
   final int stressLevel;
   
+  final double accelX;
+  final double accelY;
+  final double accelZ;
+  final double gyroX;
+  final double gyroY;
+  final double gyroZ;
+  
   SensorReading({
     required this.timestamp,
     required this.heartRate,
@@ -317,11 +338,13 @@ class GpsPoint {
   final double latitude;
   final double longitude;
   final DateTime? timestamp;
+  final double speedKmh;
   
   GpsPoint({
     required this.latitude,
     required this.longitude,
     this.timestamp,
+    this.speedKmh = 0.0,
   });
 
   Map<String, dynamic> toMap() {
@@ -329,6 +352,7 @@ class GpsPoint {
       'latitude': latitude,
       'longitude': longitude,
       'timestamp': timestamp?.toIso8601String(),
+      'speedKmh': speedKmh,
     };
   }
 
@@ -337,6 +361,7 @@ class GpsPoint {
       latitude: (map['latitude'] ?? 0.0).toDouble(),
       longitude: (map['longitude'] ?? 0.0).toDouble(),
       timestamp: map['timestamp'] != null ? DateTime.parse(map['timestamp']) : null,
+      speedKmh: (map['speedKmh'] ?? 0.0).toDouble(),
     );
   }
 }

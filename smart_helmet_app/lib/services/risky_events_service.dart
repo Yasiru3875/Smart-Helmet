@@ -98,16 +98,17 @@ class RiskyEventsService {
         .toList();
   }
   
-  /// Convert Firebase risky events to BrakeEvent list for visualization
-  List<BrakeEvent> convertToBrakeEvents(List<Map<String, dynamic>> riskyEvents) {
+  /// Convert Firebase risky events to BrakingEvent list for visualization
+  List<BrakingEvent> convertToBrakeEvents(List<Map<String, dynamic>> riskyEvents) {
     return riskyEvents
         .where((e) => e['eventType'] == 'harsh_brake' || e['eventType'] == 'sudden_brake')
-        .map((e) => BrakeEvent(
+        .map((e) => BrakingEvent(
           timestamp: DateTime.parse(e['timestamp']),
           severity: e['eventType'] == 'harsh_brake' ? 'harsh' : 'moderate',
           deceleration: (e['accelX']?.abs() ?? 0.0).toDouble(),
           latitude: (e['latitude'] ?? 0.0).toDouble(),
           longitude: (e['longitude'] ?? 0.0).toDouble(),
+          speedBefore: (e['speedKmh'] ?? 0.0).toDouble(),
         ))
         .toList();
   }
@@ -134,7 +135,7 @@ class RiskyEventsService {
           latitude: (e['latitude']).toDouble(),
           longitude: (e['longitude']).toDouble(),
           timestamp: DateTime.parse(e['timestamp']),
-          speed: (e['speedKmh'] ?? 0.0).toDouble(),
+          speedKmh: (e['speedKmh'] ?? 0.0).toDouble(),
         ))
         .toList();
     
