@@ -1,7 +1,7 @@
 import 'dart:async';
 import 'package:flutter/foundation.dart';
-import 'package:provider/provider.dart';
 import 'package:flutter_tts/flutter_tts.dart';
+import 'package:geolocator/geolocator.dart';
 import 'package:url_launcher/url_launcher.dart';
 import '../models/sos_state.dart';
 import '../services/sos_alert_service.dart';
@@ -15,11 +15,16 @@ class SOSController extends ChangeNotifier {
   final SOSBluetoothService _bluetoothService = SOSBluetoothService();
   final FlutterTts _flutterTts = FlutterTts();
 
-  // Emergency contact numbers
-  final List<String> _emergencyContacts = [
-    '+94771234567', // Example emergency contact 1
-    '+94771234568', // Example emergency contact 2
-  ];
+  // 🆕 Emergency contacts — loaded from UserProfileProvider after login
+  List<String> _emergencyContacts = [];
+  String _riderName = 'Rider';
+
+  /// Called from EntryPoint/HomeScreen after profile loads
+  void setEmergencyContacts(List<String> contacts, {String riderName = 'Rider'}) {
+    _emergencyContacts = contacts;
+    _riderName = riderName;
+    debugPrint('SOSController: contacts updated → $contacts');
+  }
 
   SOSState get state => _state;
 
@@ -137,9 +142,27 @@ class SOSController extends ChangeNotifier {
   }
 
   Future<void> _sendSMSToEmergencyContacts() async {
-    final message = 'EMERGENCY SOS! Rider in distress. Location: https://maps.google.com/?q=0,0';
+    // Get real GPS location
+    String locationStr = 'Location unavailable';
+    try {
+      final pos = await Geolocator.getCurrentPosition(
+        desiredAccuracy: LocationAccuracy.high,
+        timeLimit: const Duration(seconds: 5),
+      );
+      locationStr = 'https://maps.google.com/?q=${pos.latitude},${pos.longitude}';
+    } catch (_) {}
+
+    final message = 'EMERGENCY SOS!\n'
+        'Rider: $_riderName\n'
+        'Rider in distress. Immediate help needed.\n'
+        '📍 Location: $locationStr\n'
+        'This is an automated alert from Smart Helmet.';
     
-    for (String contact in _emergencyContacts) {
+    final contacts = _emergencyContacts.isNotEmpty
+        ? _emergencyContacts
+        : ['+94771234567']; // fallback if not configured
+
+    for (String contact in contacts) {
       final uri = Uri.parse('sms:$contact?body=${Uri.encodeComponent(message)}');
       if (await canLaunchUrl(uri)) {
         await launchUrl(uri);

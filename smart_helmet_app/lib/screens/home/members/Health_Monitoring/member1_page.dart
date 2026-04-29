@@ -9,6 +9,7 @@ import 'dart:async';
 import 'dart:convert';
 import 'dart:math' as math;
 import 'package:cloud_firestore/cloud_firestore.dart';
+import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import 'package:tflite_flutter/tflite_flutter.dart';
@@ -18,11 +19,12 @@ import 'package:geolocator/geolocator.dart';
 import 'package:smart_helmet_app/providers/sensor_data_provider.dart';
 import 'package:smart_helmet_app/providers/ride_session_provider.dart';
 import 'package:smart_helmet_app/providers/emotion_provider.dart';
-// If you have auth service:
 import '../../../../services/auth_service.dart';
+import '../../../../providers/user_profile_provider.dart'; // 🆕 dynamic profile inputs
+import '../../../../providers/alert_engine.dart'; // 🆕 30s sustained risk engine
+import '../../../../services/emotion_aggregator_service.dart'; // 🆕 emotion analytics
 
-// NEW IMPORT (create the file in the same folder or adjust path)
-import 'weekly_report_page.dart'; // ← ADD THIS LINE
+import 'weekly_report_page.dart';
 
 class Member1Page extends StatefulWidget {
   const Member1Page({super.key});
@@ -61,6 +63,11 @@ class _Member1PageState extends State<Member1Page>
   final List<FlSpot> temperatureSpots = [];
   double _currentX = 0.0;
 
+  // 🆕 Emotion trend data
+  final EmotionAggregatorService _emotionAggregator = EmotionAggregatorService();
+  List<Map<String, dynamic>> _emotionTrendData = [];
+  bool _emotionDataLoading = true;
+
   // Firestore save throttling
   // Firestore save throttling - High frequency for real-time dashboard sync
   DateTime? _lastSavedTime;
@@ -82,6 +89,7 @@ class _Member1PageState extends State<Member1Page>
     _tabController = TabController(length: 2, vsync: this);
     _loadModel();
     _startLocationTracking();
+    _loadEmotionTrendData();
 
     // Important: delay connection until first frame is rendered
     WidgetsBinding.instance.addPostFrameCallback((_) {
@@ -104,8 +112,8 @@ class _Member1PageState extends State<Member1Page>
   Future<void> _loadModel() async {
     try {
       _interpreter =
-          await Interpreter.fromAsset('assets/heart_risk_model.tflite');
-      debugPrint("TFLite model loaded successfully");
+          await Interpreter.fromAsset('assets/heart_attack_model.tflite');
+      debugPrint("TFLite heart_attack_model loaded successfully");
     } catch (e) {
       debugPrint("Error loading model: $e");
       if (mounted)
@@ -506,48 +514,63 @@ class _Member1PageState extends State<Member1Page>
     try {
       final emotionProvider = Provider.of<EmotionProvider>(context, listen: false);
       final currentEmotion = emotionProvider.stressState.emotion;
-      final emotionEmoji = emotionProvider.stressState.emoji ?? "😐";
       final emotionMultiplier = _getEmotionRiskMultiplier(currentEmotion);
 
-      // User Profile (Mocked or from DB)
-      double age = 30.0;
-      double gender = 0.0; // 0 = Male, 1 = Female
-      double weight = 75.0; // kg
-      double height = 1.75; // meters
+      // 🆕 Dynamic User Profile (from Firebase via UserProfileProvider)
+      // Falls back to safe defaults if profile not yet loaded.
+      final profile = Provider.of<UserProfileProvider>(context, listen: false);
+      double age = profile.age?.toDouble() ?? 30.0;
+      // New model: Female=0, Male=1 (LabelEncoder alphabetical order)
+      // Old genderNumeric: 0=Male, 1=Female, 0.5=Other → remap for new model
+      double genderEncoded;
+      final gRaw = profile.genderNumeric;
+      if (gRaw == 0.0) {
+        genderEncoded = 1.0; // Male → 1
+      } else if (gRaw == 1.0) {
+        genderEncoded = 0.0; // Female → 0
+      } else {
+        genderEncoded = 0.5; // Other → 0.5
+      }
+      double weight = profile.weightKg ?? 75.0; // kg
+      double height = (profile.heightCm ?? 175.0) / 100.0; // metres
       double derivedBMI = weight / (height * height);
-      double derivedHRV = (hr > 100 || hr < 60) ? 30.0 : 60.0;
 
-      // Scalers
-      List<double> means = [99.702, 37.072, 50.932, 0.498, 27.610, 47.905];
-      List<double> scales = [28.799, 1.109, 19.336, 0.500, 8.520, 17.265];
+      // ── Exact StandardScaler values from heart_attack_model.ipynb ──
+      // Feature order: [HR, Temp, Age, Gender, Weight(kg), Height(m), BMI]
+      List<double> means = [79.317, 36.748, 53.412, 0.491, 74.969, 1.751, 24.954];
+      List<double> scales = [11.491, 0.430, 20.797, 0.500, 14.388, 0.144, 6.331];
 
-      double s_hr = (hr - means[0]) / scales[0];
-      double s_temp = (temp - means[1]) / scales[1];
-      double s_age = (age - means[2]) / scales[2];
-      double s_gender = (gender - means[3]) / scales[3];
-      double s_bmi = (derivedBMI - means[4]) / scales[4];
-      double s_hrv = (derivedHRV - means[5]) / scales[5];
+      double s_hr     = (hr            - means[0]) / scales[0];
+      double s_temp   = (temp          - means[1]) / scales[1];
+      double s_age    = (age           - means[2]) / scales[2];
+      double s_gender = (genderEncoded - means[3]) / scales[3];
+      double s_weight = (weight        - means[4]) / scales[4];
+      double s_height = (height        - means[5]) / scales[5];
+      double s_bmi    = (derivedBMI    - means[6]) / scales[6];
 
-      var input = [[s_hr, s_temp, s_age, s_gender, s_bmi, s_hrv]];
+      var input = [[s_hr, s_temp, s_age, s_gender, s_weight, s_height, s_bmi]];
       var output = List.filled(1, [0.0]);
 
       _interpreter!.run(input, output);
 
-      double baseProbability = output[0][0].clamp(0.0, 1.0);
-      final adjustedProbability = (baseProbability * emotionMultiplier).clamp(0.0, 1.0);
-      final int riskPercentage = (adjustedProbability * 100).round();
+      // NN was trained with High Risk=0, Low Risk=1 (LabelEncoder alphabetical).
+      // So sigmoid output ≈ P(Low Risk). Invert to get P(High Risk).
+      double highRiskProb = (1.0 - output[0][0]).clamp(0.0, 1.0);
+      final adjustedHighRiskProb = (highRiskProb * emotionMultiplier).clamp(0.0, 1.0);
+      final int riskPercentage = (adjustedHighRiskProb * 100).round();
 
       String newRisk;
       Color newColor;
 
-      if (adjustedProbability > 0.75) {
-        newRisk = "CRITICAL";
+      // 3-tier classification per model plan
+      if (adjustedHighRiskProb > 0.70) {
+        newRisk = "HIGH RISK";
         newColor = const Color(0xFFFF3B30);
-      } else if (adjustedProbability > 0.45) {
-        newRisk = "ELEVATED";
+      } else if (adjustedHighRiskProb >= 0.30) {
+        newRisk = "MEDIUM RISK";
         newColor = const Color(0xFFFF9500);
       } else {
-        newRisk = "STABLE";
+        newRisk = "NORMAL";
         newColor = const Color(0xFF34C759);
       }
 
@@ -555,10 +578,20 @@ class _Member1PageState extends State<Member1Page>
         setState(() {
           riskLevel = "$newRisk ($riskPercentage%)";
           riskColor = newColor;
-          // Store raw percentage for UI
           _heartAttackRisk = riskPercentage;
         });
       }
+
+      // 🆕 Feed to AlertEngine for 30-second sustained risk monitoring
+      final alertEngine = Provider.of<AlertEngine>(context, listen: false);
+      final btManager = Provider.of<BluetoothManager>(context, listen: false);
+      alertEngine.onNewRiskReading(
+        riskPercent: riskPercentage,
+        hr: hr,
+        temp: temp,
+        profile: profile,
+        btManager: btManager,
+      );
     } catch (e) {
       debugPrint("TFLite inference error: $e");
       _fallbackLocalRisk(hr, temp);
@@ -778,6 +811,8 @@ class _Member1PageState extends State<Member1Page>
                 _buildOverallHealthStatusCard(),
                 const SizedBox(height: 24),
                 _buildEmotionalState(isConnected),
+                const SizedBox(height: 24),
+                _buildEmotionTrendCard(),
                 const SizedBox(height: 24),
                 _buildTodaySummaryCard(),
                 const SizedBox(height: 24),
@@ -1044,9 +1079,9 @@ class _Member1PageState extends State<Member1Page>
     } else if (bodyTemperature > 38.5 || bodyTemperature < 35.0) {
       score -= 30;
     }
-    // Risk level impact
-    if (riskLevel.toLowerCase().contains('elevated')) score -= 20;
-    if (riskLevel.toLowerCase().contains('critical')) score -= 45;
+    // Risk level impact (aligned with new 3-tier labels)
+    if (riskLevel.toLowerCase().contains('medium risk')) score -= 20;
+    if (riskLevel.toLowerCase().contains('high risk')) score -= 45;
 
     return score.clamp(0, 100);
   }
@@ -2059,6 +2094,272 @@ class _Member1PageState extends State<Member1Page>
     if (status.contains("Normal"))
       return const Color(0xFF34C759); // Apple Green
     return const Color(0xFF8E8E93); // Medical Grey for No Data
+  }
+
+  // ── Emotion Trend Methods ───────────────────────────────────────────────────────
+
+  Future<void> _loadEmotionTrendData() async {
+    final auth = FirebaseAuth.instance;
+    final uid = auth.currentUser?.uid;
+    if (uid == null) return;
+
+    setState(() => _emotionDataLoading = true);
+    
+    try {
+      // First aggregate the week data
+      await _emotionAggregator.aggregateWeek(userId: uid);
+      
+      // Then fetch the last 7 days
+      final data = await _emotionAggregator.getLast7Days(uid);
+      setState(() {
+        _emotionTrendData = data;
+        _emotionDataLoading = false;
+      });
+    } catch (e) {
+      debugPrint('❌ Error loading emotion trend data: $e');
+      setState(() => _emotionDataLoading = false);
+    }
+  }
+
+  Widget _buildEmotionTrendCard() {
+    if (_emotionDataLoading) {
+      return Container(
+        margin: const EdgeInsets.only(bottom: 24),
+        padding: const EdgeInsets.all(20),
+        decoration: BoxDecoration(
+          color: Colors.white,
+          borderRadius: BorderRadius.circular(20),
+          boxShadow: [
+            BoxShadow(
+              color: Colors.black.withOpacity(0.04),
+              blurRadius: 10,
+              offset: const Offset(0, 4),
+            ),
+          ],
+        ),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Row(
+              children: [
+                const Icon(Icons.trending_up_rounded, color: Colors.purple, size: 20),
+                const SizedBox(width: 8),
+                const Text(
+                  "7-Day Emotional Trend",
+                  style: TextStyle(
+                    fontSize: 16,
+                    fontWeight: FontWeight.w900,
+                    color: Color(0xFF1C1C1E),
+                  ),
+                ),
+                const Spacer(),
+                Container(
+                  padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                  decoration: BoxDecoration(
+                    color: Colors.purple.withOpacity(0.1),
+                    borderRadius: BorderRadius.circular(6),
+                  ),
+                  child: const Text(
+                    "ANALYTICS",
+                    style: TextStyle(
+                      color: Colors.purple,
+                      fontSize: 9,
+                      fontWeight: FontWeight.w800,
+                    ),
+                  ),
+                ),
+              ],
+            ),
+            const SizedBox(height: 16),
+            const Center(
+              child: CircularProgressIndicator(color: Colors.purple),
+            ),
+            const SizedBox(height: 8),
+            const Center(
+              child: Text(
+                "Analyzing emotional patterns...",
+                style: TextStyle(
+                  color: Colors.grey,
+                  fontSize: 12,
+                  fontWeight: FontWeight.w500,
+                ),
+              ),
+            ),
+          ],
+        ),
+      );
+    }
+
+    // Calculate data coverage
+    final daysWithData = _emotionTrendData.where((d) => d['readingCount'] > 0).length;
+    final coveragePercentage = (daysWithData / 7 * 100).round();
+
+    return Container(
+      margin: const EdgeInsets.only(bottom: 24),
+      padding: const EdgeInsets.all(20),
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(20),
+        boxShadow: [
+          BoxShadow(
+            color: Colors.black.withOpacity(0.04),
+            blurRadius: 10,
+            offset: const Offset(0, 4),
+          ),
+        ],
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              const Icon(Icons.trending_up_rounded, color: Colors.purple, size: 20),
+              const SizedBox(width: 8),
+              const Text(
+                "7-Day Emotional Trend",
+                style: TextStyle(
+                  fontSize: 16,
+                  fontWeight: FontWeight.w900,
+                  color: Color(0xFF1C1C1E),
+                ),
+              ),
+              const Spacer(),
+              Container(
+                padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                decoration: BoxDecoration(
+                  color: Colors.purple.withOpacity(0.1),
+                  borderRadius: BorderRadius.circular(6),
+                ),
+                child: Text(
+                  "${coveragePercentage}%",
+                  style: const TextStyle(
+                    color: Colors.purple,
+                    fontSize: 9,
+                    fontWeight: FontWeight.w800,
+                  ),
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 8),
+          Text(
+            "Weekly baseline accuracy: ${coveragePercentage}% (${daysWithData}/7 days)",
+            style: TextStyle(
+              color: Colors.grey.shade600,
+              fontSize: 11,
+              fontWeight: FontWeight.w500,
+            ),
+          ),
+          const SizedBox(height: 16),
+          
+          // Mini bar chart
+          SizedBox(
+            height: 80,
+            child: _emotionTrendData.isEmpty
+                ? const Center(
+                    child: Text(
+                      "No data available",
+                      style: TextStyle(color: Colors.grey, fontSize: 12),
+                    ),
+                  )
+                : Row(
+                    mainAxisAlignment: MainAxisAlignment.spaceEvenly,
+                    crossAxisAlignment: CrossAxisAlignment.end,
+                    children: _emotionTrendData.asMap().entries.map((entry) {
+                      final i = entry.key;
+                      final data = entry.value;
+                      final stress = data['avgStressScore'] as double?;
+                      final hasData = data['readingCount'] > 0;
+                      
+                      if (stress == null || !hasData) {
+                        return Expanded(
+                          child: Container(
+                            margin: const EdgeInsets.symmetric(horizontal: 2),
+                            height: 4,
+                            decoration: BoxDecoration(
+                              color: Colors.grey.shade300,
+                              borderRadius: BorderRadius.circular(2),
+                            ),
+                          ),
+                        );
+                      }
+                      
+                      // Normalize stress to 0-80 height range
+                      final height = (stress * 80).clamp(4.0, 80.0);
+                      final color = stress < 0.3
+                          ? const Color(0xFF34C759) // Green
+                          : stress < 0.6
+                              ? const Color(0xFFFF9500) // Orange
+                              : const Color(0xFFFF3B30); // Red
+                      
+                      return Expanded(
+                        child: Container(
+                          margin: const EdgeInsets.symmetric(horizontal: 2),
+                          height: height,
+                          decoration: BoxDecoration(
+                            color: color,
+                            borderRadius: BorderRadius.circular(2),
+                          ),
+                        ),
+                      );
+                    }).toList(),
+                  ),
+          ),
+          
+          const SizedBox(height: 12),
+          
+          // Day labels
+          Row(
+            mainAxisAlignment: MainAxisAlignment.spaceEvenly,
+            children: _emotionTrendData.asMap().entries.map((entry) {
+              final dateStr = entry.value['date'] as String;
+              final date = DateTime.parse(dateStr);
+              final dayLabel = date.day.toString();
+              return Expanded(
+                child: Center(
+                  child: Text(
+                    dayLabel,
+                    style: TextStyle(
+                      color: Colors.grey.shade600,
+                      fontSize: 9,
+                      fontWeight: FontWeight.w600,
+                    ),
+                  ),
+                ),
+              );
+            }).toList(),
+          ),
+          
+          const SizedBox(height: 16),
+          
+          // Action button
+          SizedBox(
+            width: double.infinity,
+            child: TextButton.icon(
+              onPressed: () {
+                Navigator.pushNamed(context, '/weekly_report');
+              },
+              icon: const Icon(Icons.analytics_rounded, size: 16),
+              label: const Text(
+                "View Full Analytics",
+                style: TextStyle(
+                  fontSize: 12,
+                  fontWeight: FontWeight.w700,
+                  color: Colors.purple,
+                ),
+              ),
+              style: TextButton.styleFrom(
+                padding: const EdgeInsets.symmetric(vertical: 8),
+                shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(8),
+                  side: const BorderSide(color: Colors.purple, width: 1),
+                ),
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
   }
 }
 

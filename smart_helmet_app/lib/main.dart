@@ -9,10 +9,12 @@ import 'package:provider/provider.dart';
 import 'services/auth_service.dart';
 import 'services/bluetooth_manager.dart';
 import 'providers/journey_provider.dart';
-import 'providers/sensor_data_provider.dart'; // ← NEW: Live sensor values
+import 'providers/sensor_data_provider.dart';
 import 'providers/ride_session_provider.dart';
 import 'providers/emotion_provider.dart';
 import 'providers/sos_controller.dart';
+import 'providers/user_profile_provider.dart'; // 🆕
+import 'providers/alert_engine.dart'; // 🆕
 
 // ────────────────────────────────────────────────
 // Screens
@@ -21,6 +23,7 @@ import 'screens/auth/login_screen.dart';
 import 'screens/home/home_screen.dart';
 import 'screens/home/members/Health_Monitoring/member1_page.dart';
 import 'screens/home/emergency_screen.dart';
+import 'screens/home/Side_Panel_Screens/user_profile_page.dart'; // 🆕
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
@@ -49,7 +52,7 @@ class SmartHelmetApp extends StatelessWidget {
         // Journey/route state (start/end journey, route points, etc.)
         ChangeNotifierProvider(create: (_) => JourneyProvider()),
 
-        // NEW: Shared live sensor data (heart rate, temp, stress, alerts)
+        // Shared live sensor data (heart rate, temp, stress, alerts)
         ChangeNotifierProvider(create: (_) => SensorDataProvider()),
 
         ChangeNotifierProvider(create: (_) => RideSessionProvider()),
@@ -58,6 +61,12 @@ class SmartHelmetApp extends StatelessWidget {
 
         // SOS Emergency System
         ChangeNotifierProvider(create: (_) => SOSController()),
+
+        // 🆕 User profile + emergency contacts
+        ChangeNotifierProvider(create: (_) => UserProfileProvider()),
+
+        // 🆕 30-second sustained risk alert engine
+        ChangeNotifierProvider(create: (_) => AlertEngine()),
       ],
       child: MaterialApp(
         debugShowCheckedModeBanner: false,
@@ -85,12 +94,10 @@ class SmartHelmetApp extends StatelessWidget {
           ),
         ),
         home: const EntryPoint(),
-
-        // Named routes (optional but recommended)
         routes: {
           '/member1': (context) => const Member1Page(),
           '/emergency': (context) => const EmergencyScreen(),
-          // Add more routes here when needed (member2, member3, etc.)
+          '/profile': (context) => const UserProfilePage(), // 🆕
         },
       ),
     );
@@ -117,8 +124,13 @@ class EntryPoint extends StatelessWidget {
           );
         }
 
-        // User is logged in → go to main app
+        // User is logged in → load profile then show home
         if (snapshot.hasData) {
+          // Load profile in background after login
+          WidgetsBinding.instance.addPostFrameCallback((_) {
+            Provider.of<UserProfileProvider>(context, listen: false)
+                .loadProfile();
+          });
           return const HomeScreen();
         }
 

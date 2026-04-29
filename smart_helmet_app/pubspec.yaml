@@ -70,7 +70,7 @@ flutter:
     - assets/icons/motorcycle.png
     - assets/icons/app_icon.png
     - assets/icons/g-logo.png
-    - assets/model.tflite
+    - assets/heart_attack_model.tflite
     - assets/icons/dev_team.png
     - assets/eeg_stress_model_float32.tflite
     - assets/post_journey_risk_model.tflite

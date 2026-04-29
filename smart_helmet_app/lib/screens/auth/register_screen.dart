@@ -31,6 +31,33 @@ class _RegisterScreenState extends State<RegisterScreen> {
   bool _isLoading = false;
   bool _obscurePassword = true;
 
+  // 🆕 Emergency contacts (min 1, max 3)
+  final List<Map<String, TextEditingController>> _contactControllers = [
+    {
+      'name': TextEditingController(),
+      'phone': TextEditingController(),
+    }
+  ];
+
+  void _addEmergencyContact() {
+    if (_contactControllers.length >= 3) return;
+    setState(() {
+      _contactControllers.add({
+        'name': TextEditingController(),
+        'phone': TextEditingController(),
+      });
+    });
+  }
+
+  void _removeEmergencyContact(int index) {
+    if (_contactControllers.length <= 1) return;
+    setState(() {
+      _contactControllers[index]['name']!.dispose();
+      _contactControllers[index]['phone']!.dispose();
+      _contactControllers.removeAt(index);
+    });
+  }
+
   @override
   void dispose() {
     _usernameController.dispose();
@@ -39,7 +66,10 @@ class _RegisterScreenState extends State<RegisterScreen> {
     _ageController.dispose();
     _heightController.dispose();
     _weightController.dispose();
-
+    for (final m in _contactControllers) {
+      m['name']!.dispose();
+      m['phone']!.dispose();
+    }
     _usernameFocus.dispose();
     _emailFocus.dispose();
     _passwordFocus.dispose();
@@ -52,9 +82,29 @@ class _RegisterScreenState extends State<RegisterScreen> {
   Future<void> _submit() async {
     if (!_formKey.currentState!.validate()) return;
 
+    // Validate at least one emergency contact phone
+    final filledContacts = _contactControllers
+        .where((m) => m['phone']!.text.trim().isNotEmpty)
+        .toList();
+    if (filledContacts.isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
+        content: Text('⚠️ Please add at least one emergency contact'),
+        backgroundColor: Colors.orange,
+      ));
+      return;
+    }
+
     setState(() => _isLoading = true);
 
     final auth = Provider.of<AuthService>(context, listen: false);
+
+    // Build contacts list
+    final emergencyContacts = filledContacts
+        .map((m) => {
+              'name': m['name']!.text.trim(),
+              'phone': m['phone']!.text.trim(),
+            })
+        .toList();
 
     final errorMessage = await auth.register(
       username: _usernameController.text.trim(),
@@ -64,6 +114,7 @@ class _RegisterScreenState extends State<RegisterScreen> {
       gender: _selectedGender ?? '',
       heightCm: double.tryParse(_heightController.text.trim()) ?? 0.0,
       weightKg: double.tryParse(_weightController.text.trim()) ?? 0.0,
+      emergencyContacts: emergencyContacts, // 🆕
     );
 
     if (!mounted) return;
@@ -352,6 +403,125 @@ class _RegisterScreenState extends State<RegisterScreen> {
                                       },
                                       onFieldSubmitted: (_) => _submit(),
                                     ),
+
+                                    SizedBox(height: isSmallScreen ? 24 : 32),
+
+                                    // 🆕 Emergency Contacts Section
+                                    Row(
+                                      mainAxisAlignment:
+                                          MainAxisAlignment.spaceBetween,
+                                      children: [
+                                        const Text(
+                                          'Emergency Contacts',
+                                          style: TextStyle(
+                                            fontWeight: FontWeight.w700,
+                                            fontSize: 15,
+                                            color: Color(0xFF1C1C1E),
+                                          ),
+                                        ),
+                                        if (_contactControllers.length < 3)
+                                          TextButton.icon(
+                                            icon: const Icon(Icons.add, size: 16),
+                                            label: const Text('Add'),
+                                            onPressed: _addEmergencyContact,
+                                          ),
+                                      ],
+                                    ),
+                                    const Text(
+                                      'Min 1 · Max 3. Alerts sent here in emergencies.',
+                                      style: TextStyle(
+                                          fontSize: 11, color: Colors.grey),
+                                    ),
+                                    const SizedBox(height: 10),
+
+                                    ..._contactControllers
+                                        .asMap()
+                                        .entries
+                                        .map((entry) {
+                                      final i = entry.key;
+                                      final m = entry.value;
+                                      return Column(
+                                        children: [
+                                          Container(
+                                            padding: const EdgeInsets.all(12),
+                                            margin: const EdgeInsets.only(
+                                                bottom: 10),
+                                            decoration: BoxDecoration(
+                                              color: Colors.grey.shade100,
+                                              borderRadius:
+                                                  BorderRadius.circular(12),
+                                              border: Border.all(
+                                                  color: Colors.grey.shade300),
+                                            ),
+                                            child: Column(
+                                              crossAxisAlignment:
+                                                  CrossAxisAlignment.start,
+                                              children: [
+                                                Row(
+                                                  children: [
+                                                    Text(
+                                                      'Contact ${i + 1}',
+                                                      style: const TextStyle(
+                                                        fontWeight:
+                                                            FontWeight.w700,
+                                                        fontSize: 13,
+                                                        color: Colors.indigo,
+                                                      ),
+                                                    ),
+                                                    const Spacer(),
+                                                    if (_contactControllers
+                                                            .length >
+                                                        1)
+                                                      GestureDetector(
+                                                        onTap: () =>
+                                                            _removeEmergencyContact(
+                                                                i),
+                                                        child: const Icon(
+                                                            Icons
+                                                                .remove_circle_outline,
+                                                            size: 20,
+                                                            color: Colors.red),
+                                                      ),
+                                                  ],
+                                                ),
+                                                const SizedBox(height: 8),
+                                                TextFormField(
+                                                  controller: m['name'],
+                                                  decoration:
+                                                      _inputDecoration(
+                                                    'Name (optional)',
+                                                    'e.g. Mom',
+                                                    Icons.person_outline,
+                                                  ),
+                                                  textInputAction:
+                                                      TextInputAction.next,
+                                                ),
+                                                const SizedBox(height: 8),
+                                                TextFormField(
+                                                  controller: m['phone'],
+                                                  keyboardType:
+                                                      TextInputType.phone,
+                                                  decoration:
+                                                      _inputDecoration(
+                                                    'Phone Number',
+                                                    '+94771234567',
+                                                    Icons.phone_outlined,
+                                                  ),
+                                                  validator: i == 0
+                                                      ? (v) =>
+                                                          v == null ||
+                                                                  v.trim()
+                                                                      .isEmpty
+                                                              ? 'At least one required'
+                                                              : null
+                                                      : null,
+                                                ),
+                                              ],
+                                            ),
+                                          ),
+                                        ],
+                                      );
+                                    }).toList(),
 
                                     SizedBox(height: isSmallScreen ? 24 : 32),
 
