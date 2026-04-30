@@ -40,6 +40,11 @@ dependencies:
   collection: ^1.18.0
   sensors_plus: ^4.0.2
   vibration: ^2.0.0
+  
+  # Background service and emergency SMS
+  flutter_background_service: ^5.0.0
+  background_sms: ^0.0.1
+  system_alert_window: ^2.0.8
 
   cupertino_icons: ^1.0.8
   firebase_database: ^11.3.10

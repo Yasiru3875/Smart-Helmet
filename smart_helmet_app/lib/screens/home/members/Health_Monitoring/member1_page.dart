@@ -266,6 +266,11 @@ class _Member1PageState extends State<Member1Page>
             status = "Disconnected";
             riskLevel = "Unknown";
             riskColor = Colors.grey;
+            // Reset sensor tracking flags
+            _hasReceivedHeartRate = false;
+            _hasReceivedTemperature = false;
+            _predictionStarted = false;
+            _hrBuffer.clear();
           });
 
           // Auto-reconnect attempt
@@ -366,6 +371,11 @@ class _Member1PageState extends State<Member1Page>
   final List<double> _hrBuffer = [];
   final int _hrBufferSize = 5;
 
+  // Track if both sensors have received valid data
+  bool _hasReceivedHeartRate = false;
+  bool _hasReceivedTemperature = false;
+  bool _predictionStarted = false;
+
   void _parseAndUpdateData(String jsonString) {
     try {
       final json = jsonDecode(jsonString);
@@ -379,16 +389,11 @@ class _Member1PageState extends State<Member1Page>
       }
       final double hr = _hrBuffer.reduce((a, b) => a + b) / _hrBuffer.length;
 
-      // Inside _parseAndUpdateData or after setState
-      final sensorProvider =
-          Provider.of<SensorDataProvider>(context, listen: false);
-      sensorProvider.updateHeartRate(hr.toInt());
-      sensorProvider.updateTemperature(temp);
-      sensorProvider.updateDangerAlert(hr > 110 || temp > 38.0);
+      // Track sensor data arrival - only mark as received if value is valid (> 0)
+      if (hr > 0) _hasReceivedHeartRate = true;
+      if (temp > 0) _hasReceivedTemperature = true;
 
-      debugPrint(
-          "Sent to provider → HR (Smoothed): $hr, Temp: $temp, Danger: ${hr > 110 || temp > 38.0}");
-
+      // Update UI immediately so user sees the data coming in
       if (mounted) {
         setState(() {
           heartRate = hr;
@@ -404,6 +409,46 @@ class _Member1PageState extends State<Member1Page>
           }
         });
       }
+
+      // Only start prediction after BOTH sensors have received valid data
+      if (!_hasReceivedHeartRate || !_hasReceivedTemperature) {
+        final missingSensors = <String>[];
+        if (!_hasReceivedHeartRate) missingSensors.add('Heart Rate');
+        if (!_hasReceivedTemperature) missingSensors.add('Temperature');
+
+        debugPrint(
+            "⏳ Waiting for sensors: ${missingSensors.join(', ')}... (HR: $hr, Temp: $temp)");
+
+        if (mounted) {
+          setState(() {
+            status = "Connected • Waiting for: ${missingSensors.join(', ')}...";
+            riskLevel = "Initializing...";
+            riskColor = Colors.grey;
+          });
+        }
+        return; // Don't proceed with prediction yet
+      }
+
+      // First time both sensors are ready
+      if (!_predictionStarted) {
+        _predictionStarted = true;
+        debugPrint("✅ Both sensors ready - starting heart attack prediction");
+        if (mounted) {
+          setState(() {
+            status = "Connected • SmartWatch - Monitoring";
+          });
+        }
+      }
+
+      // Update provider with validated data
+      final sensorProvider =
+          Provider.of<SensorDataProvider>(context, listen: false);
+      sensorProvider.updateHeartRate(hr.toInt());
+      sensorProvider.updateTemperature(temp);
+      sensorProvider.updateDangerAlert(hr > 110 || temp > 38.0);
+
+      debugPrint(
+          "Sent to provider → HR (Smoothed): $hr, Temp: $temp, Danger: ${hr > 110 || temp > 38.0}");
 
       _predictWithTFLite(hr, temp);
       // Real-time save: ONLY when a ride is active
@@ -695,6 +740,11 @@ class _Member1PageState extends State<Member1Page>
       heartRateSpots.clear();
       temperatureSpots.clear();
       _currentX = 0.0;
+      // Reset sensor tracking flags
+      _hasReceivedHeartRate = false;
+      _hasReceivedTemperature = false;
+      _predictionStarted = false;
+      _hrBuffer.clear();
     });
   }
 

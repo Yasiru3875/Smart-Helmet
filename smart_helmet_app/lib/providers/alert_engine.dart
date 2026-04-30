@@ -14,6 +14,7 @@ import 'sensor_data_provider.dart';
 import 'user_profile_provider.dart';
 import '../services/bluetooth_manager.dart';
 import '../services/gsm_alert_service.dart';
+import '../services/background_emergency_service.dart';
 
 enum AlertState {
   idle,
@@ -27,6 +28,7 @@ class AlertEngine with ChangeNotifier {
   final FirebaseFirestore _firestore = FirebaseFirestore.instance;
   final GsmAlertService _gsmService = GsmAlertService();
   final FlutterTts _tts = FlutterTts();
+  bool _backgroundServiceInitialized = false;
 
   // ── State ─────────────────────────────────────────────────────────────────
   AlertState _state = AlertState.idle;
@@ -60,6 +62,20 @@ class AlertEngine with ChangeNotifier {
 
   // ── External API ──────────────────────────────────────────────────────────
 
+  /// Initialize background service for emergency monitoring
+  Future<void> initializeBackgroundService() async {
+    if (_backgroundServiceInitialized) return;
+    
+    try {
+      await BackgroundEmergencyService.requestPermissions();
+      await BackgroundEmergencyService.initializeService();
+      _backgroundServiceInitialized = true;
+      debugPrint('✅ Background emergency service initialized');
+    } catch (e) {
+      debugPrint('❌ Failed to initialize background service: $e');
+    }
+  }
+
   /// Called from member1_page after every TFLite inference.
   /// [riskPercent] is 0-100 from the model.
   /// [hr] and [temp] are raw sensor values.
@@ -69,7 +85,19 @@ class AlertEngine with ChangeNotifier {
     required double temp,
     required UserProfileProvider profile,
     required BluetoothManager btManager,
-  }) {
+  }) async {
+    // Initialize background service on first risk reading
+    if (!_backgroundServiceInitialized) {
+      await initializeBackgroundService();
+    }
+
+    // Update background service with latest sensor data
+    await BackgroundEmergencyService.updateSensorData(
+      heartRate: hr.toInt(),
+      temperature: temp,
+      riskPercent: riskPercent,
+    );
+
     if (_alertCooldown) return;
     if (_state == AlertState.alerting || _state == AlertState.sent) return;
 

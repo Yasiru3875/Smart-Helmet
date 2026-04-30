@@ -15,6 +15,7 @@ import 'providers/emotion_provider.dart';
 import 'providers/sos_controller.dart';
 import 'providers/user_profile_provider.dart'; // 🆕
 import 'providers/alert_engine.dart'; // 🆕
+import 'services/background_emergency_service.dart'; // 🆕 Background emergency monitoring
 
 // ────────────────────────────────────────────────
 // Screens
@@ -32,6 +33,14 @@ void main() async {
   await Firebase.initializeApp(
     options: DefaultFirebaseOptions.currentPlatform,
   );
+
+  // Initialize background emergency service for SIM-based alerts
+  try {
+    await BackgroundEmergencyService.initializeService();
+    debugPrint('✅ Background emergency service initialized');
+  } catch (e) {
+    debugPrint('❌ Failed to initialize background service: $e');
+  }
 
   runApp(const SmartHelmetApp());
 }
