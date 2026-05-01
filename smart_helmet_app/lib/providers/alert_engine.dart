@@ -1,6 +1,7 @@
 // lib/providers/alert_engine.dart
 // Monitors real-time sensor data and triggers emergency alerts
 // when HIGH risk is sustained continuously for 30 seconds.
+// Sends automated WhatsApp messages via Twilio (NO hardware modules required).
 
 import 'dart:async';
 import 'package:cloud_firestore/cloud_firestore.dart';
@@ -13,22 +14,23 @@ import 'package:vibration/vibration.dart';
 import 'sensor_data_provider.dart';
 import 'user_profile_provider.dart';
 import '../services/bluetooth_manager.dart';
-import '../services/gsm_alert_service.dart';
+import '../services/whatsapp_alert_service.dart';
 import '../services/background_emergency_service.dart';
 
 enum AlertState {
   idle,
   monitoring, // risk detected, waiting to see if it's sustained
   alerting, // 30s sustained — showing cancel window
-  sent, // SMS sent
+  sent, // WhatsApp alert sent
 }
 
 class AlertEngine with ChangeNotifier {
   // ── Dependencies ──────────────────────────────────────────────────────────
   final FirebaseFirestore _firestore = FirebaseFirestore.instance;
-  final GsmAlertService _gsmService = GsmAlertService();
+  final WhatsAppAlertService _whatsappService = WhatsAppAlertService();
   final FlutterTts _tts = FlutterTts();
   bool _backgroundServiceInitialized = false;
+  String _cloudFunctionUrl = '';
 
   // ── State ─────────────────────────────────────────────────────────────────
   AlertState _state = AlertState.idle;
@@ -61,6 +63,16 @@ class AlertEngine with ChangeNotifier {
   bool get isSent => _state == AlertState.sent;
 
   // ── External API ──────────────────────────────────────────────────────────
+
+  /// Configure WhatsApp service (call this during app initialization)
+  void configureWhatsApp({required String cloudFunctionUrl}) {
+    _cloudFunctionUrl = cloudFunctionUrl;
+    _whatsappService.configure(cloudFunctionUrl: cloudFunctionUrl);
+    debugPrint('✅ AlertEngine: WhatsApp service configured');
+  }
+
+  /// Check if WhatsApp is configured
+  bool get isWhatsAppConfigured => _whatsappService.isConfigured;
 
   /// Initialize background service for emergency monitoring
   Future<void> initializeBackgroundService() async {
@@ -261,16 +273,27 @@ class AlertEngine with ChangeNotifier {
     final contacts = profile.emergencyPhoneNumbers;
     final riderName = profile.userName;
 
-    // Send via GSM / fallback
-    await _gsmService.sendAlert(
-      contacts: contacts,
-      riderName: riderName,
-      riskType: _currentRiskType,
-      riskPercent: _currentRiskPercent,
-      lat: pos?.latitude,
-      lng: pos?.longitude,
-      btManager: btManager,
-    );
+    // 🆕 Send via WhatsApp automatically (NO user interaction required)
+    // This replaces the old GSM/SIM800L hardware module approach
+    if (_whatsappService.isConfigured) {
+      final result = await _whatsappService.sendEmergencyAlert(
+        contacts: contacts,
+        riderName: riderName,
+        riskType: _currentRiskType,
+        riskPercent: _currentRiskPercent,
+      );
+
+      if (result['success'] == true) {
+        debugPrint('✅ WhatsApp emergency alert sent successfully');
+        await _tts.speak('WhatsApp emergency alert sent successfully.');
+      } else {
+        debugPrint('⚠️ WhatsApp alert failed: ${result['error']}');
+        await _tts.speak('Emergency alert sending failed. Please seek help manually.');
+      }
+    } else {
+      debugPrint('❌ WhatsApp service not configured - alert not sent');
+      await _tts.speak('Emergency alert not sent. WhatsApp service not configured.');
+    }
 
     // Log to Firestore
     try {
@@ -288,7 +311,7 @@ class AlertEngine with ChangeNotifier {
             : null,
         'riderName': riderName,
         'contactsNotified': contacts,
-        'alertMethod': 'SIM800L_GSM',
+        'alertMethod': 'WHATSAPP_AUTOMATED',
         'wasCancelled': false,
         'timestamp': FieldValue.serverTimestamp(),
       });
@@ -305,8 +328,8 @@ class AlertEngine with ChangeNotifier {
 
     await _tts.speak('Emergency alert sent. Help is on the way.');
 
-    // Resume monitoring after 5-minute cooldown
-    Future.delayed(const Duration(minutes: 5), () {
+    // Resume monitoring after 3-minute cooldown
+    Future.delayed(const Duration(minutes: 3), () {
       _alertCooldown = false;
       _state = AlertState.idle;
       notifyListeners();

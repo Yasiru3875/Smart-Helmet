@@ -2,6 +2,8 @@ import 'package:flutter/material.dart';
 import 'package:firebase_core/firebase_core.dart';
 import 'firebase_options.dart'; // Generated Firebase config file
 import 'package:provider/provider.dart';
+import 'package:permission_handler/permission_handler.dart';
+import 'package:flutter_local_notifications/flutter_local_notifications.dart';
 
 // ────────────────────────────────────────────────
 // Services & Providers
@@ -34,12 +36,43 @@ void main() async {
     options: DefaultFirebaseOptions.currentPlatform,
   );
 
+  // Create notification channel for Android 14+ foreground service FIRST
+  const AndroidNotificationChannel channel = AndroidNotificationChannel(
+    'smart_helmet_emergency_channel', // ID - MUST MATCH YOUR CONFIG
+    'Helmet Safety Service', // Name
+    description: 'Background monitoring for rider safety alerts',
+    importance: Importance.max, // High priority for foreground service
+  );
+
+  final FlutterLocalNotificationsPlugin flutterLocalNotificationsPlugin =
+      FlutterLocalNotificationsPlugin();
+
+  await flutterLocalNotificationsPlugin
+      .resolvePlatformSpecificImplementation<
+          AndroidFlutterLocalNotificationsPlugin>()
+      ?.createNotificationChannel(channel);
+
+  debugPrint('✅ Notification channel created');
+
+  // Request notification permission for Android 13+
+  final status = await Permission.notification.request();
+  debugPrint('Notification permission status: $status');
+
+  // Small delay to ensure notification channel is ready
+  await Future.delayed(const Duration(milliseconds: 300));
+
   // Initialize background emergency service for SIM-based alerts
   try {
-    await BackgroundEmergencyService.initializeService();
-    debugPrint('✅ Background emergency service initialized');
-  } catch (e) {
+    final isRunning = await BackgroundEmergencyService.isServiceRunning();
+    if (!isRunning) {
+      await BackgroundEmergencyService.initializeService();
+      debugPrint('✅ Background emergency service initialized');
+    } else {
+      debugPrint('ℹ️ Background service already running');
+    }
+  } catch (e, stackTrace) {
     debugPrint('❌ Failed to initialize background service: $e');
+    debugPrint('Stack trace: $stackTrace');
   }
 
   runApp(const SmartHelmetApp());
@@ -68,14 +101,24 @@ class SmartHelmetApp extends StatelessWidget {
 
         ChangeNotifierProvider(create: (_) => EmotionProvider()),
 
-        // SOS Emergency System
-        ChangeNotifierProvider(create: (_) => SOSController()),
+        // SOS Emergency System - Configure with Cloud Function URL
+        ChangeNotifierProvider(
+          create: (_) => SOSController()
+            ..configureWhatsApp(
+              cloudFunctionUrl: 'https://us-central1-smart-helmet-e736f.cloudfunctions.net/sendSMS',
+            ),
+        ),
 
         // 🆕 User profile + emergency contacts
         ChangeNotifierProvider(create: (_) => UserProfileProvider()),
 
-        // 🆕 30-second sustained risk alert engine
-        ChangeNotifierProvider(create: (_) => AlertEngine()),
+        // 🆕 30-second sustained risk alert engine - Configure with same URL
+        ChangeNotifierProvider(
+          create: (_) => AlertEngine()
+            ..configureWhatsApp(
+              cloudFunctionUrl: 'https://us-central1-smart-helmet-e736f.cloudfunctions.net/sendSMS',
+            ),
+        ),
       ],
       child: MaterialApp(
         debugShowCheckedModeBanner: false,
@@ -135,10 +178,13 @@ class EntryPoint extends StatelessWidget {
 
         // User is logged in → load profile then show home
         if (snapshot.hasData) {
-          // Load profile in background after login
+          // Load profile once after login
           WidgetsBinding.instance.addPostFrameCallback((_) {
-            Provider.of<UserProfileProvider>(context, listen: false)
-                .loadProfile();
+            final profileProvider =
+                Provider.of<UserProfileProvider>(context, listen: false);
+            if (!profileProvider.profileLoaded) {
+              profileProvider.loadProfile();
+            }
           });
           return const HomeScreen();
         }

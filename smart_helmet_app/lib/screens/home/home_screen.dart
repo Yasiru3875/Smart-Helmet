@@ -312,7 +312,6 @@ class _HomeScreenState extends State<HomeScreen> {
                         style: TextStyle(fontSize: 11, color: Colors.orange)),
               ),
               onTap: () {
-                Navigator.pop(context);
                 Navigator.push(
                   context,
                   MaterialPageRoute(builder: (_) => const UserProfilePage()),

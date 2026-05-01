@@ -2,11 +2,10 @@ import 'dart:async';
 import 'dart:ui';
 import 'package:flutter/material.dart';
 import 'package:flutter_background_service/flutter_background_service.dart';
-import 'package:flutter_background_service_android/flutter_background_service_android.dart';
 import 'package:firebase_core/firebase_core.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:geolocator/geolocator.dart';
-import 'package:background_sms/background_sms.dart';
+import 'package:url_launcher/url_launcher.dart';
 import 'package:system_alert_window/system_alert_window.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
@@ -82,46 +81,8 @@ bool _evaluateHighRisk({
 }
 
 Future<void> _showCancelOverlay(ServiceInstance service) async {
-  try {
-    await SystemAlertWindow.requestPermissions(prefMode: SystemWindowPrefMode.OVERLAY);
-    
-    await SystemAlertWindow.showSystemWindow(
-      backgroundColor: '#ff0000',
-      height: 200,
-      gravity: SystemWindowGravity.TOP,
-      body: Column(
-        children: [
-          Text(
-            'EMERGENCY ALERT',
-            style: TextStyle(color: Colors.white, fontSize: 20, fontWeight: FontWeight.bold),
-          ),
-          SizedBox(height: 10),
-          Text(
-            'Sustained high risk detected!',
-            style: TextStyle(color: Colors.white, fontSize: 16),
-          ),
-          SizedBox(height: 10),
-          Text(
-            'Emergency SMS will be sent in 30 seconds',
-            style: TextStyle(color: Colors.white, fontSize: 14),
-          ),
-          SizedBox(height: 20),
-          ElevatedButton(
-            onPressed: () async {
-              await _cancelAlert(service);
-            },
-            child: Text('CANCEL'),
-            style: ElevatedButton.styleFrom(
-              backgroundColor: Colors.white,
-              foregroundColor: Colors.red,
-            ),
-          ),
-        ],
-      ),
-    );
-  } catch (e) {
-    debugPrint('Error showing overlay: $e');
-  }
+  // Notify main app to show overlay - cannot use UI plugins in background isolate
+  service.invoke('emergencyDetected');
 }
 
 Future<void> _startFinalCountdown(ServiceInstance service) async {
@@ -130,12 +91,8 @@ Future<void> _startFinalCountdown(ServiceInstance service) async {
   Timer.periodic(const Duration(seconds: 1), (timer) async {
     countdown--;
     
-    try {
-      // Update countdown on overlay
-      await SystemAlertWindow.sendMessageToOverlay("Time left: $countdown");
-    } catch (e) {
-      debugPrint('Error updating overlay: $e');
-    }
+    // Notify main app of countdown update
+    service.invoke('countdownUpdate', {'seconds': countdown});
 
     if (countdown <= 0) {
       timer.cancel();
@@ -145,32 +102,13 @@ Future<void> _startFinalCountdown(ServiceInstance service) async {
 }
 
 Future<void> _cancelAlert(ServiceInstance service) async {
-  try {
-    await SystemAlertWindow.closeSystemWindow();
-    service.invoke('alertCancelled');
-  } catch (e) {
-    debugPrint('Error cancelling alert: $e');
-  }
+  // Just notify that alert was cancelled - UI handled by main app
+  service.invoke('alertCancelled');
 }
 
 Future<void> _executeEmergencyProtocol(ServiceInstance service) async {
   try {
-    // 1. Get current location
-    Position? pos;
-    try {
-      pos = await Geolocator.getCurrentPosition(
-        desiredAccuracy: LocationAccuracy.high,
-        timeLimit: const Duration(seconds: 10),
-      );
-    } catch (e) {
-      debugPrint('Error getting location: $e');
-    }
-
-    String locUrl = pos != null 
-        ? "https://www.google.com/maps?q=${pos.latitude},${pos.longitude}"
-        : "Location unavailable";
-
-    // 2. Fetch emergency contacts from Firestore
+    // Fetch emergency contacts from Firestore
     final contacts = <String>[];
     try {
       final snapshot = await FirebaseFirestore.instance
@@ -187,32 +125,19 @@ Future<void> _executeEmergencyProtocol(ServiceInstance service) async {
       debugPrint('Error fetching contacts: $e');
     }
 
-    // 3. Send SMS via SIM
-    for (String phone in contacts) {
-      try {
-        await BackgroundSms.sendMessage(
-          phoneNumber: phone,
-          message: "EMERGENCY! Sustained heart risk detected for Smart Helmet user. Location: $locUrl. Please check on them immediately!",
-        );
-        debugPrint('SMS sent to $phone');
-      } catch (e) {
-        debugPrint('Error sending SMS to $phone: $e');
-      }
-    }
-
-    // 4. Close overlay and notify main app
-    await SystemAlertWindow.closeSystemWindow();
-    service.invoke('emergencySent', {
+    // Notify main app to execute emergency protocol (launch SMS, show UI)
+    // Cannot use url_launcher or UI plugins in background isolate
+    service.invoke('executeEmergency', {
       'contacts': contacts,
-      'location': locUrl,
+      'timestamp': DateTime.now().toIso8601String(),
     });
 
-    // 5. Log to Firestore
+    debugPrint('Emergency protocol triggered for ${contacts.length} contacts');
+
+    // Log to Firestore for history
     try {
       await FirebaseFirestore.instance.collection('emergency_alerts').add({
         'alertType': 'BACKGROUND_EMERGENCY',
-        'location': pos != null ? GeoPoint(pos.latitude, pos.longitude) : null,
-        'googleMapsLink': locUrl,
         'contactsNotified': contacts,
         'alertMethod': 'BACKGROUND_SMS_SIM',
         'timestamp': FieldValue.serverTimestamp(),
@@ -220,9 +145,9 @@ Future<void> _executeEmergencyProtocol(ServiceInstance service) async {
     } catch (e) {
       debugPrint('Error logging alert: $e');
     }
-
   } catch (e) {
     debugPrint('Error in emergency protocol: $e');
+    service.invoke('emergencyProtocolError', {'error': e.toString()});
   }
 }
 
@@ -235,18 +160,18 @@ class BackgroundEmergencyService {
         onStart: onStart,
         autoStart: true,
         isForegroundMode: true,
-        notificationChannelId: 'smart_helmet_emergency',
-        initialNotificationTitle: 'Smart Helmet Emergency Monitor',
-        initialNotificationContent: 'Monitoring your health in background',
+        notificationChannelId: 'smart_helmet_emergency_channel',
+        initialNotificationTitle: 'Smart Helmet Emergency Service',
+        initialNotificationContent: 'Monitoring sensors for rider safety',
         foregroundServiceNotificationId: 888,
         foregroundServiceTypes: [AndroidForegroundType.specialUse],
       ),
       iosConfiguration: IosConfiguration(
         autoStart: true,
         onForeground: onStart,
-        onBackground: onStart,
-        onWillTerminate: () async {
-          // Cleanup when service terminates
+        onBackground: (ServiceInstance service) async {
+          onStart(service);
+          return true;
         },
       ),
     );
@@ -255,9 +180,6 @@ class BackgroundEmergencyService {
   }
 
   static Future<void> requestPermissions() async {
-    // Request SMS permission
-    await BackgroundSms.requestSmsPermission();
-    
     // Request system alert window permission
     await SystemAlertWindow.requestPermissions(prefMode: SystemWindowPrefMode.OVERLAY);
     
@@ -281,6 +203,6 @@ class BackgroundEmergencyService {
   }
 
   static Future<void> stopService() async {
-    await FlutterBackgroundService().invoke('stopService');
+    FlutterBackgroundService().invoke('stopService');
   }
 }
