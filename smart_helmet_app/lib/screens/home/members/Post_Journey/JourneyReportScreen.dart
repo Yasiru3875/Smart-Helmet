@@ -103,7 +103,8 @@ class _JourneyReportScreenState extends State<JourneyReportScreen> {
       final List<LatLng> eventPoints = [];
       for (final event in widget.journey.turnEvents) {
         if (event.latitude != 0.0 && event.longitude != 0.0) {
-          eventPoints.add(LatLng(event.latitude, event.longitude));
+          eventPoints.add(LatLng(event.l
+          atitude, event.longitude));
         }
       }
       for (final brake in widget.journey.brakingEvents) {

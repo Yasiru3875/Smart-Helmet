@@ -206,9 +206,15 @@ class DangerZoneService {
       // Calculate lean angle exactly like member3_page.dart computes it
       final double roll = atan2(reading.accelY, reading.accelX) * (180.0 / pi);
 
+      // SWAP AXES to match model training dataset (Model Z=UP, X=FWD)
+      // Physical helmet: X=UP, Z=FWD, Y=LEFT
       final score = predict(
-        accelX: reading.accelX, accelY: reading.accelY, accelZ: reading.accelZ,
-        gyroX: reading.gyroX,  gyroY: reading.gyroY,  gyroZ: reading.gyroZ,
+        accelX: reading.accelZ, // Model X (Forward) = Physical Z
+        accelY: reading.accelY, // Model Y (Lateral) = Physical Y
+        accelZ: reading.accelX, // Model Z (Vertical) = Physical X
+        gyroX: reading.gyroZ,   // Model X (Roll/Pitch) = Physical Z
+        gyroY: reading.gyroY,   // Model Y = Physical Y
+        gyroZ: reading.gyroX,   // Model Z (Yaw) = Physical X
         roll: roll,
       );
 
@@ -218,10 +224,10 @@ class DangerZoneService {
           radiusMeters: 25 + score * 35,   // 25–60 m based on confidence
           dangerScore: score,
           label: _labelFromSensors(
-            accelX: reading.accelX,
-            gyroX: reading.gyroX,
+            accelX: reading.accelZ, // Swapped to Model X
+            gyroX: reading.gyroZ,
             gyroY: reading.gyroY,
-            gyroZ: reading.gyroZ,
+            gyroZ: reading.gyroX,
             roll: roll,
           ),
         ));
