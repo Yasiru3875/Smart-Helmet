@@ -1,4 +1,6 @@
-import 'package:cloud_firestore/cloud_firestore.dart';
+// ============================================================
+// journey_model.dart - Complete data models for Post-Journey
+// ============================================================
 
 class JourneyData {
   final String id;
@@ -6,20 +8,30 @@ class JourneyData {
   final DateTime? endTime;
   final String? startLocation;
   final String? destination;
+
+  // IMU-derived metrics
   final int sharpTurns;
   final int riskyTurns;
   final int totalBrakingEvents;
+  final int suddenBrakes;
   final double averageSpeed;
   final double maxSpeed;
   final double maxTurnRate;
   final double totalDistance;
-  final String? dangerPrediction; // ML Result
+  final String? dangerPrediction;
+  
+  final double riskScore;
+  final double averageStressLevel;
+  final int stressPeakCount;
+  final double maxStressLevel;
+  final List<String> recommendations;
+
   final List<TurnEvent> turnEvents;
   final List<BrakingEvent> brakingEvents;
   final List<LeanEvent> leanEvents;
   final List<SensorReading> sensorReadings;
   final List<GpsPoint> gpsTrack;
-
+  
   JourneyData({
     required this.id,
     required this.startTime,
@@ -29,18 +41,25 @@ class JourneyData {
     this.sharpTurns = 0,
     this.riskyTurns = 0,
     this.totalBrakingEvents = 0,
+    this.suddenBrakes = 0,
     this.averageSpeed = 0.0,
     this.maxSpeed = 0.0,
     this.maxTurnRate = 0.0,
     this.totalDistance = 0.0,
     this.dangerPrediction,
+    this.riskScore = 100.0,
+    this.averageStressLevel = 0.0,
+    this.stressPeakCount = 0,
+    this.maxStressLevel = 0.0,
+    this.recommendations = const [],
     this.turnEvents = const [],
-    this.brakingEvents = const [],
+    List<BrakingEvent>? brakingEvents,
+    List<BrakingEvent>? brakeEvents,
     this.leanEvents = const [],
     this.sensorReadings = const [],
     this.gpsTrack = const [],
-  });
-
+  })  : this.brakingEvents = brakingEvents ?? brakeEvents ?? const [];
+  
   Map<String, dynamic> toMap() {
     return {
       'id': id,
@@ -96,13 +115,15 @@ class JourneyData {
               .toList() ??
           [],
       gpsTrack: (map['gpsTrack'] as List?)
-              ?.map((e) => GpsPoint.fromMap(e))
-              .toList() ??
-          [],
+          ?.map((e) => GpsPoint.fromMap(e))
+          .toList() ?? [],
     );
   }
 }
 
+// ============================================================
+// TurnEvent - Gyroscope detected turn
+// ============================================================
 class TurnEvent {
   final DateTime timestamp;
   final String severity; // "sharp" or "risky"
@@ -131,7 +152,7 @@ class TurnEvent {
   factory TurnEvent.fromMap(Map<String, dynamic> map) {
     return TurnEvent(
       timestamp: DateTime.parse(map['timestamp']),
-      severity: map['severity'],
+      severity: map['severity'] ?? 'sharp',
       turnRate: (map['turnRate'] ?? 0.0).toDouble(),
       latitude: (map['latitude'] ?? 0.0).toDouble(),
       longitude: (map['longitude'] ?? 0.0).toDouble(),
@@ -139,20 +160,133 @@ class TurnEvent {
   }
 }
 
+// ============================================================
+// BrakeEvent - Accelerometer detected sudden braking
+// ============================================================
+class BrakeEvent {
+  final DateTime timestamp;
+  final double deceleration; // m/s²
+  final String severity; // 'moderate' | 'harsh'
+  final double latitude;
+  final double longitude;
+
+  BrakeEvent({
+    required this.timestamp,
+    required this.deceleration,
+    required this.severity,
+    required this.latitude,
+    required this.longitude,
+  });
+
+  Map<String, dynamic> toMap() => {
+    'timestamp': timestamp.toIso8601String(),
+    'deceleration': deceleration,
+    'severity': severity,
+    'latitude': latitude,
+    'longitude': longitude,
+  };
+
+  factory BrakeEvent.fromMap(Map<String, dynamic> m) => BrakeEvent(
+    timestamp: DateTime.parse(m['timestamp']),
+    deceleration: (m['deceleration'] ?? 0.0).toDouble(),
+    severity: m['severity'] ?? 'moderate',
+    latitude: (m['latitude'] ?? 0.0).toDouble(),
+    longitude: (m['longitude'] ?? 0.0).toDouble(),
+  );
+}
+
+// ============================================================
+// StressPeakEvent - EEG-based stress spike
+// ============================================================
+class StressPeakEvent {
+  final DateTime timestamp;
+  final int stressLevel; // 0-100
+  final double latitude;
+  final double longitude;
+
+  StressPeakEvent({
+    required this.timestamp,
+    required this.stressLevel,
+    required this.latitude,
+    required this.longitude,
+  });
+
+  Map<String, dynamic> toMap() => {
+    'timestamp': timestamp.toIso8601String(),
+    'stressLevel': stressLevel,
+    'latitude': latitude,
+    'longitude': longitude,
+  };
+
+  factory StressPeakEvent.fromMap(Map<String, dynamic> m) => StressPeakEvent(
+    timestamp: DateTime.parse(m['timestamp']),
+    stressLevel: m['stressLevel'] ?? 0,
+    latitude: (m['latitude'] ?? 0.0).toDouble(),
+    longitude: (m['longitude'] ?? 0.0).toDouble(),
+  );
+}
+
+// ============================================================
+// CriticalEvent - Correlated multi-factor danger moment
+// ============================================================
+class CriticalEvent {
+  final DateTime timestamp;
+  final List<String> factors; // e.g. ['high_speed', 'stress_peak', 'rain']
+  final int severity; // 1=moderate, 2=high, 3=critical
+  final String description;
+  final double latitude;
+  final double longitude;
+
+  CriticalEvent({
+    required this.timestamp,
+    required this.factors,
+    required this.severity,
+    required this.description,
+    required this.latitude,
+    required this.longitude,
+  });
+
+  String get severityLabel {
+    if (severity >= 3) return 'Critical';
+    if (severity == 2) return 'High';
+    return 'Moderate';
+  }
+
+  Map<String, dynamic> toMap() => {
+    'timestamp': timestamp.toIso8601String(),
+    'factors': factors,
+    'severity': severity,
+    'description': description,
+    'latitude': latitude,
+    'longitude': longitude,
+  };
+
+  factory CriticalEvent.fromMap(Map<String, dynamic> m) => CriticalEvent(
+    timestamp: DateTime.parse(m['timestamp']),
+    factors: List<String>.from(m['factors'] ?? []),
+    severity: m['severity'] ?? 1,
+    description: m['description'] ?? '',
+    latitude: (m['latitude'] ?? 0.0).toDouble(),
+    longitude: (m['longitude'] ?? 0.0).toDouble(),
+  );
+}
+
+// ============================================================
+// SensorReading - Heart rate, temperature, stress
+// ============================================================
 class SensorReading {
   final DateTime timestamp;
   final int heartRate;
   final double temperature;
   final int stressLevel;
-
-  // Danger prediction sensor extensions
+  
   final double accelX;
   final double accelY;
   final double accelZ;
   final double gyroX;
   final double gyroY;
   final double gyroZ;
-
+  
   SensorReading({
     required this.timestamp,
     required this.heartRate,
@@ -197,12 +331,15 @@ class SensorReading {
   }
 }
 
+// ============================================================
+// GpsPoint - GPS location with speed and heading
+// ============================================================
 class GpsPoint {
   final double latitude;
   final double longitude;
   final DateTime? timestamp;
-  final double speedKmh; // Speed at this GPS point
-
+  final double speedKmh;
+  
   GpsPoint({
     required this.latitude,
     required this.longitude,
@@ -223,8 +360,7 @@ class GpsPoint {
     return GpsPoint(
       latitude: (map['latitude'] ?? 0.0).toDouble(),
       longitude: (map['longitude'] ?? 0.0).toDouble(),
-      timestamp:
-          map['timestamp'] != null ? DateTime.parse(map['timestamp']) : null,
+      timestamp: map['timestamp'] != null ? DateTime.parse(map['timestamp']) : null,
       speedKmh: (map['speedKmh'] ?? 0.0).toDouble(),
     );
   }

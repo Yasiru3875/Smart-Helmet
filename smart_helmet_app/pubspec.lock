@@ -1213,6 +1213,7 @@ packages:
       url: "https://pub.dev"
     source: hosted
     version: "0.7.10"
+
   tflite_flutter:
     dependency: "direct main"
     description:
