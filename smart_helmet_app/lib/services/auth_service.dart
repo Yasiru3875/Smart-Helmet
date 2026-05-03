@@ -51,6 +51,7 @@ class AuthService with ChangeNotifier {
     required String gender,
     required double heightCm,
     required double weightKg,
+    List<Map<String, String>> emergencyContacts = const [], // 🆕 min 1, max 3
   }) async {
     try {
       final credential = await _auth.createUserWithEmailAndPassword(
@@ -61,6 +62,10 @@ class AuthService with ChangeNotifier {
       final user = credential.user;
       if (user == null) return 'Registration failed – no user returned';
 
+      // Calculate BMI
+      final heightM = heightCm / 100.0;
+      final bmi = weightKg / (heightM * heightM);
+
       await _firestore.collection('users').doc(user.uid).set({
         'userName': username,
         'email': email,
@@ -69,6 +74,9 @@ class AuthService with ChangeNotifier {
         'gender': gender,
         'heightCm': heightCm,
         'weightKg': weightKg,
+        'bmi': double.parse(bmi.toStringAsFixed(2)),
+        'emergencyContacts': emergencyContacts, // 🆕
+        'profileCompleted': emergencyContacts.isNotEmpty, // 🆕
       });
 
       return null; // ← success = null error
