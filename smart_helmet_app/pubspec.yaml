@@ -40,6 +40,11 @@ dependencies:
   collection: ^1.18.0
   sensors_plus: ^4.0.2
   vibration: ^2.0.0
+  
+  # Background service and emergency SMS
+  flutter_background_service: ^5.0.0
+  flutter_local_notifications: ^17.0.0
+  system_alert_window: ^2.0.8
 
   cupertino_icons: ^1.0.8
   firebase_database: ^11.3.10
@@ -70,7 +75,7 @@ flutter:
     - assets/icons/motorcycle.png
     - assets/icons/app_icon.png
     - assets/icons/g-logo.png
-    - assets/model.tflite
+    - assets/heart_attack_model.tflite
     - assets/icons/dev_team.png
     - assets/eeg_stress_model_float32.tflite
     - assets/post_journey_risk_model.tflite

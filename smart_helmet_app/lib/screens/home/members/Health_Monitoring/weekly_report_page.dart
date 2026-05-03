@@ -14,6 +14,8 @@ import 'package:printing/printing.dart';
 import 'package:share_plus/share_plus.dart';
 
 import '../../../../services/auth_service.dart'; // ← adjust path if needed
+import '../../../../services/emotion_aggregator_service.dart'; // 🆕 emotion analytics
+import 'package:firebase_auth/firebase_auth.dart';
 
 class WeeklyReportPage extends StatefulWidget {
   final bool isEmbedded;
@@ -45,6 +47,11 @@ class _WeeklyReportPageState extends State<WeeklyReportPage> {
   String _selectedPeriodType = 'weekly'; // Track selected type
   int _totalRides = 0; // Track unique rides
 
+  // 🆕 Emotion analytics data
+  final EmotionAggregatorService _emotionAggregator = EmotionAggregatorService();
+  List<Map<String, dynamic>> _emotionDailyData = [];
+  bool _emotionDataLoading = true;
+
   @override
   void initState() {
     super.initState();
@@ -63,6 +70,7 @@ class _WeeklyReportPageState extends State<WeeklyReportPage> {
       debugPrint("DEBUG: WeeklyReportPage initialized for userId: $userId");
       _fetchUserProfile();
       _fetchReportData();
+      _fetchEmotionData();
     } catch (e) {
       debugPrint("DEBUG: Error in initState: $e");
       _isLoading = false;
@@ -249,6 +257,38 @@ class _WeeklyReportPageState extends State<WeeklyReportPage> {
         break;
     }
     await _fetchReportData();
+    await _fetchEmotionData();
+  }
+
+  // 🆕 Emotion Data Fetching
+  Future<void> _fetchEmotionData() async {
+    if (!mounted) return;
+    
+    setState(() => _emotionDataLoading = true);
+    
+    try {
+      if (userId.isEmpty) {
+        throw "User ID is missing for emotion data.";
+      }
+
+      debugPrint("DEBUG: Fetching emotion data for $userId");
+      
+      // First aggregate the emotion data
+      await _emotionAggregator.aggregateWeek(userId: userId);
+      
+      // Then fetch the last 7 days of emotion summaries
+      final data = await _emotionAggregator.getLast7Days(userId);
+      
+      setState(() {
+        _emotionDailyData = data;
+        _emotionDataLoading = false;
+      });
+      
+      debugPrint("DEBUG: Loaded ${data.length} days of emotion data");
+    } catch (e) {
+      debugPrint("❌ Error fetching emotion data: $e");
+      setState(() => _emotionDataLoading = false);
+    }
   }
 
   // ==================== HEALTH STATUS & RECOMMENDATIONS ====================
@@ -688,6 +728,554 @@ class _WeeklyReportPageState extends State<WeeklyReportPage> {
     return Colors.green.shade50;
   }
 
+  // 🆕 Emotional Analytics Section Widget
+  Widget _buildEmotionalAnalyticsSection() {
+    if (_emotionDataLoading) {
+      return Container(
+        margin: const EdgeInsets.only(bottom: 24),
+        padding: const EdgeInsets.all(20),
+        decoration: BoxDecoration(
+          color: Colors.white,
+          borderRadius: BorderRadius.circular(20),
+          boxShadow: [
+            BoxShadow(
+              color: Colors.black.withOpacity(0.04),
+              blurRadius: 10,
+              offset: const Offset(0, 4),
+            ),
+          ],
+        ),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Row(
+              children: [
+                const Icon(Icons.psychology_rounded, color: Colors.purple, size: 20),
+                const SizedBox(width: 8),
+                const Text(
+                  "Emotional Analytics",
+                  style: TextStyle(
+                    fontSize: 16,
+                    fontWeight: FontWeight.w900,
+                    color: Color(0xFF1C1C1E),
+                  ),
+                ),
+                const Spacer(),
+                Container(
+                  padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                  decoration: BoxDecoration(
+                    color: Colors.purple.withOpacity(0.1),
+                    borderRadius: BorderRadius.circular(6),
+                  ),
+                  child: const Text(
+                    "ANALYTICS",
+                    style: TextStyle(
+                      color: Colors.purple,
+                      fontSize: 9,
+                      fontWeight: FontWeight.w800,
+                    ),
+                  ),
+                ),
+              ],
+            ),
+            const SizedBox(height: 16),
+            const Center(
+              child: CircularProgressIndicator(color: Colors.purple),
+            ),
+            const SizedBox(height: 8),
+            const Center(
+              child: Text(
+                "Analyzing emotional patterns...",
+                style: TextStyle(
+                  color: Colors.grey,
+                  fontSize: 12,
+                  fontWeight: FontWeight.w500,
+                ),
+              ),
+            ),
+          ],
+        ),
+      );
+    }
+
+    // Calculate emotion analytics
+    final daysWithData = _emotionDailyData.where((d) => d['readingCount'] > 0).length;
+    if (daysWithData == 0) {
+      return Container(
+        margin: const EdgeInsets.only(bottom: 24),
+        padding: const EdgeInsets.all(20),
+        decoration: BoxDecoration(
+          color: Colors.white,
+          borderRadius: BorderRadius.circular(20),
+          boxShadow: [
+            BoxShadow(
+              color: Colors.black.withOpacity(0.04),
+              blurRadius: 10,
+              offset: const Offset(0, 4),
+            ),
+          ],
+        ),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Row(
+              children: [
+                const Icon(Icons.psychology_rounded, color: Colors.purple, size: 20),
+                const SizedBox(width: 8),
+                const Text(
+                  "Emotional Analytics",
+                  style: TextStyle(
+                    fontSize: 16,
+                    fontWeight: FontWeight.w900,
+                    color: Color(0xFF1C1C1E),
+                  ),
+                ),
+              ],
+            ),
+            const SizedBox(height: 16),
+            const Center(
+              child: Column(
+                children: [
+                  Icon(Icons.info_outline, color: Colors.grey, size: 48),
+                  SizedBox(height: 8),
+                  Text(
+                    "No emotional data available for this period",
+                    style: TextStyle(color: Colors.grey, fontSize: 14),
+                  ),
+                ],
+              ),
+            ),
+          ],
+        ),
+      );
+    }
+
+    // Calculate averages and insights
+    final avgStress = _emotionDailyData
+        .where((d) => d['avgStressScore'] != null)
+        .map((d) => d['avgStressScore'] as double)
+        .isEmpty
+        ? 0.0
+        : _emotionDailyData
+                .where((d) => d['avgStressScore'] != null)
+                .map((d) => d['avgStressScore'] as double)
+                .reduce((a, b) => a + b) /
+            daysWithData;
+
+    final avgRelaxed = _emotionDailyData
+        .where((d) => d['avgRelaxedScore'] != null)
+        .map((d) => d['avgRelaxedScore'] as double)
+        .isEmpty
+        ? 0.0
+        : _emotionDailyData
+                .where((d) => d['avgRelaxedScore'] != null)
+                .map((d) => d['avgRelaxedScore'] as double)
+                .reduce((a, b) => a + b) /
+            daysWithData;
+
+    final avgAttention = _emotionDailyData
+        .where((d) => d['avgAttention'] != null)
+        .map((d) => d['avgAttention'] as int)
+        .isEmpty
+        ? 0
+        : _emotionDailyData
+                .where((d) => d['avgAttention'] != null)
+                .map((d) => d['avgAttention'] as int)
+                .reduce((a, b) => a + b) ~/
+            daysWithData;
+
+    final avgMeditation = _emotionDailyData
+        .where((d) => d['avgMeditation'] != null)
+        .map((d) => d['avgMeditation'] as int)
+        .isEmpty
+        ? 0
+        : _emotionDailyData
+                .where((d) => d['avgMeditation'] != null)
+                .map((d) => d['avgMeditation'] as int)
+                .reduce((a, b) => a + b) ~/
+            daysWithData;
+
+    // Mood distribution
+    final Map<String, int> moodDist = {};
+    for (final data in _emotionDailyData) {
+      final distribution = data['moodDistribution'] as Map<String, dynamic>? ?? {};
+      distribution.forEach((mood, count) {
+        moodDist[mood] = (moodDist[mood] ?? 0) + (count as int);
+      });
+    }
+
+    final dominantMood = moodDist.entries.isEmpty
+        ? 'Neutral'
+        : moodDist.entries.reduce((a, b) => a.value >= b.value ? a : b).key;
+
+    // Emotional stability score (0-100)
+    final emotionalStability = ((1 - avgStress) * 100).clamp(0.0, 100.0).round();
+
+    return Container(
+      margin: const EdgeInsets.only(bottom: 24),
+      padding: const EdgeInsets.all(20),
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(20),
+        boxShadow: [
+          BoxShadow(
+            color: Colors.black.withOpacity(0.04),
+            blurRadius: 10,
+            offset: const Offset(0, 4),
+          ),
+        ],
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          // Header
+          Row(
+            children: [
+              const Icon(Icons.psychology_rounded, color: Colors.purple, size: 20),
+              const SizedBox(width: 8),
+              const Text(
+                "Emotional Analytics",
+                style: TextStyle(
+                  fontSize: 16,
+                  fontWeight: FontWeight.w900,
+                  color: Color(0xFF1C1C1E),
+                ),
+              ),
+              const Spacer(),
+              Container(
+                padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                decoration: BoxDecoration(
+                  color: Colors.purple.withOpacity(0.1),
+                  borderRadius: BorderRadius.circular(6),
+                ),
+                child: Text(
+                  "${daysWithData}/7 days",
+                  style: const TextStyle(
+                    color: Colors.purple,
+                    fontSize: 9,
+                    fontWeight: FontWeight.w800,
+                  ),
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 16),
+
+          // Summary Stats Grid
+          Row(
+            children: [
+              Expanded(
+                child: _buildEmotionStatCard(
+                  "Avg Stress",
+                  "${(avgStress * 100).round()}%",
+                  avgStress < 0.3 ? Colors.green : avgStress < 0.6 ? Colors.orange : Colors.red,
+                  Icons.sentiment_dissatisfied_rounded,
+                ),
+              ),
+              const SizedBox(width: 12),
+              Expanded(
+                child: _buildEmotionStatCard(
+                  "Avg Relaxed",
+                  "${(avgRelaxed * 100).round()}%",
+                  avgRelaxed > 0.7 ? Colors.green : avgRelaxed > 0.4 ? Colors.orange : Colors.red,
+                  Icons.sentiment_satisfied_rounded,
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 12),
+          Row(
+            children: [
+              Expanded(
+                child: _buildEmotionStatCard(
+                  "Avg Focus",
+                  "$avgAttention%",
+                  avgAttention > 70 ? Colors.green : avgAttention > 40 ? Colors.orange : Colors.red,
+                  Icons.psychology_rounded,
+                ),
+              ),
+              const SizedBox(width: 12),
+              Expanded(
+                child: _buildEmotionStatCard(
+                  "Stability",
+                  "$emotionalStability%",
+                  emotionalStability > 70 ? Colors.green : emotionalStability > 40 ? Colors.orange : Colors.red,
+                  Icons.balance_rounded,
+                ),
+              ),
+            ],
+          ),
+
+          const SizedBox(height: 20),
+
+          // 7-Day Stress Trend Chart
+          Container(
+            padding: const EdgeInsets.all(16),
+            decoration: BoxDecoration(
+              color: Colors.grey.shade50,
+              borderRadius: BorderRadius.circular(16),
+            ),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                const Text(
+                  "7-Day Stress Trend",
+                  style: TextStyle(
+                    fontSize: 14,
+                    fontWeight: FontWeight.w700,
+                    color: Color(0xFF1C1C1E),
+                  ),
+                ),
+                const SizedBox(height: 12),
+                SizedBox(
+                  height: 120,
+                  child: _emotionDailyData.isEmpty
+                      ? const Center(
+                          child: Text("No data", style: TextStyle(color: Colors.grey)),
+                        )
+                      : LineChart(
+                          LineChartData(
+                            gridData: FlGridData(
+                              show: true,
+                              drawVerticalLine: false,
+                              horizontalInterval: 0.2,
+                              getDrawingHorizontalLine: (value) => FlLine(
+                                color: Colors.grey.shade300,
+                                strokeWidth: 1,
+                              ),
+                            ),
+                            titlesData: FlTitlesData(
+                              show: true,
+                              leftTitles: AxisTitles(
+                                sideTitles: SideTitles(
+                                  showTitles: true,
+                                  interval: 0.2,
+                                  getTitlesWidget: (value, meta) {
+                                    return Text(
+                                      "${(value * 100).round()}%",
+                                      style: const TextStyle(fontSize: 10, color: Colors.grey),
+                                    );
+                                  },
+                                ),
+                              ),
+                              bottomTitles: AxisTitles(
+                                sideTitles: SideTitles(
+                                  showTitles: true,
+                                  getTitlesWidget: (value, meta) {
+                                    if (value.toInt() < 0 || value.toInt() >= _emotionDailyData.length) {
+                                      return const Text('');
+                                    }
+                                    final dateStr = _emotionDailyData[value.toInt()]['date'] as String;
+                                    final date = DateTime.parse(dateStr);
+                                    return Text(
+                                      DateFormat('d').format(date),
+                                      style: const TextStyle(fontSize: 10, color: Colors.grey),
+                                    );
+                                  },
+                                ),
+                              ),
+                              topTitles: const AxisTitles(sideTitles: SideTitles(showTitles: false)),
+                              rightTitles: const AxisTitles(sideTitles: SideTitles(showTitles: false)),
+                            ),
+                            borderData: FlBorderData(show: false),
+                            lineBarsData: [
+                              LineChartBarData(
+                                spots: _emotionDailyData.asMap().entries.map((entry) {
+                                  final i = entry.key;
+                                  final data = entry.value;
+                                  final stress = data['avgStressScore'] as double?;
+                                  return FlSpot(i.toDouble(), stress ?? 0.0);
+                                }).toList(),
+                                isCurved: true,
+                                color: Colors.purple,
+                                barWidth: 3,
+                                isStrokeCapRound: true,
+                                dotData: FlDotData(
+                                  show: true,
+                                  getDotPainter: (spot, percent, barData, index) {
+                                    return FlDotCirclePainter(
+                                      radius: 4,
+                                      color: Colors.purple,
+                                      strokeWidth: 2,
+                                      strokeColor: Colors.white,
+                                    );
+                                  },
+                                ),
+                                belowBarData: BarAreaData(
+                                  show: true,
+                                  color: Colors.purple.withOpacity(0.1),
+                                ),
+                              ),
+                            ],
+                            minX: 0,
+                            maxX: (_emotionDailyData.length - 1).toDouble(),
+                            minY: 0,
+                            maxY: 1,
+                          ),
+                        ),
+                ),
+              ],
+            ),
+          ),
+
+          const SizedBox(height: 20),
+
+          // Mood Distribution
+          Container(
+            padding: const EdgeInsets.all(16),
+            decoration: BoxDecoration(
+              color: Colors.grey.shade50,
+              borderRadius: BorderRadius.circular(16),
+            ),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                const Text(
+                  "Mood Distribution",
+                  style: TextStyle(
+                    fontSize: 14,
+                    fontWeight: FontWeight.w700,
+                    color: Color(0xFF1C1C1E),
+                  ),
+                ),
+                const SizedBox(height: 12),
+                ...moodDist.entries.map((entry) {
+                  final mood = entry.key;
+                  final count = entry.value;
+                  final percentage = daysWithData > 0 ? (count / daysWithData / 10) : 0.0;
+                  return Padding(
+                    padding: const EdgeInsets.only(bottom: 8),
+                    child: Row(
+                      children: [
+                        SizedBox(
+                          width: 80,
+                          child: Text(
+                            mood,
+                            style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w600),
+                          ),
+                        ),
+                        Expanded(
+                          child: LinearProgressIndicator(
+                            value: percentage.clamp(0.0, 1.0),
+                            backgroundColor: Colors.grey.shade300,
+                            color: _getMoodColor(mood),
+                            borderRadius: BorderRadius.circular(4),
+                            minHeight: 8,
+                          ),
+                        ),
+                        const SizedBox(width: 8),
+                        Text(
+                          "${percentage.clamp(0.0, 1.0 * 100).round()}%",
+                          style: const TextStyle(fontSize: 11, fontWeight: FontWeight.w600),
+                        ),
+                      ],
+                    ),
+                  );
+                }).toList(),
+              ],
+            ),
+          ),
+
+          const SizedBox(height: 20),
+
+          // Insights
+          Container(
+            padding: const EdgeInsets.all(16),
+            decoration: BoxDecoration(
+              gradient: LinearGradient(
+                colors: [Colors.purple.shade50, Colors.purple.shade100],
+                begin: Alignment.topLeft,
+                end: Alignment.bottomRight,
+              ),
+              borderRadius: BorderRadius.circular(16),
+            ),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                const Text(
+                  "Weekly Insights",
+                  style: TextStyle(
+                    fontSize: 14,
+                    fontWeight: FontWeight.w700,
+                    color: Color(0xFF1C1C1E),
+                  ),
+                ),
+                const SizedBox(height: 12),
+                Text(
+                  "• Your dominant mood this week was $dominantMood\n"
+                  "• Emotional stability: $emotionalStability%\n"
+                  "• Average focus level: $avgAttention%\n"
+                  "• Stress management: ${avgStress < 0.4 ? 'Good' : avgStress < 0.7 ? 'Moderate' : 'Needs attention'}",
+                  style: TextStyle(
+                    fontSize: 12,
+                    color: Colors.grey.shade700,
+                    height: 1.5,
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildEmotionStatCard(String label, String value, Color color, IconData icon) {
+    return Container(
+      padding: const EdgeInsets.all(16),
+      decoration: BoxDecoration(
+        color: color.withOpacity(0.08),
+        borderRadius: BorderRadius.circular(16),
+        border: Border.all(color: color.withOpacity(0.2), width: 1),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              Icon(icon, color: color, size: 20),
+              const Spacer(),
+              Text(
+                value,
+                style: TextStyle(
+                  color: color,
+                  fontSize: 18,
+                  fontWeight: FontWeight.w900,
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 8),
+          Text(
+            label,
+            style: TextStyle(
+              color: color.withOpacity(0.7),
+              fontSize: 11,
+              fontWeight: FontWeight.w600,
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Color _getMoodColor(String mood) {
+    switch (mood.toLowerCase()) {
+      case 'very relaxed':
+      case 'relaxed':
+        return Colors.green;
+      case 'neutral':
+        return Colors.blue;
+      case 'elevated':
+        return Colors.orange;
+      case 'high stress':
+      case 'very high stress':
+        return Colors.red;
+      default:
+        return Colors.grey;
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     final validDays = _dailyData.where((d) => d.readingsCount > 0).toList();
@@ -857,7 +1445,12 @@ class _WeeklyReportPageState extends State<WeeklyReportPage> {
                                 // Trend Charts
                                 _buildTrendCard("Heart Rate Trend", true),
                                 _buildTrendCard("Temperature Trend", false),
-                                const SizedBox(height: 8),
+                                const SizedBox(height: 24),
+
+                                // 🆕 EMOTIONAL ANALYTICS SECTION
+                                _buildEmotionalAnalyticsSection(),
+
+                                const SizedBox(height: 24),
 
                                 // HISTORY SECTION
                                 _buildHistorySection(),
