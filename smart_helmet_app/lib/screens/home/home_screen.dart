@@ -141,7 +141,7 @@ class _HomeScreenState extends State<HomeScreen> {
       _routePoints = List.from(route); // defensive copy
       _destinationName = destinationName;
       _isJourneyActive = true;
-      _index = 3; // Auto-switch to Danger Zone tab
+      _index = 4; // Auto-switch to Danger Zone tab (Member4)
     });
     _updateJourneyDependentPages();
   }

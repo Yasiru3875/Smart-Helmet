@@ -2,6 +2,9 @@ allprojects {
     repositories {
         google()
         mavenCentral()
+        // Fallback mirrors
+        maven { url = uri("https://plugins.gradle.org/m2/") }
+        maven { url = uri("https://jcenter.bintray.com") }
     }
     
     // 👇 GOD-LEVEL OVERRIDE: Forces Kotlin 17 on absolutely everything 👇

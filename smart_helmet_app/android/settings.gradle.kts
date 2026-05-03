@@ -14,6 +14,10 @@ pluginManagement {
         google()
         mavenCentral()
         gradlePluginPortal()
+        // Fallback mirrors
+        maven { url = uri("https://plugins.gradle.org/m2/") }
+        maven { url = uri("https://jcenter.bintray.com") }
+        maven { url = uri("https://repo.gradle.org/gradle/libs-releases") }
     }
 }
 
