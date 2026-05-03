@@ -14,12 +14,15 @@ import 'Side_Panel_Screens/AboutUsPage.dart';
 import 'Side_Panel_Screens/PrivacyPolicyPage.dart';
 import 'Side_Panel_Screens/TermsOfServicePage.dart';
 import 'Side_Panel_Screens/ContactSupportPage.dart';
+import 'Side_Panel_Screens/user_profile_page.dart'; // 🆕
 import 'emergency_screen.dart';
+import 'alert_overlay_widget.dart'; // 🆕
 
-// If bluetooth_connect_dialog.dart is in lib/services/
 import '../../services/bluetooth_manager.dart';
 import '../../services/bluetooth_connect_dialog.dart';
 import '../../providers/sos_controller.dart';
+import '../../providers/user_profile_provider.dart'; // 🆕
+import '../../providers/alert_engine.dart'; // 🆕
 
 class HomeScreen extends StatefulWidget {
   const HomeScreen({super.key});
@@ -47,6 +50,26 @@ class _HomeScreenState extends State<HomeScreen> {
     super.initState();
     _initializePages();
     _listenToSOS();
+
+    // 🆕 After first frame, sync profile contacts → SOSController
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      _syncProfileToSOS();
+      // Re-sync whenever profile updates
+      Provider.of<UserProfileProvider>(context, listen: false)
+          .addListener(_syncProfileToSOS);
+    });
+  }
+
+  void _syncProfileToSOS() {
+    final profile =
+        Provider.of<UserProfileProvider>(context, listen: false);
+    final sos = Provider.of<SOSController>(context, listen: false);
+    if (profile.profileLoaded) {
+      sos.setEmergencyContacts(
+        profile.emergencyPhoneNumbers,
+        riderName: profile.userName,
+      );
+    }
   }
 
   void _listenToSOS() {
@@ -277,6 +300,27 @@ class _HomeScreenState extends State<HomeScreen> {
 
             const Divider(height: 32, thickness: 1),
 
+            // 🆕 My Profile
+            ListTile(
+              leading: const Icon(Icons.person_outline, color: Colors.indigo),
+              title: const Text('My Profile'),
+              subtitle: Consumer<UserProfileProvider>(
+                builder: (_, profile, __) => profile.isProfileComplete
+                    ? const Text('Profile complete',
+                        style: TextStyle(fontSize: 11, color: Colors.green))
+                    : const Text('⚠️ Add emergency contacts',
+                        style: TextStyle(fontSize: 11, color: Colors.orange)),
+              ),
+              onTap: () {
+                Navigator.push(
+                  context,
+                  MaterialPageRoute(builder: (_) => const UserProfilePage()),
+                );
+              },
+            ),
+
+            const Divider(height: 16, thickness: 1),
+
             // Additional Links
             ListTile(
               leading: const Icon(Icons.info_outline),
@@ -374,9 +418,109 @@ class _HomeScreenState extends State<HomeScreen> {
           ],
         ),
       ),
-      body: IndexedStack(
-        index: _index,
-        children: _pages,
+      body: Stack(
+        children: [
+          IndexedStack(
+            index: _index,
+            children: _pages,
+          ),
+          // 🆕 Profile completion banner — shown on home tab when profile incomplete
+          Consumer<UserProfileProvider>(
+            builder: (_, profile, __) {
+              if (_index != 0 || profile.isProfileComplete) {
+                return const SizedBox.shrink();
+              }
+              return Positioned(
+                top: 16,
+                left: 16,
+                right: 16,
+                child: Container(
+                  padding: const EdgeInsets.all(16),
+                  decoration: BoxDecoration(
+                    gradient: LinearGradient(
+                      colors: [Colors.orange.shade50, Colors.orange.shade100],
+                      begin: Alignment.topLeft,
+                      end: Alignment.bottomRight,
+                    ),
+                    borderRadius: BorderRadius.circular(16),
+                    border: Border.all(color: Colors.orange.shade200, width: 1.5),
+                    boxShadow: [
+                      BoxShadow(
+                        color: Colors.orange.withOpacity(0.2),
+                        blurRadius: 12,
+                        offset: const Offset(0, 4),
+                      ),
+                    ],
+                  ),
+                  child: Row(
+                    children: [
+                      Container(
+                        padding: const EdgeInsets.all(8),
+                        decoration: BoxDecoration(
+                          color: Colors.orange.shade200,
+                          shape: BoxShape.circle,
+                        ),
+                        child: const Icon(
+                          Icons.warning_amber_rounded,
+                          color: Colors.orange,
+                          size: 20,
+                        ),
+                      ),
+                      const SizedBox(width: 12),
+                      Expanded(
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            const Text(
+                              "Complete Your Profile",
+                              style: TextStyle(
+                                fontWeight: FontWeight.w700,
+                                fontSize: 14,
+                                color: Colors.orange,
+                              ),
+                            ),
+                            const SizedBox(height: 2),
+                            const Text(
+                              "Add emergency contacts to enable safety alerts",
+                              style: TextStyle(
+                                fontSize: 12,
+                                color: Colors.orange,
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                      TextButton(
+                        onPressed: () {
+                          Navigator.pushNamed(context, '/profile');
+                        },
+                        style: TextButton.styleFrom(
+                          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+                          backgroundColor: Colors.orange,
+                          foregroundColor: Colors.white,
+                          shape: RoundedRectangleBorder(
+                            borderRadius: BorderRadius.circular(8),
+                          ),
+                        ),
+                        child: const Text(
+                          "Complete",
+                          style: TextStyle(
+                            fontSize: 12,
+                            fontWeight: FontWeight.w600,
+                          ),
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              );
+            },
+          ),
+          // 🆕 Alert overlay — shown on any tab when risk is sustained
+          Consumer<AlertEngine>(
+            builder: (_, engine, __) => AlertOverlayWidget(),
+          ),
+        ],
       ),
       bottomNavigationBar: BottomNavigationBar(
         currentIndex: _index,
