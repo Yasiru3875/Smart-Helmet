@@ -115,7 +115,27 @@ class _JourneyReportScreenState extends State<JourneyReportScreen> {
           .map((point) => LatLng(point.latitude, point.longitude))
           .toList();
     } else {
-      // Also add lean event coordinates for route reconstruction
+      // FALLBACK: Reconstruct route from turnEvents + brakingEvents GPS coordinates
+      // (gpsTrack is not saved to Firebase to conserve bandwidth, but event coordinates ARE saved)
+      final List<LatLng> eventPoints = [];
+      for (final event in widget.journey.turnEvents) {
+        if (event.latitude != 0.0 && event.longitude != 0.0) {
+          eventPoints.add(LatLng(event.l
+          atitude, event.longitude));
+        }
+      }
+      for (final brake in widget.journey.brakingEvents) {
+        if (brake.latitude != 0.0 && brake.longitude != 0.0) {
+          eventPoints.add(LatLng(brake.latitude, brake.longitude));
+        }
+      }
+      _allMapPoints = eventPoints;
+      debugPrint("📍 No gpsTrack, reconstructed ${_allMapPoints.length} map points from events");
+    }
+
+    // Also add lean event coordinates for route reconstruction
+    if (widget.journey.gpsTrack.isEmpty) {
+
       for (final lean in widget.journey.leanEvents) {
         if (lean.latitude != 0.0 && lean.longitude != 0.0) {
           routePoints.add(LatLng(lean.latitude, lean.longitude));

@@ -177,7 +177,7 @@ class JourneyProvider with ChangeNotifier {
 
     // ── Lean angle detection ─────────────────────────────
     // Formula: atan2(lateral accel, vertical accel) → degrees
-    final double computedLeanAngle = atan2(accelY, accelZ) * (180.0 / pi);
+    final double computedLeanAngle = atan2(accelY, accelX) * (180.0 / pi);
     final double absLean = computedLeanAngle.abs();
 
     if (absLean > _criticalLeanThreshold) {
