@@ -13,7 +13,7 @@ import 'package:smart_helmet_app/providers/ride_session_provider.dart';
 import '../../../../services/auth_service.dart'; // Added
 import 'package:smart_helmet_app/screens/home/members/Danger_Zone/member4_page.dart';
 
-const String apiKey = 'AIzaSyBbZVI_sO637CROKwc3hjMOB4ZmsL12ikw';
+const String apiKey = 'AIzaSyAhxZEtHCRQwjFopBOIM4uBpa3owNNs-8A';
 
 class HomeDashboard extends StatefulWidget {
   final Function({
@@ -151,19 +151,56 @@ class _HomeDashboardState extends State<HomeDashboard> {
 
   Future<void> _fetchPlaceSuggestions() async {
     final input = _destinationController.text.trim();
+    print('🔍 _fetchPlaceSuggestions called with input: "$input"');
+    
     if (input.isEmpty) {
+      print('⚠️ Input is empty, clearing suggestions');
       setState(() => _placeSuggestions = []);
       return;
     }
 
-    final url =
-        'https://maps.googleapis.com/maps/api/place/autocomplete/json?input=$input&key=$apiKey';
-    final response = await http.get(Uri.parse(url));
-    final data = jsonDecode(response.body);
+    if (input.length < 2) {
+      print('⚠️ Input too short (need at least 2 chars), clearing suggestions');
+      setState(() => _placeSuggestions = []);
+      return;
+    }
 
-    if (response.statusCode == 200 && data['status'] == 'OK') {
-      setState(() => _placeSuggestions = data['predictions']);
-    } else {
+    try {
+      // Use the Places API (Legacy) with proper parameters
+      final encodedInput = Uri.encodeComponent(input);
+      final url =
+          'https://maps.googleapis.com/maps/api/place/autocomplete/json?input=$encodedInput&components=country:lk&types=geocode|establishment&language=en&key=$apiKey';
+      print('🌐 Fetching from: ${url.replaceAll(apiKey, '***')}');
+
+      final response = await http.get(Uri.parse(url));
+      print('📡 Response status code: ${response.statusCode}');
+
+      final data = jsonDecode(response.body);
+      print('📊 API Status: ${data['status']}');
+
+      if (data['status'] != 'OK') {
+        print('❌ API Error: ${data['error_message'] ?? data['status']}');
+        if (data.containsKey('predictions')) {
+          print('📋 Predictions key exists but status is not OK');
+        }
+      }
+
+      if (response.statusCode == 200 && data['status'] == 'OK') {
+        final predictions = data['predictions'] as List? ?? [];
+        print('✅ Found ${predictions.length} suggestions');
+        
+        if (predictions.isNotEmpty) {
+          print('📝 First suggestion: ${predictions[0]['description']}');
+        }
+        
+        setState(() => _placeSuggestions = predictions);
+      } else {
+        print('⚠️ Setting suggestions to empty list');
+        setState(() => _placeSuggestions = []);
+      }
+    } catch (e, stackTrace) {
+      print('💥 Exception in _fetchPlaceSuggestions: $e');
+      print('Stack trace: $stackTrace');
       setState(() => _placeSuggestions = []);
     }
   }
@@ -523,43 +560,68 @@ class _HomeDashboardState extends State<HomeDashboard> {
                                       vertical: 0, horizontal: 12),
                                 ),
                               ),
-                              if (_placeSuggestions.isNotEmpty)
-                                Container(
-                                  constraints:
-                                      const BoxConstraints(maxHeight: 200),
-                                  decoration: BoxDecoration(
-                                    color: Colors.white,
-                                    borderRadius: BorderRadius.circular(8),
-                                    boxShadow: [
-                                      BoxShadow(
-                                        color: Colors.black.withOpacity(0.1),
-                                        blurRadius: 6,
-                                        offset: const Offset(0, 3),
-                                      ),
-                                    ],
-                                  ),
-                                  child: ListView.builder(
-                                    shrinkWrap: true,
-                                    itemCount: _placeSuggestions.length,
-                                    itemBuilder: (context, index) {
-                                      final s = _placeSuggestions[index];
-                                      return ListTile(
-                                        title: Text(
-                                          s['description'],
-                                          maxLines: 2,
-                                          overflow: TextOverflow.ellipsis,
-                                        ),
-                                        onTap: () {
-                                          _destinationController.text =
-                                              s['description'];
-                                          setState(
-                                              () => _placeSuggestions = []);
-                                          _planRoute();
-                                        },
-                                      );
-                                    },
+                              // DEBUG: Show suggestion count
+                              if (_placeSuggestions.isNotEmpty) ...[
+                                Text(
+                                  'Found ${_placeSuggestions.length} suggestions',
+                                  style: TextStyle(
+                                    fontSize: 12,
+                                    color: Colors.grey[600],
                                   ),
                                 ),
+                                const SizedBox(height: 4),
+                                Material(
+                                  elevation: 4,
+                                  borderRadius: BorderRadius.circular(8),
+                                  child: Container(
+                                    constraints:
+                                        const BoxConstraints(maxHeight: 200),
+                                    decoration: BoxDecoration(
+                                      color: Colors.white,
+                                      borderRadius: BorderRadius.circular(8),
+                                      border: Border.all(
+                                          color: Colors.indigo.shade200),
+                                    ),
+                                    child: ListView.builder(
+                                      shrinkWrap: true,
+                                      itemCount: _placeSuggestions.length,
+                                      itemBuilder: (context, index) {
+                                        final s = _placeSuggestions[index];
+                                        return ListTile(
+                                          dense: true,
+                                          leading: const Icon(Icons.location_on,
+                                              color: Colors.indigo, size: 20),
+                                          title: Text(
+                                            s['description'] ??
+                                                'Unknown place',
+                                            maxLines: 2,
+                                            overflow: TextOverflow.ellipsis,
+                                            style: const TextStyle(fontSize: 14),
+                                          ),
+                                          subtitle: Text(
+                                            s['structured_formatting']
+                                                    ?['main_text'] ??
+                                                '',
+                                            style: TextStyle(
+                                              fontSize: 12,
+                                              color: Colors.grey[600],
+                                            ),
+                                          ),
+                                          onTap: () {
+                                            print(
+                                                'Selected: ${s['description']}');
+                                            _destinationController.text =
+                                                s['description'];
+                                            setState(() =>
+                                                _placeSuggestions = []);
+                                            _planRoute();
+                                          },
+                                        );
+                                      },
+                                    ),
+                                  ),
+                                ),
+                              ],
                               const SizedBox(height: 16),
                               Row(
                                 mainAxisAlignment: MainAxisAlignment.center,

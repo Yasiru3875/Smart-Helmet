@@ -183,17 +183,19 @@ class _Member4PageState extends State<Member4Page> {
       // Logic handled in _syncJourneyData
     });
 
-    // Load past risky events to visualize risk zones
-    _historyCompleter = Completer<void>();
-    _loadPastRiskyEvents().then((_) {
-      if (_historyCompleter != null && !_historyCompleter!.isCompleted) {
-        _historyCompleter!.complete();
-      }
-      print("[DangerZone] _loadPastRiskyEvents completes. Total circles: ${riskCircles.length}");
-    });
+    // Load past risky events to visualize risk zones - only when journey is active
+    if (widget.isJourneyActive) {
+      _historyCompleter = Completer<void>();
+      _loadPastRiskyEvents().then((_) {
+        if (_historyCompleter != null && !_historyCompleter!.isCompleted) {
+          _historyCompleter!.complete();
+        }
+        print("[DangerZone] _loadPastRiskyEvents completes. Total circles: ${riskCircles.length}");
+      });
 
-    // Fetch and display the latest specific journey
-    _fetchAndDisplayLatestJourney();
+      // Fetch and display the latest specific journey - only when journey is active
+      _fetchAndDisplayLatestJourney();
+    }
 
     if (widget.isJourneyActive) {
       _startLiveUpdates(); // only start live location & sensors if journey active
@@ -1587,27 +1589,24 @@ class _Member4PageState extends State<Member4Page> {
                 ),
               ),
             ),
-          if (safetyTips.isNotEmpty)
+          if (widget.isJourneyActive)
             Positioned(
-              bottom: showTips ? 160 : 80,
-              left: 16,
+              bottom: showTips ? 220 : 140,
               right: 16,
-              child: Center(
-                child: ElevatedButton.icon(
-                  onPressed: () => setState(() => showTips = !showTips),
-                  icon: Icon(
-                      showTips ? Icons.keyboard_arrow_down : Icons.security,
-                      size: 20),
-                  label:
-                      Text(showTips ? 'Hide Safety Tips' : 'View Safety Tips'),
-                  style: ElevatedButton.styleFrom(
-                    backgroundColor: Colors.deepPurple,
-                    foregroundColor: Colors.white,
-                    padding: const EdgeInsets.symmetric(
-                        horizontal: 24, vertical: 12),
-                    shape: RoundedRectangleBorder(
-                        borderRadius: BorderRadius.circular(30)),
-                  ),
+              child: ElevatedButton.icon(
+                onPressed: () => setState(() => showTips = !showTips),
+                icon: Icon(
+                    showTips ? Icons.keyboard_arrow_down : Icons.security,
+                    size: 20),
+                label:
+                    Text(showTips ? 'Hide Safety Tips' : 'View Safety Tips'),
+                style: ElevatedButton.styleFrom(
+                  backgroundColor: Colors.deepPurple,
+                  foregroundColor: Colors.white,
+                  padding: const EdgeInsets.symmetric(
+                      horizontal: 24, vertical: 12),
+                  shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(30)),
                 ),
               ),
             ),
