@@ -13,7 +13,6 @@ import 'package:smart_helmet_app/services/journey_service.dart';
 import 'package:smart_helmet_app/services/bluetooth_manager.dart';
 import 'package:smart_helmet_app/services/post_journey.dart';
 import 'JourneyReportScreen.dart';
-import 'dummy_journey_data.dart';
 import 'package:smart_helmet_app/services/risk_classifier_service.dart';
 
 class Member3Page extends StatefulWidget {
@@ -84,6 +83,8 @@ class _Member3PageState extends State<Member3Page>
 // Firestore
   final FirebaseFirestore _firestore = FirebaseFirestore.instance;
   bool _isSaving = false;
+  int _riskyEventsSavedCount = 0;
+  List<Map<String, dynamic>> _riskyEventsThisRide = [];
   DateTime? _lastSavedTime;
   final Duration _saveInterval =
       const Duration(seconds: 1); // ← change this value to control frequency
@@ -530,7 +531,7 @@ class _Member3PageState extends State<Member3Page>
             imuData, currentSpeed, currentLat, currentLng, eventType);
       }
       if (journeyProvider.isJourneyActive) {
-        if (isRiskyThisReading) {
+        if (eventType == 'risky_turn') {
           journeyProvider.addTurnEvent(
             severity: 'risky',
             turnRate: turnRate,
@@ -1117,17 +1118,18 @@ class _Member3PageState extends State<Member3Page>
         now.difference(_lastSavedTime!) >= _saveInterval;
 
     // Save if time interval passed OR this reading is risky
-    if (!timePassed && !isRiskyThisReading) return;
+    if (!timePassed && eventType != 'risky_turn') return;
 
     setState(() => _isSaving = true);
 
     try {
+      final journeyProvider = Provider.of<JourneyProvider>(context, listen: false);
 
       final now = DateTime.now();
       final turnRate = imu['gyroX']?.abs() ?? 0.0;
       final eventData = {
         // Ride identification (using shared rideId from provider)
-        "rideId": rideProvider.currentRideId,
+        "rideId": journeyProvider.currentJourney?.id ?? "unknown_ride",
         "eventNumber": _riskyEventsSavedCount + 1,
         "timestamp": now.toIso8601String(),
         "createdAt": FieldValue.serverTimestamp(),
@@ -1149,13 +1151,16 @@ class _Member3PageState extends State<Member3Page>
         "riskyTurnsTotal": riskyTurnCount,
         "totalDistanceKm": totalDistanceKm,
         "deviceName": targetDeviceName,
-        "isRiskyEvent": isRiskyThisReading, // ← more accurate
+        "isRiskyEvent": eventType == 'risky_turn', // ← more accurate
       };
 
-      await _firestore.collection("helmet_live_readings").add(data);
+      await _firestore.collection("helmet_live_readings").add(eventData);
+
+      _riskyEventsSavedCount++;
+      _riskyEventsThisRide.add(eventData);
 
       _lastSavedTime = now;
-      debugPrint("Live reading saved → Risky: $isRiskyThisReading");
+      debugPrint("Live reading saved → Risky: ${eventType == 'risky_turn'}");
     } catch (e) {
       debugPrint("Firestore save error: $e");
       if (mounted) {
@@ -1207,24 +1212,7 @@ class _Member3PageState extends State<Member3Page>
     return List.from(_riskyEventsThisRide);
   }
 
-  // Load risky events from Firebase for a specific ride
-  Future<List<Map<String, dynamic>>> loadRiskyEventsForRide(String rideId) async {
-    try {
-      final snapshot = await _firestore
-          .collection("risky_events")
-          .where("rideId", isEqualTo: rideId)
-          .orderBy("timestamp")
-          .get();
-      
-      return snapshot.docs.map((doc) => {
-        ...doc.data(),
-        "docId": doc.id,
-      }).toList();
-    } catch (e) {
-      debugPrint("Error loading risky events: $e");
-      return [];
-    }
-  }
+
 
   @override
   Widget build(BuildContext context) {
@@ -1740,57 +1728,12 @@ class _Member3PageState extends State<Member3Page>
                       const Text('Start a journey from Home Dashboard',
                           style:
                               TextStyle(fontSize: 14, color: _textSecondary)),
-                      const SizedBox(height: 24),
-                      Container(
-                        decoration: BoxDecoration(
-                          gradient:
-                              const LinearGradient(colors: [_primary, _accent]),
-                          borderRadius: BorderRadius.circular(12),
-                        ),
-                        child: ElevatedButton.icon(
-                          onPressed: _showDummyReport,
-                          icon: const Icon(Icons.science, color: Colors.white),
-                          label: const Text('View Sample Report',
-                              style: TextStyle(
-                                  color: Colors.white,
-                                  fontWeight: FontWeight.w600)),
-                          style: ElevatedButton.styleFrom(
-                            backgroundColor: Colors.transparent,
-                            shadowColor: Colors.transparent,
-                            padding: const EdgeInsets.symmetric(
-                                horizontal: 24, vertical: 12),
-                          ),
-                        ),
-                      ),
+
                     ],
                   ),
                 )
               : Column(
                   children: [
-                    // Test button
-                    Padding(
-                      padding: const EdgeInsets.all(16),
-                      child: Container(
-                        decoration: BoxDecoration(
-                          gradient: LinearGradient(
-                              colors: [Colors.orange[700]!, Colors.deepOrange]),
-                          borderRadius: BorderRadius.circular(12),
-                        ),
-                        child: ElevatedButton.icon(
-                          onPressed: _showDummyReport,
-                          icon: const Icon(Icons.science, color: Colors.white),
-                          label: const Text('View Sample Report',
-                              style: TextStyle(
-                                  color: Colors.white,
-                                  fontWeight: FontWeight.w600)),
-                          style: ElevatedButton.styleFrom(
-                            backgroundColor: Colors.transparent,
-                            shadowColor: Colors.transparent,
-                            padding: const EdgeInsets.symmetric(vertical: 12),
-                          ),
-                        ),
-                      ),
-                    ),
                     Expanded(
                       child: ListView.builder(
                         padding: const EdgeInsets.all(16),
@@ -1998,18 +1941,6 @@ class _Member3PageState extends State<Member3Page>
     );
   }
 
-  // Method to show dummy report directly for testing
-  void _showDummyReport() {
-    final dummyJourney = DummyJourneyData.getSampleJourney();
-    Navigator.push(
-      context,
-      MaterialPageRoute(
-        builder: (context) => JourneyReportScreen(journey: dummyJourney),
-      ),
-    );
-  }
-
-  // Method to load dummy history for testing
 
   // Live Monitoring Tab
   // ═══════════════════════════════════════════════════════════════
