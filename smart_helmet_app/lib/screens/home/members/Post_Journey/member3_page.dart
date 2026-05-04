@@ -14,6 +14,7 @@ import 'package:smart_helmet_app/services/bluetooth_manager.dart';
 import 'package:smart_helmet_app/services/post_journey.dart';
 import 'JourneyReportScreen.dart';
 import 'dummy_journey_data.dart';
+import 'package:smart_helmet_app/services/risk_classifier_service.dart';
 
 class Member3Page extends StatefulWidget {
   final JourneyData? completedJourney; // Optional: passed when ride just ended
@@ -28,6 +29,9 @@ class _Member3PageState extends State<Member3Page>
     with SingleTickerProviderStateMixin {
   // Tab controller
   late TabController _tabController;
+
+  final _riskClassifier = RiskClassifierService();
+  double _mlRiskScore = 0.0;   // 0=Safe … 1=Risky
 
   // Journey Service
   final JourneyService _journeyService = JourneyService();
@@ -55,9 +59,17 @@ class _Member3PageState extends State<Member3Page>
   String currentTurnStatus = "Normal";
   Color statusColor = Colors.green;
 
+  // Event Debouncing
+  DateTime? _lastEventTime;
+  static const int _eventCooldownSeconds = 3;
+
   // Historical data for graph
   List<double> gyroZHistory = [];
   final int maxHistoryLength = 50;
+  
+  // Smoothing filter for turns to ignore shakes
+  List<double> _yawHistory = [];
+  final int yawSmoothingWindow = 5;
 
   // Thresholds
   final double sharpTurnThreshold = 100.0;
@@ -66,19 +78,15 @@ class _Member3PageState extends State<Member3Page>
   // Bluetooth - Uses shared BluetoothManager (connection handled in Home Page)
   static const String targetDeviceName = "SmartHelmet_ESP32";
   StreamSubscription? _dataSubscription;
-  String _dataBuffer = "";
+  final List<int> _byteBuffer = [];
   bool _hasAddedBluetoothListener = false;
 
 // Firestore
   final FirebaseFirestore _firestore = FirebaseFirestore.instance;
   bool _isSaving = false;
-
-  // Risky Events Tracking (ONLY risky events saved to Firebase)
-  // NOTE: rideId is now obtained from RideSessionProvider (shared across all members)
-  int _riskyEventsSavedCount = 0;
-  List<Map<String, dynamic>> _riskyEventsThisRide =
-      []; // In-memory list for visualization
-
+  DateTime? _lastSavedTime;
+  final Duration _saveInterval =
+      const Duration(seconds: 1); // ← change this value to control frequency
   // Current GPS state
   double currentSpeed = 0.0;
   double currentLat = 0.0;
@@ -101,6 +109,7 @@ class _Member3PageState extends State<Member3Page>
   @override
   void initState() {
     super.initState();
+    _riskClassifier.init();
     _tabController = TabController(length: 2, vsync: this);
     _loadJourneyHistory();
 
@@ -143,6 +152,7 @@ class _Member3PageState extends State<Member3Page>
 
   @override
   void dispose() {
+    _riskClassifier.dispose();
     _tabController.dispose();
     _dataSubscription?.cancel();
     _simulationTimer?.cancel();
@@ -286,7 +296,7 @@ class _Member3PageState extends State<Member3Page>
     _dataSubscription?.cancel();
     _dataSubscription = dataStream.listen(
       (data) {
-        debugPrint("Received ${data.length} bytes from $deviceToUse");
+        // Removed verbose debugPrint to reduce GC pauses
         _handleIncomingData(data);
       },
       onError: (e) => debugPrint("$deviceToUse Stream Error: $e"),
@@ -318,14 +328,26 @@ class _Member3PageState extends State<Member3Page>
 
   // Handle incoming data from ESP32 via BluetoothManager
   void _handleIncomingData(List<int> data) {
-    _dataBuffer += String.fromCharCodes(data);
-    while (_dataBuffer.contains('\n')) {
-      int newlineIndex = _dataBuffer.indexOf('\n');
-      String jsonString = _dataBuffer.substring(0, newlineIndex).trim();
-      _dataBuffer = _dataBuffer.substring(newlineIndex + 1);
-      if (jsonString.isNotEmpty) {
-        _parseIMUData(jsonString);
+    _byteBuffer.addAll(data);
+    
+    int newlineIndex = _byteBuffer.indexOf(10); // 10 is ASCII for '\n'
+    while (newlineIndex != -1) {
+      // Extract exactly one complete line of bytes
+      List<int> lineBytes = _byteBuffer.sublist(0, newlineIndex);
+      
+      // Remove the line and the newline character from the buffer
+      _byteBuffer.removeRange(0, newlineIndex + 1);
+      
+      if (lineBytes.isNotEmpty) {
+        // Create string only ONCE per complete JSON packet
+        String jsonString = String.fromCharCodes(lineBytes).trim();
+        if (jsonString.isNotEmpty) {
+          _parseIMUData(jsonString);
+        }
       }
+      
+      // Check if there are more complete lines in the buffer
+      newlineIndex = _byteBuffer.indexOf(10);
     }
   }
 
@@ -368,26 +390,60 @@ class _Member3PageState extends State<Member3Page>
 
     final journeyProvider =
         Provider.of<JourneyProvider>(context, listen: false);
+    // ─── TFLite Risk Classification ──────────────────────────────────
+    // SWAP AXES to match model training dataset (Model: X=FWD, Y=LATERAL, Z=UP)
+    // Physical helmet: X=UP, Z=FWD, Y=LATERAL
+    final riskScore = _riskClassifier.classify(
+      accelX: imuData['accelZ']!, // Model X (Forward) = Physical Z
+      accelY: imuData['accelY']!, // Model Y (Lateral) = Physical Y
+      accelZ: imuData['accelX']!, // Model Z (Vertical) = Physical X
+      gyroX: imuData['gyroZ']!,   // Model X (Roll) = Physical Z
+      gyroY: imuData['gyroY']!,   // Model Y (Pitch) = Physical Y
+      gyroZ: imuData['gyroX']!,   // Model Z (Yaw) = Physical X
+    );
 
     // ─── Calculate turn status FIRST ────────────────────────────────
-    // AXIS MAPPING for sensor mount: X=UP, Y=LEFT, Z=FORWARD
+    // AXIS MAPPING for sensor mount: X=UP, Y=LATERAL, Z=FORWARD
     // Turn detection uses gyroX (rotation around UP/vertical axis = yaw)
     // Braking detection uses accelZ (forward/backward axis)
-    double turnRate = imuData['gyroX']!.abs(); // gyroX = yaw when X points UP
+    // Add raw yaw to history for smoothing
+    _yawHistory.add(imuData['gyroX']!);
+    if (_yawHistory.length > yawSmoothingWindow) {
+      _yawHistory.removeAt(0);
+    }
+    
+    // Calculate smoothed yaw rate to ignore brief "shakes"
+    double smoothedYaw = _yawHistory.reduce((a, b) => a + b) / _yawHistory.length;
+    double turnRate = smoothedYaw.abs();
     String newTurnStatus = "Normal";
     Color newStatusColor = Colors.green;
     String? eventType; // null = no risky event
+    // Must have SOME physical movement to trigger turn events (prevents stationary noise)
+    final bool hasMovement = turnRate > 15.0 || speed > 3.0;
 
-    if (turnRate > riskyTurnThreshold) {
+    // Increased ML risk thresholds slightly to prevent sensitive shake triggers
+    final bool isRisky = hasMovement && (riskScore > 0.65 || turnRate > riskyTurnThreshold);
+    final bool isSharp = hasMovement && (!isRisky && (riskScore > 0.45 || turnRate > sharpTurnThreshold));
+
+    final now = DateTime.now();
+    final bool canTriggerEvent = _lastEventTime == null || now.difference(_lastEventTime!).inSeconds >= _eventCooldownSeconds;
+
+    if (isRisky) {
       newTurnStatus = "RISKY TURN!";
       newStatusColor = Colors.red;
       eventType = 'risky_turn'; // HIGH severity
-      riskyTurnCount++;
-    } else if (turnRate > sharpTurnThreshold) {
+      if (canTriggerEvent) {
+        riskyTurnCount++;
+        _lastEventTime = now;
+      }
+    } else if (isSharp) {
       newTurnStatus = "Sharp Turn";
       newStatusColor = Colors.orange;
       eventType = 'sharp_turn'; // MODERATE severity
-      sharpTurnCount++;
+      if (canTriggerEvent) {
+        sharpTurnCount++;
+        _lastEventTime = now;
+      }
     } else if (imuData['accelZ']! < -4.4 && speed > 5.0) {
       // Harsh brake: 0.45g = 4.4 m/s² (sensor outputs m/s², NOT g!)
       newTurnStatus =
@@ -396,11 +452,15 @@ class _Member3PageState extends State<Member3Page>
       eventType = imuData['accelZ']! < -6.9
           ? 'emergency_brake'
           : 'harsh_brake'; // Emergency: 0.70g = 6.9 m/s²
-      harshBrakeCount++;
+      if (canTriggerEvent) {
+        harshBrakeCount++;
+        _lastEventTime = now;
+      }
     } else if (speed > 80.0) {
       newTurnStatus = "HIGH SPEED!";
       newStatusColor = Colors.orange;
       eventType = 'high_speed';
+
     }
 
     // ─── CSV DATA EXPORT FOR RESEARCH ───────────────
@@ -427,8 +487,9 @@ class _Member3PageState extends State<Member3Page>
       accelX = imuData['accelX']!;
       accelY = imuData['accelY']!;
       accelZ = imuData['accelZ']!;
+      _mlRiskScore = riskScore;
 
-      // Calculate lean angle from accelerometer (X=UP, Y=LEFT)
+      // Calculate lean angle from accelerometer (X=UP, Y=LATERAL)
       // atan2(lateral, vertical) gives the tilt angle
       leanAngle = atan2(accelY, accelX) * (180.0 / pi);
 
@@ -469,25 +530,7 @@ class _Member3PageState extends State<Member3Page>
             imuData, currentSpeed, currentLat, currentLng, eventType);
       }
       if (journeyProvider.isJourneyActive) {
-        journeyProvider.addSensorReading(
-          heartRate: 75,
-          temperature: 36.5,
-          stressLevel: 30,
-
-          accelX: accelX,
-          accelY: accelY,
-          accelZ: accelZ,
-          gyroX: gyroX,
-          gyroY: gyroY,
-          gyroZ: gyroZ,
-          // Pass GPS + speed so braking events get accurate location
-          latitude: currentLat,
-          longitude: currentLng,
-          speedKmh: currentSpeed,
-
-        );
-
-        if (eventType == 'risky_turn') {
+        if (isRiskyThisReading) {
           journeyProvider.addTurnEvent(
             severity: 'risky',
             turnRate: turnRate,
@@ -513,7 +556,7 @@ class _Member3PageState extends State<Member3Page>
           );
         }
         // Lean events are auto-detected inside journeyProvider.addSensorReading()
-        // via atan2(accelY, accelZ) with 2-second debounce — no manual call needed
+        // via atan2(accelY, accelX) with 2-second debounce — no manual call needed
       }
     });
   }
@@ -535,7 +578,6 @@ class _Member3PageState extends State<Member3Page>
   double _toRadians(double degree) {
     return degree * (pi / 180);
   }
-
   // ============================================================
   // RIDE TRACKING - Uses shared RideSessionProvider
   // ============================================================
@@ -587,453 +629,453 @@ class _Member3PageState extends State<Member3Page>
     final packets = <Map<String, double>>[
       // 0-4: normal cruise
       {
-        'gyroX': 2.0,
+        'gyroZ': 2.0,
         'gyroY': 1.5,
-        'gyroZ': 8.0,
-        'accelX': 0.1,
+        'gyroX': 8.0,
+        'accelZ': 0.1,
         'accelY': 0.1,
-        'accelZ': 9.81,
+        'accelX': 9.81,
         'spd': 40,
         'lat': baseLat + 0.000 * 0.0001,
         'lng': baseLng + 0.000 * 0.0001
       },
       {
-        'gyroX': 2.5,
+        'gyroZ': 2.5,
         'gyroY': 2.0,
-        'gyroZ': 10.0,
-        'accelX': 0.1,
+        'gyroX': 10.0,
+        'accelZ': 0.1,
         'accelY': 0.1,
-        'accelZ': 9.81,
+        'accelX': 9.81,
         'spd': 42,
         'lat': baseLat + 0.001,
         'lng': baseLng + 0.001
       },
       {
-        'gyroX': 2.0,
+        'gyroZ': 2.0,
         'gyroY': 1.5,
-        'gyroZ': 12.0,
-        'accelX': 0.1,
+        'gyroX': 12.0,
+        'accelZ': 0.1,
         'accelY': 0.2,
-        'accelZ': 9.80,
+        'accelX': 9.80,
         'spd': 45,
         'lat': baseLat + 0.002,
         'lng': baseLng + 0.002
       },
       {
-        'gyroX': 3.0,
+        'gyroZ': 3.0,
         'gyroY': 2.5,
-        'gyroZ': 15.0,
-        'accelX': 0.2,
+        'gyroX': 15.0,
+        'accelZ': 0.2,
         'accelY': 0.2,
-        'accelZ': 9.80,
+        'accelX': 9.80,
         'spd': 48,
         'lat': baseLat + 0.003,
         'lng': baseLng + 0.003
       },
       {
-        'gyroX': 2.0,
+        'gyroZ': 2.0,
         'gyroY': 1.0,
-        'gyroZ': 8.0,
-        'accelX': 0.1,
+        'gyroX': 8.0,
+        'accelZ': 0.1,
         'accelY': 0.1,
-        'accelZ': 9.81,
+        'accelX': 9.81,
         'spd': 50,
         'lat': baseLat + 0.004,
         'lng': baseLng + 0.004
       },
-      // 5-6: SHARP TURN (|gyroZ| 110)
+      // 5-6: SHARP TURN (|gyroX| 110)
       {
-        'gyroX': 5.0,
+        'gyroZ': 5.0,
         'gyroY': 4.0,
-        'gyroZ': 110.0,
-        'accelX': 0.3,
+        'gyroX': 110.0,
+        'accelZ': 0.3,
         'accelY': 1.2,
-        'accelZ': 9.80,
+        'accelX': 9.80,
         'spd': 50,
         'lat': baseLat + 0.005,
         'lng': baseLng + 0.005
       },
       {
-        'gyroX': 5.5,
+        'gyroZ': 5.5,
         'gyroY': 4.5,
-        'gyroZ': 115.0,
-        'accelX': 0.3,
+        'gyroX': 115.0,
+        'accelZ': 0.3,
         'accelY': 1.3,
-        'accelZ': 9.80,
+        'accelX': 9.80,
         'spd': 48,
         'lat': baseLat + 0.006,
         'lng': baseLng + 0.006
       },
       // 7-8: back to normal
       {
-        'gyroX': 2.0,
+        'gyroZ': 2.0,
         'gyroY': 1.5,
-        'gyroZ': 9.0,
-        'accelX': 0.1,
+        'gyroX': 9.0,
+        'accelZ': 0.1,
         'accelY': 0.1,
-        'accelZ': 9.81,
+        'accelX': 9.81,
         'spd': 50,
         'lat': baseLat + 0.007,
         'lng': baseLng + 0.007
       },
       {
-        'gyroX': 2.5,
+        'gyroZ': 2.5,
         'gyroY': 2.0,
-        'gyroZ': 11.0,
-        'accelX': 0.2,
+        'gyroX': 11.0,
+        'accelZ': 0.2,
         'accelY': 0.1,
-        'accelZ': 9.81,
+        'accelX': 9.81,
         'spd': 52,
         'lat': baseLat + 0.008,
         'lng': baseLng + 0.008
       },
-      // 9-10: HARD BRAKING (accelX = -2.5 g)
+      // 9-10: HARD BRAKING (accelZ = -2.5 g)
       {
-        'gyroX': 4.0,
+        'gyroZ': 4.0,
         'gyroY': 3.0,
-        'gyroZ': 18.0,
-        'accelX': -2.5,
+        'gyroX': 18.0,
+        'accelZ': -2.5,
         'accelY': 0.1,
-        'accelZ': 9.80,
+        'accelX': 9.80,
         'spd': 52,
         'lat': baseLat + 0.009,
         'lng': baseLng + 0.009
       },
       {
-        'gyroX': 3.5,
+        'gyroZ': 3.5,
         'gyroY': 2.5,
-        'gyroZ': 15.0,
-        'accelX': -2.0,
+        'gyroX': 15.0,
+        'accelZ': -2.0,
         'accelY': 0.1,
-        'accelZ': 9.80,
+        'accelX': 9.80,
         'spd': 35,
         'lat': baseLat + 0.010,
         'lng': baseLng + 0.010
       },
       // 11-14: accelerate back
       {
-        'gyroX': 2.0,
+        'gyroZ': 2.0,
         'gyroY': 1.0,
-        'gyroZ': 7.0,
-        'accelX': 0.5,
+        'gyroX': 7.0,
+        'accelZ': 0.5,
         'accelY': 0.1,
-        'accelZ': 9.81,
+        'accelX': 9.81,
         'spd': 38,
         'lat': baseLat + 0.011,
         'lng': baseLng + 0.011
       },
       {
-        'gyroX': 2.0,
+        'gyroZ': 2.0,
         'gyroY': 1.5,
-        'gyroZ': 8.0,
-        'accelX': 0.4,
+        'gyroX': 8.0,
+        'accelZ': 0.4,
         'accelY': 0.1,
-        'accelZ': 9.81,
+        'accelX': 9.81,
         'spd': 45,
         'lat': baseLat + 0.012,
         'lng': baseLng + 0.012
       },
       {
-        'gyroX': 2.5,
+        'gyroZ': 2.5,
         'gyroY': 2.0,
-        'gyroZ': 10.0,
-        'accelX': 0.3,
+        'gyroX': 10.0,
+        'accelZ': 0.3,
         'accelY': 0.1,
-        'accelZ': 9.80,
+        'accelX': 9.80,
         'spd': 55,
         'lat': baseLat + 0.013,
         'lng': baseLng + 0.013
       },
       {
-        'gyroX': 3.0,
+        'gyroZ': 3.0,
         'gyroY': 2.5,
-        'gyroZ': 12.0,
-        'accelX': 0.2,
+        'gyroX': 12.0,
+        'accelZ': 0.2,
         'accelY': 0.2,
-        'accelZ': 9.80,
+        'accelX': 9.80,
         'spd': 60,
         'lat': baseLat + 0.014,
         'lng': baseLng + 0.014
       },
-      // 15-17: RISKY TURN (|gyroZ| 170)
+      // 15-17: RISKY TURN (|gyroX| 170)
       {
-        'gyroX': 9.0,
+        'gyroZ': 9.0,
         'gyroY': 8.0,
-        'gyroZ': 170.0,
-        'accelX': 0.5,
+        'gyroX': 170.0,
+        'accelZ': 0.5,
         'accelY': 2.2,
-        'accelZ': 9.78,
+        'accelX': 9.78,
         'spd': 60,
         'lat': baseLat + 0.015,
         'lng': baseLng + 0.015
       },
       {
-        'gyroX': 9.5,
+        'gyroZ': 9.5,
         'gyroY': 8.5,
-        'gyroZ': 175.0,
-        'accelX': 0.5,
+        'gyroX': 175.0,
+        'accelZ': 0.5,
         'accelY': 2.5,
-        'accelZ': 9.78,
+        'accelX': 9.78,
         'spd': 58,
         'lat': baseLat + 0.016,
         'lng': baseLng + 0.016
       },
       {
-        'gyroX': 8.0,
+        'gyroZ': 8.0,
         'gyroY': 7.0,
-        'gyroZ': 160.0,
-        'accelX': 0.4,
+        'gyroX': 160.0,
+        'accelZ': 0.4,
         'accelY': 2.0,
-        'accelZ': 9.79,
+        'accelX': 9.79,
         'spd': 55,
         'lat': baseLat + 0.017,
         'lng': baseLng + 0.017
       },
       // 18-22: normal
       {
-        'gyroX': 2.5,
+        'gyroZ': 2.5,
         'gyroY': 2.0,
-        'gyroZ': 10.0,
-        'accelX': 0.2,
+        'gyroX': 10.0,
+        'accelZ': 0.2,
         'accelY': 0.2,
-        'accelZ': 9.81,
+        'accelX': 9.81,
         'spd': 55,
         'lat': baseLat + 0.018,
         'lng': baseLng + 0.018
       },
       {
-        'gyroX': 2.0,
+        'gyroZ': 2.0,
         'gyroY': 1.5,
-        'gyroZ': 9.0,
-        'accelX': 0.1,
+        'gyroX': 9.0,
+        'accelZ': 0.1,
         'accelY': 0.1,
-        'accelZ': 9.81,
+        'accelX': 9.81,
         'spd': 58,
         'lat': baseLat + 0.019,
         'lng': baseLng + 0.019
       },
       {
-        'gyroX': 2.0,
+        'gyroZ': 2.0,
         'gyroY': 1.0,
-        'gyroZ': 7.0,
-        'accelX': 0.1,
+        'gyroX': 7.0,
+        'accelZ': 0.1,
         'accelY': 0.1,
-        'accelZ': 9.81,
+        'accelX': 9.81,
         'spd': 60,
         'lat': baseLat + 0.020,
         'lng': baseLng + 0.020
       },
       {
-        'gyroX': 3.0,
+        'gyroZ': 3.0,
         'gyroY': 2.0,
-        'gyroZ': 12.0,
-        'accelX': 0.2,
+        'gyroX': 12.0,
+        'accelZ': 0.2,
         'accelY': 0.2,
-        'accelZ': 9.80,
+        'accelX': 9.80,
         'spd': 62,
         'lat': baseLat + 0.021,
         'lng': baseLng + 0.021
       },
       {
-        'gyroX': 2.5,
+        'gyroZ': 2.5,
         'gyroY': 2.0,
-        'gyroZ': 10.0,
-        'accelX': 0.2,
+        'gyroX': 10.0,
+        'accelZ': 0.2,
         'accelY': 0.1,
-        'accelZ': 9.81,
+        'accelX': 9.81,
         'spd': 62,
         'lat': baseLat + 0.022,
         'lng': baseLng + 0.022
       },
-      // 23-24: SHARP TURN left (gyroZ -120)
+      // 23-24: SHARP TURN left (gyroX -120)
       {
-        'gyroX': 6.0,
+        'gyroZ': 6.0,
         'gyroY': 5.0,
-        'gyroZ': -120.0,
-        'accelX': 0.3,
+        'gyroX': -120.0,
+        'accelZ': 0.3,
         'accelY': -1.4,
-        'accelZ': 9.80,
+        'accelX': 9.80,
         'spd': 55,
         'lat': baseLat + 0.023,
         'lng': baseLng + 0.023
       },
       {
-        'gyroX': 6.5,
+        'gyroZ': 6.5,
         'gyroY': 5.5,
-        'gyroZ': -125.0,
-        'accelX': 0.3,
+        'gyroX': -125.0,
+        'accelZ': 0.3,
         'accelY': -1.5,
-        'accelZ': 9.80,
+        'accelX': 9.80,
         'spd': 52,
         'lat': baseLat + 0.024,
         'lng': baseLng + 0.024
       },
       // 25-29: normal
       {
-        'gyroX': 2.0,
+        'gyroZ': 2.0,
         'gyroY': 1.5,
-        'gyroZ': 9.0,
-        'accelX': 0.2,
+        'gyroX': 9.0,
+        'accelZ': 0.2,
         'accelY': 0.1,
-        'accelZ': 9.81,
+        'accelX': 9.81,
         'spd': 55,
         'lat': baseLat + 0.025,
         'lng': baseLng + 0.025
       },
       {
-        'gyroX': 2.5,
+        'gyroZ': 2.5,
         'gyroY': 2.0,
-        'gyroZ': 10.0,
-        'accelX': 0.2,
+        'gyroX': 10.0,
+        'accelZ': 0.2,
         'accelY': 0.1,
-        'accelZ': 9.80,
+        'accelX': 9.80,
         'spd': 58,
         'lat': baseLat + 0.026,
         'lng': baseLng + 0.026
       },
       {
-        'gyroX': 2.0,
+        'gyroZ': 2.0,
         'gyroY': 1.5,
-        'gyroZ': 8.0,
-        'accelX': 0.1,
+        'gyroX': 8.0,
+        'accelZ': 0.1,
         'accelY': 0.1,
-        'accelZ': 9.81,
+        'accelX': 9.81,
         'spd': 60,
         'lat': baseLat + 0.027,
         'lng': baseLng + 0.027
       },
       {
-        'gyroX': 2.5,
+        'gyroZ': 2.5,
         'gyroY': 2.0,
-        'gyroZ': 11.0,
-        'accelX': 0.1,
+        'gyroX': 11.0,
+        'accelZ': 0.1,
         'accelY': 0.1,
-        'accelZ': 9.81,
+        'accelX': 9.81,
         'spd': 62,
         'lat': baseLat + 0.028,
         'lng': baseLng + 0.028
       },
       {
-        'gyroX': 3.0,
+        'gyroZ': 3.0,
         'gyroY': 2.5,
-        'gyroZ': 13.0,
-        'accelX': 0.2,
+        'gyroX': 13.0,
+        'accelZ': 0.2,
         'accelY': 0.2,
-        'accelZ': 9.80,
+        'accelX': 9.80,
         'spd': 62,
         'lat': baseLat + 0.029,
         'lng': baseLng + 0.029
       },
       // 30-31: EMERGENCY BRAKE (-5 g)
       {
-        'gyroX': 5.0,
+        'gyroZ': 5.0,
         'gyroY': 4.0,
-        'gyroZ': 20.0,
-        'accelX': -5.0,
+        'gyroX': 20.0,
+        'accelZ': -5.0,
         'accelY': 0.2,
-        'accelZ': 9.80,
+        'accelX': 9.80,
         'spd': 62,
         'lat': baseLat + 0.030,
         'lng': baseLng + 0.030
       },
       {
-        'gyroX': 4.0,
+        'gyroZ': 4.0,
         'gyroY': 3.0,
-        'gyroZ': 15.0,
-        'accelX': -4.0,
+        'gyroX': 15.0,
+        'accelZ': -4.0,
         'accelY': 0.2,
-        'accelZ': 9.80,
+        'accelX': 9.80,
         'spd': 30,
         'lat': baseLat + 0.031,
         'lng': baseLng + 0.031
       },
       // 32-34: slow recovery
       {
-        'gyroX': 2.0,
+        'gyroZ': 2.0,
         'gyroY': 1.5,
-        'gyroZ': 6.0,
-        'accelX': 0.3,
+        'gyroX': 6.0,
+        'accelZ': 0.3,
         'accelY': 0.1,
-        'accelZ': 9.81,
+        'accelX': 9.81,
         'spd': 32,
         'lat': baseLat + 0.032,
         'lng': baseLng + 0.032
       },
       {
-        'gyroX': 2.0,
+        'gyroZ': 2.0,
         'gyroY': 1.0,
-        'gyroZ': 5.0,
-        'accelX': 0.4,
+        'gyroX': 5.0,
+        'accelZ': 0.4,
         'accelY': 0.1,
-        'accelZ': 9.81,
+        'accelX': 9.81,
         'spd': 38,
         'lat': baseLat + 0.033,
         'lng': baseLng + 0.033
       },
       {
-        'gyroX': 2.5,
+        'gyroZ': 2.5,
         'gyroY': 1.5,
-        'gyroZ': 8.0,
-        'accelX': 0.3,
+        'gyroX': 8.0,
+        'accelZ': 0.3,
         'accelY': 0.1,
-        'accelZ': 9.81,
+        'accelX': 9.81,
         'spd': 45,
         'lat': baseLat + 0.034,
         'lng': baseLng + 0.034
       },
       // 35-37: HIGH SPEED (85 km/h)
       {
-        'gyroX': 3.0,
+        'gyroZ': 3.0,
         'gyroY': 2.0,
-        'gyroZ': 12.0,
-        'accelX': 0.5,
+        'gyroX': 12.0,
+        'accelZ': 0.5,
         'accelY': 0.2,
-        'accelZ': 9.80,
+        'accelX': 9.80,
         'spd': 75,
         'lat': baseLat + 0.035,
         'lng': baseLng + 0.035
       },
       {
-        'gyroX': 3.5,
+        'gyroZ': 3.5,
         'gyroY': 2.5,
-        'gyroZ': 14.0,
-        'accelX': 0.4,
+        'gyroX': 14.0,
+        'accelZ': 0.4,
         'accelY': 0.2,
-        'accelZ': 9.80,
+        'accelX': 9.80,
         'spd': 82,
         'lat': baseLat + 0.036,
         'lng': baseLng + 0.036
       },
       {
-        'gyroX': 4.0,
+        'gyroZ': 4.0,
         'gyroY': 3.0,
-        'gyroZ': 16.0,
-        'accelX': 0.3,
+        'gyroX': 16.0,
+        'accelZ': 0.3,
         'accelY': 0.3,
-        'accelZ': 9.79,
+        'accelX': 9.79,
         'spd': 85,
         'lat': baseLat + 0.037,
         'lng': baseLng + 0.037
       },
       // 38-39: arrive, slow down
       {
-        'gyroX': 2.0,
+        'gyroZ': 2.0,
         'gyroY': 1.5,
-        'gyroZ': 8.0,
-        'accelX': -0.8,
+        'gyroX': 8.0,
+        'accelZ': -0.8,
         'accelY': 0.1,
-        'accelZ': 9.81,
+        'accelX': 9.81,
         'spd': 40,
         'lat': baseLat + 0.038,
         'lng': baseLng + 0.038
       },
       {
-        'gyroX': 1.0,
+        'gyroZ': 1.0,
         'gyroY': 1.0,
-        'gyroZ': 4.0,
-        'accelX': -1.0,
+        'gyroX': 4.0,
+        'accelZ': -1.0,
         'accelY': 0.1,
-        'accelZ': 9.81,
+        'accelX': 9.81,
         'spd': 15,
         'lat': baseLat + 0.039,
         'lng': baseLng + 0.039
@@ -1068,35 +1110,27 @@ class _Member3PageState extends State<Member3Page>
     double lng,
     String eventType, // 'risky_turn', 'sharp_turn', 'harsh_brake'
   ) async {
-    // Get shared rideId from RideSessionProvider
-    final rideProvider =
-        Provider.of<RideSessionProvider>(context, listen: false);
-
-    // Only save if ride is active and rideId exists
-    if (!rideProvider.isRideActive || rideProvider.currentRideId == null) {
-      debugPrint("⚠️ Risky event detected but no active ride - not saving");
-      return;
-    }
-
     if (_isSaving) return;
 
+    final now = DateTime.now();
+    final timePassed = _lastSavedTime == null ||
+        now.difference(_lastSavedTime!) >= _saveInterval;
+
+    // Save if time interval passed OR this reading is risky
+    if (!timePassed && !isRiskyThisReading) return;
+
+    setState(() => _isSaving = true);
+
     try {
+
       final now = DateTime.now();
-      final turnRate = imu['gyroZ']?.abs() ?? 0.0;
+      final turnRate = imu['gyroX']?.abs() ?? 0.0;
       final eventData = {
         // Ride identification (using shared rideId from provider)
         "rideId": rideProvider.currentRideId,
         "eventNumber": _riskyEventsSavedCount + 1,
-
-        // Timestamp
         "timestamp": now.toIso8601String(),
         "createdAt": FieldValue.serverTimestamp(),
-
-        // Event classification
-        "eventType": eventType,
-        "severity": eventType == 'risky_turn' ? 'high' : 'moderate',
-
-        // IMU data at event
         "gyroX": imu['gyroX'],
         "gyroY": imu['gyroY'],
         "gyroZ": imu['gyroZ'],
@@ -1104,41 +1138,26 @@ class _Member3PageState extends State<Member3Page>
         "accelX": imu['accelX'],
         "accelY": imu['accelY'],
         "accelZ": imu['accelZ'],
-
-        // GPS location of event
+        "speedKmh": speed,
         "latitude": lat,
         "longitude": lng,
         "location": GeoPoint(lat, lng),
-        "speedKmh": speed,
-
-        // Running totals at this point
+        "turnStatus":
+            currentTurnStatus, // still use latest UI value, but we know it's risky
+        "turnRateDegPerSec": imu['gyroZ']!.abs(),
         "sharpTurnsTotal": sharpTurnCount,
         "riskyTurnsTotal": riskyTurnCount,
         "totalDistanceKm": totalDistanceKm,
+        "deviceName": targetDeviceName,
+        "isRiskyEvent": isRiskyThisReading, // ← more accurate
       };
 
-      // Save to Firebase 'risky_events' collection
-      final docRef = await _firestore.collection("risky_events").add(eventData);
+      await _firestore.collection("helmet_live_readings").add(data);
 
-      // Also keep in memory for end-of-ride visualization
-      _riskyEventsThisRide.add({
-        ...eventData,
-        "docId": docRef.id,
-      });
-
-      _riskyEventsSavedCount++;
-
-      setState(() {
-        _isSaving = false;
-      });
-
-      debugPrint(
-          "🚨 RISKY EVENT #$_riskyEventsSavedCount saved → Type: $eventType | Turn: ${turnRate.toStringAsFixed(1)}°/s | ID: ${docRef.id}");
+      _lastSavedTime = now;
+      debugPrint("Live reading saved → Risky: $isRiskyThisReading");
     } catch (e) {
-      debugPrint("❌ Firebase risky event save error: $e");
-      setState(() {
-        _isSaving = false;
-      });
+      debugPrint("Firestore save error: $e");
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
@@ -1177,6 +1196,30 @@ class _Member3PageState extends State<Member3Page>
                 "docId": doc.id,
               })
           .toList();
+    } catch (e) {
+      debugPrint("Error loading risky events: $e");
+      return [];
+    }
+  }
+
+  // Get all risky events for current ride (for visualization)
+  List<Map<String, dynamic>> getRiskyEventsForVisualization() {
+    return List.from(_riskyEventsThisRide);
+  }
+
+  // Load risky events from Firebase for a specific ride
+  Future<List<Map<String, dynamic>>> loadRiskyEventsForRide(String rideId) async {
+    try {
+      final snapshot = await _firestore
+          .collection("risky_events")
+          .where("rideId", isEqualTo: rideId)
+          .orderBy("timestamp")
+          .get();
+      
+      return snapshot.docs.map((doc) => {
+        ...doc.data(),
+        "docId": doc.id,
+      }).toList();
     } catch (e) {
       debugPrint("Error loading risky events: $e");
       return [];
@@ -1285,66 +1328,30 @@ class _Member3PageState extends State<Member3Page>
                   ],
                 ),
 
-          // Risky Events Indicator (shows only when events detected)
-          if (sharpTurnCount > 0 || riskyTurnCount > 0)
-            Positioned(
+          // Saving indicator
+          if (_isSaving)
+            const Positioned(
               bottom: 24,
               right: 24,
               child: Card(
-                color: _isSaving
-                    ? Colors.orange[700]
-                    : (_riskyEventsSavedCount > 0
-                        ? Colors.red[700]
-                        : Colors.green[700]),
-                elevation: 6,
+                color: Colors.black87,
                 child: Padding(
-                  padding:
-                      const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+                  padding: EdgeInsets.symmetric(horizontal: 16, vertical: 10),
                   child: Row(
                     mainAxisSize: MainAxisSize.min,
                     children: [
-                      if (_isSaving)
-                        const SizedBox(
-                          width: 18,
-                          height: 18,
-                          child: CircularProgressIndicator(
-                            strokeWidth: 2.5,
-                            color: Colors.white,
-                          ),
-                        )
-                      else
-                        const Icon(Icons.warning_amber_rounded,
-                            color: Colors.white, size: 20),
-                      const SizedBox(width: 12),
-                      Consumer<RideSessionProvider>(
-                        builder: (context, rideProvider, child) {
-                          final totalEvents = sharpTurnCount + riskyTurnCount;
-                          return Column(
-                            crossAxisAlignment: CrossAxisAlignment.start,
-                            mainAxisSize: MainAxisSize.min,
-                            children: [
-                              Text(
-                                _isSaving
-                                    ? "Saving risky event..."
-                                    : "🚨 $_riskyEventsSavedCount Risky Events",
-                                style: const TextStyle(
-                                  color: Colors.white,
-                                  fontSize: 13,
-                                  fontWeight: FontWeight.bold,
-                                ),
-                              ),
-                              if (rideProvider.currentRideId != null &&
-                                  !_isSaving)
-                                Text(
-                                  "Ride: ${rideProvider.currentRideId!.substring(0, min(8, rideProvider.currentRideId!.length))}...",
-                                  style: TextStyle(
-                                    color: Colors.white.withOpacity(0.8),
-                                    fontSize: 10,
-                                  ),
-                                ),
-                            ],
-                          );
-                        },
+                      SizedBox(
+                        width: 18,
+                        height: 18,
+                        child: CircularProgressIndicator(
+                          strokeWidth: 2.5,
+                          color: Colors.white,
+                        ),
+                      ),
+                      SizedBox(width: 12),
+                      Text(
+                        "Saving...",
+                        style: TextStyle(color: Colors.white, fontSize: 13),
                       ),
                     ],
                   ),

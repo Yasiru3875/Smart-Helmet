@@ -73,11 +73,28 @@ class BluetoothManager extends ChangeNotifier {
         return "$deviceName not paired. Please pair the device in system settings.";
       }
 
-      // Add a small delay before connecting (helps with ESP32)
-      await Future.delayed(const Duration(milliseconds: 500));
+      BluetoothConnection? connection;
+      int retryCount = 0;
+      const int maxRetries = 3;
 
-      // Create connection
-      final connection = await BluetoothConnection.toAddress(target.address);
+      while (connection == null && retryCount < maxRetries) {
+        try {
+          // Add a delay before connecting (increases on retries to give ESP32 time to recover)
+          await Future.delayed(Duration(milliseconds: 500 + (retryCount * 1000)));
+          connection = await BluetoothConnection.toAddress(target.address);
+        } catch (e) {
+          retryCount++;
+          debugPrint("Connection attempt $retryCount for $deviceName failed: $e");
+          if (retryCount >= maxRetries) {
+            throw Exception("Failed to connect after $maxRetries attempts: $e");
+          }
+        }
+      }
+
+      if (connection == null) {
+        throw Exception("Could not establish connection to $deviceName.");
+      }
+
       _connections[deviceName] = connection;
       _connectionStatus[deviceName] = true;
 

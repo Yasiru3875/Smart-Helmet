@@ -276,65 +276,11 @@ class _Member4PageState extends State<Member4Page> {
         ),
       );
 
-      // 3.1 Add START and END markers
-      markers.add(
-        Marker(
-          markerId: const MarkerId('event_start'),
-          position: routePoints.first,
-          icon: BitmapDescriptor.defaultMarkerWithHue(BitmapDescriptor.hueGreen),
-          infoWindow: InfoWindow(
-            title: 'START',
-            snippet: journey.startLocation ?? 'Start Location',
-          ),
-        ),
-      );
+      // 3.1 Removed START and END markers to avoid confusion with current journey destination
+      // 3.2 Removed event markers (turn/braking) - only risk circles will be shown for fetched zones
+      // This keeps the map clean and rider focused on current destination
 
-      markers.add(
-        Marker(
-          markerId: const MarkerId('event_end'),
-          position: routePoints.last,
-          icon: BitmapDescriptor.defaultMarkerWithHue(BitmapDescriptor.hueRed),
-          infoWindow: InfoWindow(
-            title: 'END',
-            snippet: journey.destination ?? 'Destination',
-          ),
-        ),
-      );
-
-      // 4. Add Markers for events
-      for (var i = 0; i < journey.turnEvents.length; i++) {
-        final event = journey.turnEvents[i];
-        markers.add(
-          Marker(
-            markerId: MarkerId('event_turn_$i'),
-            position: LatLng(event.latitude, event.longitude),
-            icon: BitmapDescriptor.defaultMarkerWithHue(
-              event.severity == 'risky' ? BitmapDescriptor.hueOrange : BitmapDescriptor.hueRed,
-            ),
-            infoWindow: InfoWindow(
-              title: '${event.severity.toUpperCase()} Turn',
-              snippet: 'Rate: ${event.turnRate.toStringAsFixed(1)}',
-            ),
-          ),
-        );
-      }
-
-      for (var i = 0; i < journey.brakingEvents.length; i++) {
-        final event = journey.brakingEvents[i];
-        markers.add(
-          Marker(
-            markerId: MarkerId('event_brake_$i'),
-            position: LatLng(event.latitude, event.longitude),
-            icon: BitmapDescriptor.defaultMarkerWithHue(BitmapDescriptor.hueYellow),
-            infoWindow: InfoWindow(
-              title: '${event.severity.toUpperCase()} Braking',
-              snippet: 'Decel: ${event.deceleration.toStringAsFixed(1)} m/s²',
-            ),
-          ),
-        );
-      }
-
-      // 5. Center Camera to encompass EVERYTHING
+      // 4. Center Camera to encompass EVERYTHING
       _fitMapToAllRoutes();
     }
 
@@ -344,8 +290,7 @@ class _Member4PageState extends State<Member4Page> {
     // Trigger UI refresh explicitly
     if (mounted) setState(() {});
 
-    // 7. Speak the fetched tips
-    _speakSafetyTips();
+    // 7. Voice warnings only when near danger zones (removed startup voice)
   }
 
   void _fitMapToPoints(List<LatLng> points) {
@@ -1352,11 +1297,10 @@ class _Member4PageState extends State<Member4Page> {
         if (highRiskCount > 0) {
           safetyTips.add(
               'There are $highRiskCount high-risk segments - proceed with caution');
-          await flutterTts
-              .speak('Caution: $highRiskCount high-risk segments ahead.');
+          // Voice warnings only when near danger zones (removed startup voice)
         } else {
           safetyTips.add('All segments appear safe');
-          await flutterTts.speak('Route is safe. Enjoy your ride.');
+          // Voice warnings only when near danger zones (removed startup voice)
         }
       } else if (_predictedRisk == null && !_historyDataLoaded) {
         safetyTips.add('No AI risk prediction available');
@@ -1369,7 +1313,7 @@ class _Member4PageState extends State<Member4Page> {
     if (!_historyDataLoaded) {
       generateSafetyTips();
       if (mounted) setState(() {});
-      _speakSafetyTips();
+      // Voice warnings only when near danger zones (removed startup voice)
     } else {
       print("[DangerZone] analyzeRoute FINISHED but skipped tips because history is loaded");
       if (mounted) setState(() {});
@@ -1444,10 +1388,11 @@ class _Member4PageState extends State<Member4Page> {
   }
 
   void _speakSafetyTips() async {
-    if (safetyTips.isNotEmpty) {
-      String tipsText = safetyTips.join('. ');
-      await flutterTts.speak(tipsText);
-    }
+    // Voice warnings only when near danger zones - disabled startup voice
+    // if (safetyTips.isNotEmpty) {
+    //   String tipsText = safetyTips.join('. ');
+    //   await flutterTts.speak(tipsText);
+    // }
   }
 
   @override
