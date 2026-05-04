@@ -20,9 +20,9 @@ import 'package:smart_helmet_app/providers/sensor_data_provider.dart';
 import 'package:smart_helmet_app/providers/ride_session_provider.dart';
 import 'package:smart_helmet_app/providers/emotion_provider.dart';
 import '../../../../services/auth_service.dart';
-import '../../../../providers/user_profile_provider.dart'; // 🆕 dynamic profile inputs
-import '../../../../providers/alert_engine.dart'; // 🆕 30s sustained risk engine
-import '../../../../services/emotion_aggregator_service.dart'; // 🆕 emotion analytics
+import '../../../../providers/user_profile_provider.dart'; // dynamic profile inputs
+import '../../../../providers/alert_engine.dart'; // 30s sustained risk engine
+import '../../../../services/emotion_aggregator_service.dart'; // emotion analytics
 
 import 'weekly_report_page.dart';
 
@@ -1161,29 +1161,30 @@ class _Member1PageState extends State<Member1Page>
       child: Column(
         children: [
           Row(
-            mainAxisAlignment: MainAxisAlignment.spaceBetween,
             children: [
-              const Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Text(
-                    "Heart Attack Risk Prediction",
-                    style: TextStyle(
-                      fontSize: 16,
-                      fontWeight: FontWeight.w900,
-                      color: Color(0xFF1C1C1E),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    const Text(
+                      "Heart Attack Risk Prediction",
+                      style: TextStyle(
+                        fontSize: 16,
+                        fontWeight: FontWeight.w900,
+                        color: Color(0xFF1C1C1E),
+                      ),
                     ),
-                  ),
-                  SizedBox(height: 4),
-                  Text(
-                    "AI Analysis via TFLite Model",
-                    style: TextStyle(
-                      fontSize: 12,
-                      color: Colors.grey,
-                      fontWeight: FontWeight.w500,
+                    const SizedBox(height: 4),
+                    const Text(
+                      "AI Analysis via TFLite Model",
+                      style: TextStyle(
+                        fontSize: 12,
+                        color: Colors.grey,
+                        fontWeight: FontWeight.w500,
+                      ),
                     ),
-                  ),
-                ],
+                  ],
+                ),
               ),
               Container(
                 padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 6),
@@ -1769,11 +1770,11 @@ class _Member1PageState extends State<Member1Page>
           Text("EEG Power Bands".toUpperCase(),
               style: TextStyle(color: Colors.grey.shade600, fontSize: 10, fontWeight: FontWeight.w900, letterSpacing: 0.5)),
           const SizedBox(height: 16),
-          _buildBandBar("Alpha (Relax)", bands['Alpha'] ?? 0, const Color(0xFF00C7BE)),
-          _buildBandBar("Beta (Focus)", bands['Beta'] ?? 0, const Color(0xFF007AFF)),
-          _buildBandBar("Theta (Dream)", bands['Theta'] ?? 0, const Color(0xFF5856D6)),
-          _buildBandBar("Delta (Sleep)", bands['Delta'] ?? 0, const Color(0xFFFF2D55)),
-          _buildBandBar("Gamma (Insight)", bands['Gamma'] ?? 0, const Color(0xFFFF9500)),
+          _buildBandBar("Relax", bands['Alpha'] ?? 0, const Color(0xFF00C7BE)),
+          _buildBandBar("Active", bands['Beta'] ?? 0, const Color(0xFF007AFF)),
+          _buildBandBar("Meditation", bands['Theta'] ?? 0, const Color(0xFF5856D6)),
+          _buildBandBar("Sleep", bands['Delta'] ?? 0, const Color(0xFFFF2D55)),
+          _buildBandBar("Peak Focus", bands['Gamma'] ?? 0, const Color(0xFFFF9500)),
         ],
       ),
     );
@@ -2161,6 +2162,10 @@ class _Member1PageState extends State<Member1Page>
       
       // Then fetch the last 7 days
       final data = await _emotionAggregator.getLast7Days(uid);
+      debugPrint('📊 Emotion trend data loaded: ${data.length} days');
+      for (var d in data) {
+        debugPrint('  Date: ${d['date']}, Stress: ${d['avgStressScore']}, Count: ${d['readingCount']}');
+      }
       setState(() {
         _emotionTrendData = data;
         _emotionDataLoading = false;
@@ -2321,6 +2326,8 @@ class _Member1PageState extends State<Member1Page>
                       final stress = data['avgStressScore'] as double?;
                       final hasData = data['readingCount'] > 0;
                       
+                      debugPrint('📊 Chart bar $i: stress=$stress, hasData=$hasData, readingCount=${data['readingCount']}');
+                      
                       if (stress == null || !hasData) {
                         return Expanded(
                           child: Container(
@@ -2341,6 +2348,8 @@ class _Member1PageState extends State<Member1Page>
                           : stress < 0.6
                               ? const Color(0xFFFF9500) // Orange
                               : const Color(0xFFFF3B30); // Red
+                      
+                      debugPrint('  → height=$height, color=$color');
                       
                       return Expanded(
                         child: Container(
@@ -2387,7 +2396,10 @@ class _Member1PageState extends State<Member1Page>
             width: double.infinity,
             child: TextButton.icon(
               onPressed: () {
-                Navigator.pushNamed(context, '/weekly_report');
+                Navigator.push(
+                  context,
+                  MaterialPageRoute(builder: (_) => const WeeklyReportPage()),
+                );
               },
               icon: const Icon(Icons.analytics_rounded, size: 16),
               label: const Text(
