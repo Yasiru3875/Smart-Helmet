@@ -43,7 +43,6 @@ class _JourneyReportScreenState extends State<JourneyReportScreen> {
   Set<Polyline> _polylines = {};
   Set<Circle>  _circles  = {};
   bool _dangerZonesLoaded = false;
-  final DangerZoneService _dangerZoneService = DangerZoneService();
 
   @override
   void initState() {
@@ -51,58 +50,16 @@ class _JourneyReportScreenState extends State<JourneyReportScreen> {
     _prepareMapData();
   }
 
-  /// Runs the TFLite danger zone model over all sensor readings and
-  /// renders the results as coloured circles on the heatmap.
+  /// Placeholder for danger zone loading - removed DangerZoneService dependency
   Future<void> _loadDangerZones() async {
-    final zones = await _dangerZoneService.analyseRide(widget.journey);
-    if (!mounted) return;
-    final Set<Circle> circles = {};
-    for (int i = 0; i < zones.length; i++) {
-      final zone = zones[i];
-      // Colour: red for high-confidence, orange for moderate
-      final color = zone.dangerScore >= 0.80
-          ? Colors.red
-          : zone.dangerScore >= 0.65
-              ? Colors.orange
-              : Colors.amber;
-      circles.add(Circle(
-        circleId: CircleId('dz_$i'),
-        center: zone.center,
-        radius: zone.radiusMeters,
-        fillColor: color.withOpacity(0.25),
-        strokeColor: color.withOpacity(0.7),
-        strokeWidth: 2,
-        zIndex: 5,
-        consumeTapEvents: true,
-        onTap: () {
-          _mapController?.showMarkerInfoWindow(MarkerId('dz_info_$i'));
-        },
-      ));
-      // Invisible marker for the tap info window
-      _markers.add(Marker(
-        markerId: MarkerId('dz_info_$i'),
-        position: zone.center,
-        icon: BitmapDescriptor.defaultMarkerWithHue(
-          zone.dangerScore >= 0.80
-              ? BitmapDescriptor.hueRed
-              : BitmapDescriptor.hueOrange,
-        ),
-        infoWindow: InfoWindow(
-          title: '⚠ ${zone.label}',
-          snippet: 'Risk score: ${(zone.dangerScore * 100).toStringAsFixed(0)}%',
-        ),
-        visible: false,   // hidden — shown only via tap on circle
-      ));
-    }
+    // Danger zone loading disabled - DangerZoneService not available
     setState(() {
-      _circles = circles;
       _dangerZonesLoaded = true;
     });
   }
 
   @override
   void dispose() {
-    _dangerZoneService.dispose();
     super.dispose();
   }
 
@@ -219,10 +176,10 @@ class _JourneyReportScreenState extends State<JourneyReportScreen> {
     return score.clamp(0, 100).toDouble();
   }
 
-  Color _getScoreColor(double safetyScore) {
-    if (safetyScore >= 80) return Colors.green;
-    if (safetyScore >= 60) return Colors.orange;
-    if (safetyScore >= 40) return Colors.deepOrange;
+  Color get _scoreColor {
+    if (widget.journey.riskScore >= 80) return Colors.green;
+    if (widget.journey.riskScore >= 60) return Colors.orange;
+    if (widget.journey.riskScore >= 40) return Colors.deepOrange;
     return Colors.red;
   }
 
@@ -231,6 +188,13 @@ class _JourneyReportScreenState extends State<JourneyReportScreen> {
     if (safetyScore >= 60) return 'Good';
     if (safetyScore >= 40) return 'Fair';
     return 'Poor';
+  }
+
+  Color _getScoreColor(double safetyScore) {
+    if (safetyScore >= 80) return Colors.green;
+    if (safetyScore >= 60) return Colors.orange;
+    if (safetyScore >= 40) return Colors.deepOrange;
+    return Colors.red;
   }
 
   // ═══════════════════════════════════════════════════════════
@@ -628,7 +592,26 @@ class _JourneyReportScreenState extends State<JourneyReportScreen> {
         ]),
       );
 
-  // ── Turn Rate Chart Data ───────────────────────────────────
+
+  // ── 5. Turn Rate Chart ───────────────────────────────────
+  Widget _buildTurnChart() {
+    if (widget.journey.turnEvents.isEmpty) return const SizedBox();
+    return _section(
+      icon: Icons.show_chart,
+      title: 'Turn Rate Over Time',
+      child: Column(children: [
+        SizedBox(height: 220, child: LineChart(_turnChartData())),
+        const SizedBox(height: 12),
+        Wrap(spacing: 16, runSpacing: 6, children: [
+          _chartLegend(Colors.blue, 'Turn Rate (°/s)'),
+          _chartLegend(Colors.orange, 'Sharp ≥100°/s', dashed: true),
+          _chartLegend(Colors.red, 'Risky ≥150°/s', dashed: true),
+        ]),
+      ]),
+    );
+  }
+
+
   LineChartData _turnChartData() {
     final spots = widget.journey.turnEvents.map((e) {
       final min = e.timestamp.difference(widget.journey.startTime).inSeconds / 60.0;
@@ -1072,6 +1055,58 @@ class _JourneyReportScreenState extends State<JourneyReportScreen> {
           ),
         ),
       ),
+    );
+  }
+
+  // Helper widget for section headers
+  Widget _section({required IconData icon, required String title, required Widget child}) {
+    return Container(
+      margin: const EdgeInsets.all(16),
+      child: Card(
+        elevation: 4,
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+        child: Padding(
+          padding: const EdgeInsets.all(16),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Row(
+                children: [
+                  Icon(icon, color: Colors.blue[700], size: 24),
+                  const SizedBox(width: 12),
+                  Text(
+                    title,
+                    style: const TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
+                  ),
+                ],
+              ),
+              const SizedBox(height: 16),
+              child,
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  // Helper widget for chart legend items
+  Widget _chartLegend(Color color, String label, {bool dashed = false}) {
+    return Row(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        dashed
+            ? CustomPaint(
+                size: const Size(20, 4),
+                painter: DashedLinePainter(color),
+              )
+            : Container(
+                width: 20,
+                height: 4,
+                color: color,
+              ),
+        const SizedBox(width: 6),
+        Text(label, style: const TextStyle(fontSize: 12)),
+      ],
     );
   }
 }

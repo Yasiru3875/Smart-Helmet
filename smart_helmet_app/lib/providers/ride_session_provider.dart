@@ -7,6 +7,7 @@ class RideSessionProvider with ChangeNotifier {
   String? _currentRideId;
   GeoPoint? _startLocation;
   GeoPoint? _endLocation;
+  GeoPoint? _destinationLocation; // Added destination coordinates
   String? _destinationName;
 
   DateTime? _startTime;
@@ -16,6 +17,7 @@ class RideSessionProvider with ChangeNotifier {
   String? get currentRideId => _currentRideId;
   GeoPoint? get startLocation => _startLocation;
   GeoPoint? get endLocation => _endLocation;
+  GeoPoint? get destinationLocation => _destinationLocation; // Added getter
   String? get destinationName => _destinationName;
   DateTime? get startTime => _startTime;
   DateTime? get endTime => _endTime;
@@ -26,6 +28,7 @@ class RideSessionProvider with ChangeNotifier {
     required Position currentPosition,
     required String destination,
     required String userId, // Added userId parameter
+    required GeoPoint destinationLocation, // Added destination coordinates
   }) async {
     final firestore = FirebaseFirestore.instance;
     final rideRef = firestore.collection('rides').doc();
@@ -34,6 +37,7 @@ class RideSessionProvider with ChangeNotifier {
     _startLocation =
         GeoPoint(currentPosition.latitude, currentPosition.longitude);
     _destinationName = destination;
+    _destinationLocation = destinationLocation; // Store destination coordinates
 
     _startTime = DateTime.now();
     _isRideActive = true;
@@ -45,6 +49,7 @@ class RideSessionProvider with ChangeNotifier {
       'startLocation': _startLocation,
       'startTime': FieldValue.serverTimestamp(),
       'destination': destination,
+      'destinationLocation': destinationLocation, // Save destination coordinates
       'status': 'active',
       'createdAt': FieldValue.serverTimestamp(),
     });

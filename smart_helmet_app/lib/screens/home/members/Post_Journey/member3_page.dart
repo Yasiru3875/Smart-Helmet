@@ -57,6 +57,9 @@ class _Member3PageState extends State<Member3Page>
   double leanAngle = 0.0; // Lean angle in degrees
   String currentTurnStatus = "Normal";
   Color statusColor = Colors.green;
+  bool isRiskyThisReading = false; // Added for risk detection
+  int _riskyEventsSavedCount = 0; // Added for tracking
+  final List<Map<String, dynamic>> _riskyEventsThisRide = []; // Added for tracking
 
   // Event Debouncing
   DateTime? _lastEventTime;
@@ -83,8 +86,6 @@ class _Member3PageState extends State<Member3Page>
 // Firestore
   final FirebaseFirestore _firestore = FirebaseFirestore.instance;
   bool _isSaving = false;
-  int _riskyEventsSavedCount = 0;
-  List<Map<String, dynamic>> _riskyEventsThisRide = [];
   DateTime? _lastSavedTime;
   final Duration _saveInterval =
       const Duration(seconds: 1); // ← change this value to control frequency
@@ -1126,6 +1127,7 @@ class _Member3PageState extends State<Member3Page>
       final journeyProvider = Provider.of<JourneyProvider>(context, listen: false);
 
       final now = DateTime.now();
+
       final turnRate = imu['gyroX']?.abs() ?? 0.0;
       final eventData = {
         // Ride identification (using shared rideId from provider)
@@ -1155,9 +1157,9 @@ class _Member3PageState extends State<Member3Page>
       };
 
       await _firestore.collection("helmet_live_readings").add(eventData);
-
       _riskyEventsSavedCount++;
       _riskyEventsThisRide.add(eventData);
+
 
       _lastSavedTime = now;
       debugPrint("Live reading saved → Risky: ${eventType == 'risky_turn'}");
@@ -1166,11 +1168,12 @@ class _Member3PageState extends State<Member3Page>
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
-            content: Text("Failed to save risky event: $e"),
-            backgroundColor: Colors.red,
+            content: Text("Failed to save reading: $e"),
           ),
         );
       }
+    } finally {
+      if (mounted) setState(() => _isSaving = false);
     }
   }
 
@@ -1211,8 +1214,6 @@ class _Member3PageState extends State<Member3Page>
   List<Map<String, dynamic>> getRiskyEventsForVisualization() {
     return List.from(_riskyEventsThisRide);
   }
-
-
 
   @override
   Widget build(BuildContext context) {

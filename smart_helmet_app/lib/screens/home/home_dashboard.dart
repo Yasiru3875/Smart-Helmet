@@ -8,6 +8,7 @@ import 'package:google_maps_flutter/google_maps_flutter.dart';
 import 'package:http/http.dart' as http;
 import 'dart:convert';
 import 'package:provider/provider.dart';
+import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:smart_helmet_app/providers/sensor_data_provider.dart';
 import 'package:smart_helmet_app/providers/ride_session_provider.dart';
 import '../../../../services/auth_service.dart'; // Added
@@ -299,20 +300,23 @@ class _HomeDashboardState extends State<HomeDashboard> {
     final auth = Provider.of<AuthService>(context, listen: false);
     final rideProvider = Provider.of<RideSessionProvider>(context, listen: false);
 
+    // Get route points first to extract destination
+    final selectedRoute = _routes[_selectedRouteIndex];
+    final encodedPolyline = selectedRoute['overview_polyline']['points'];
+    final List<LatLng> routePoints = _decodePolyline(encodedPolyline);
+    final destinationLatLng = routePoints.last;
+
     rideProvider.startNewRide(
       currentPosition: _currentPosition!,
       destination: _destinationController.text.trim(),
       userId: auth.userId ?? 'unknown_user', // Pass real UID
+      destinationLocation: GeoPoint(destinationLatLng.latitude, destinationLatLng.longitude),
     );
 
     // Proceed with journey start (switch tab, etc.)
-    final selectedRoute = _routes[_selectedRouteIndex];
-    final encodedPolyline = selectedRoute['overview_polyline']['points'];
-    final List<LatLng> routePoints = _decodePolyline(encodedPolyline);
-
     widget.onStartJourney(
       start: LatLng(_currentPosition!.latitude, _currentPosition!.longitude),
-      end: routePoints.last,
+      end: destinationLatLng,
       route: routePoints,
       destinationName: _destinationController.text.trim(),
     );

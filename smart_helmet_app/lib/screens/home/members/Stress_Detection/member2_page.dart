@@ -8,6 +8,7 @@ import 'package:tflite_flutter/tflite_flutter.dart';
 import 'package:fl_chart/fl_chart.dart';
 import 'package:provider/provider.dart';
 import 'package:geolocator/geolocator.dart';
+import 'package:flutter_tts/flutter_tts.dart';
 
 import 'thinkgear.dart';
 import '../../../../services/bluetooth_manager.dart';
@@ -81,6 +82,10 @@ class _Member2PageState extends State<Member2Page> {
   Timer? _stressTimer;
   bool showRestAlert = false;
   static const Duration stressPersistenceThreshold = Duration(seconds: 30);
+
+  // Demo stress alert functionality
+  final FlutterTts _tts = FlutterTts();
+  bool _isDemoAlertShowing = false;
 
   // === Enhanced Real-time EEG Waveform ===
   static const int waveformMaxPoints = 600;
@@ -434,6 +439,10 @@ class _Member2PageState extends State<Member2Page> {
   bool _locationServiceEnabled = false;
   LocationPermission _permission = LocationPermission.denied;
 
+  // Distance and time tracking for stress alerts
+  double? _distanceToDestinationKm;
+  String? _estimatedTimeToDestination;
+
 // Add this method (call it in initState)
   Future<void> _startLocationTracking() async {
     bool serviceEnabled = await Geolocator.isLocationServiceEnabled();
@@ -489,7 +498,10 @@ class _Member2PageState extends State<Member2Page> {
       (Position pos) {
         print("Position update → ${pos.latitude.toStringAsFixed(6)}, "
             "${pos.longitude.toStringAsFixed(6)} • acc: ${pos.accuracy}m");
-        if (mounted) setState(() => _currentPosition = pos);
+        if (mounted) {
+          setState(() => _currentPosition = pos);
+          _updateDistanceAndTimeToDestination();
+        }
       },
       onError: (e) => print("Position stream error: $e"),
     );
@@ -500,9 +512,65 @@ class _Member2PageState extends State<Member2Page> {
         desiredAccuracy: LocationAccuracy.medium,
         timeLimit: const Duration(seconds: 6),
       );
-      if (mounted) setState(() => _currentPosition = initial);
+      if (mounted) {
+        setState(() => _currentPosition = initial);
+        _updateDistanceAndTimeToDestination();
+      }
     } catch (e) {
       print("Initial position fetch failed: $e");
+    }
+  }
+
+  // Calculate distance and estimated time to destination
+  void _updateDistanceAndTimeToDestination() {
+    if (_currentPosition == null) return;
+
+    final rideProvider = Provider.of<RideSessionProvider>(context, listen: false);
+    
+    // Only calculate if ride is active and we have destination location
+    if (!rideProvider.isRideActive || rideProvider.destinationLocation == null) {
+      setState(() {
+        _distanceToDestinationKm = null;
+        _estimatedTimeToDestination = null;
+      });
+      return;
+    }
+
+    try {
+      final destination = rideProvider.destinationLocation!;
+      final distanceInMeters = Geolocator.distanceBetween(
+        _currentPosition!.latitude,
+        _currentPosition!.longitude,
+        destination.latitude,
+        destination.longitude,
+      );
+
+      final distanceKm = distanceInMeters / 1000.0;
+      
+      // Estimate time assuming average motorcycle speed of 40 km/h
+      // Adjust based on actual speed if available
+      final avgSpeedKmh = 40.0; // Can be made dynamic
+      final timeInMinutes = (distanceKm / avgSpeedKmh) * 60;
+
+      String timeString;
+      if (timeInMinutes < 1) {
+        timeString = "< 1 min";
+      } else if (timeInMinutes < 60) {
+        timeString = "${timeInMinutes.round()} min";
+      } else {
+        final hours = timeInMinutes ~/ 60;
+        final mins = (timeInMinutes % 60).round();
+        timeString = "${hours}h ${mins}min";
+      }
+
+      setState(() {
+        _distanceToDestinationKm = distanceKm;
+        _estimatedTimeToDestination = timeString;
+      });
+
+      print("Distance to destination: ${distanceKm.toStringAsFixed(2)} km, ETA: $timeString");
+    } catch (e) {
+      print("Error calculating distance/time: $e");
     }
   }
 
@@ -622,8 +690,9 @@ class _Member2PageState extends State<Member2Page> {
       relaxedScore = hybridRelaxed;
     });
 
-    // Persistence alert
-    if (hybridStress > 0.7) {
+    // Persistence alert - only trigger if ride is active
+    final rideProvider = Provider.of<RideSessionProvider>(context, listen: false);
+    if (hybridStress > 0.7 && rideProvider.isRideActive) {
       _stressTimer ??= Timer(stressPersistenceThreshold, () {
         if (mounted) setState(() => showRestAlert = true);
       });
@@ -838,7 +907,276 @@ class _Member2PageState extends State<Member2Page> {
     _waveformUpdateTimer?.cancel();
     _positionStream?.cancel();
     interpreter?.close();
+    _tts.stop();
     super.dispose();
+  }
+
+  // Demo stress alert methods
+  Future<void> _showDemoStressAlert({
+    required String stressLevel,
+    required String stressEmoji,
+    required Color stressColor,
+    required String voiceMessage,
+    required String alertMessage,
+  }) async {
+    if (_isDemoAlertShowing) return;
+    
+    setState(() => _isDemoAlertShowing = true);
+    
+    // Speak the voice message
+    await _tts.setLanguage('en-US');
+    await _tts.setSpeechRate(0.5);
+    await _tts.speak(voiceMessage);
+    
+    // Show the alert dialog
+    if (mounted) {
+      showDialog(
+        context: context,
+        barrierDismissible: false,
+        builder: (context) => AlertDialog(
+          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
+          title: Row(
+            children: [
+              Container(
+                padding: const EdgeInsets.all(12),
+                decoration: BoxDecoration(
+                  color: stressColor.withOpacity(0.1),
+                  shape: BoxShape.circle,
+                ),
+                child: Text(
+                  stressEmoji,
+                  style: const TextStyle(fontSize: 32),
+                ),
+              ),
+              const SizedBox(width: 16),
+              Expanded(
+                child: Text(
+                  'Stress Alert: $stressLevel',
+                  style: TextStyle(
+                    fontSize: 20,
+                    fontWeight: FontWeight.bold,
+                    color: stressColor,
+                  ),
+                ),
+              ),
+            ],
+          ),
+          content: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Container(
+                padding: const EdgeInsets.all(16),
+                decoration: BoxDecoration(
+                  color: stressColor.withOpacity(0.1),
+                  borderRadius: BorderRadius.circular(12),
+                  border: Border.all(color: stressColor.withOpacity(0.3)),
+                ),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Row(
+                      children: [
+                        Icon(Icons.info_outline, color: stressColor, size: 20),
+                        const SizedBox(width: 8),
+                        Text(
+                          'Current Stress Level',
+                          style: TextStyle(
+                            fontSize: 14,
+                            fontWeight: FontWeight.bold,
+                            color: stressColor,
+                          ),
+                        ),
+                      ],
+                    ),
+                    const SizedBox(height: 8),
+                    Text(
+                      alertMessage,
+                      style: const TextStyle(
+                        fontSize: 14,
+                        color: Colors.black87,
+                        height: 1.4,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+              const SizedBox(height: 16),
+              Row(
+                children: [
+                  Icon(Icons.volume_up, color: stressColor, size: 20),
+                  const SizedBox(width: 8),
+                  const Text(
+                    'Voice guidance active',
+                    style: TextStyle(
+                      fontSize: 13,
+                      color: Colors.black54,
+                    ),
+                  ),
+                ],
+              ),
+            ],
+          ),
+          actions: [
+            TextButton(
+              onPressed: () {
+                Navigator.of(context).pop();
+                setState(() => _isDemoAlertShowing = false);
+                _tts.stop();
+              },
+              child: const Text(
+                'Close',
+                style: TextStyle(
+                  fontWeight: FontWeight.bold,
+                  color: Colors.grey,
+                ),
+              ),
+            ),
+            ElevatedButton(
+              onPressed: () {
+                Navigator.of(context).pop();
+                setState(() => _isDemoAlertShowing = false);
+                _tts.stop();
+              },
+              style: ElevatedButton.styleFrom(
+                backgroundColor: stressColor,
+                foregroundColor: Colors.white,
+                shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(10),
+                ),
+              ),
+              child: const Text('Acknowledge'),
+            ),
+          ],
+        ),
+      );
+    }
+  }
+
+  Future<void> _showStressLevelSelector() async {
+    showModalBottomSheet(
+      context: context,
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
+      ),
+      builder: (context) => Container(
+        padding: const EdgeInsets.all(24),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            const Text(
+              'Select Stress Level to Demo',
+              style: TextStyle(
+                fontSize: 20,
+                fontWeight: FontWeight.bold,
+              ),
+              textAlign: TextAlign.center,
+            ),
+            const SizedBox(height: 8),
+            const Text(
+              'Choose a stress level to see how alerts work with voice guidance',
+              style: TextStyle(
+                fontSize: 14,
+                color: Colors.black54,
+              ),
+              textAlign: TextAlign.center,
+            ),
+            const SizedBox(height: 24),
+            _buildStressLevelButton(
+              label: 'Very Relaxed',
+              emoji: '😌',
+              color: Colors.green[800]!,
+              voiceMessage: 'You are very relaxed. This is an ideal mental state for safe riding.',
+              alertMessage: 'Deep calm detected. Your stress level is very low (0-25%). This is the ideal mental state for safe and enjoyable riding.',
+            ),
+            const SizedBox(height: 12),
+            _buildStressLevelButton(
+              label: 'Relaxed',
+              emoji: '🙂',
+              color: Colors.green[400]!,
+              voiceMessage: 'You are calm and focused. Perfect for safe, steady riding.',
+              alertMessage: 'Calm and focused state detected. Your stress level is low (26-45%). Perfect for safe, steady riding.',
+            ),
+            const SizedBox(height: 12),
+            _buildStressLevelButton(
+              label: 'Neutral',
+              emoji: '😐',
+              color: Colors.yellow[800]!,
+              voiceMessage: 'Your mental state is balanced. Normal and stable.',
+              alertMessage: 'Balanced mental activity detected. Your stress level is moderate (46-65%). Normal and stable state.',
+            ),
+            const SizedBox(height: 12),
+            _buildStressLevelButton(
+              label: 'Elevated',
+              emoji: '😟',
+              color: Colors.orange[700]!,
+              voiceMessage: 'Mild tension is rising. Take slow breaths and stay aware.',
+              alertMessage: 'Mild tension rising detected. Your stress level is elevated (66-80%). Take slow breaths, stay aware of your surroundings.',
+            ),
+            const SizedBox(height: 12),
+            _buildStressLevelButton(
+              label: 'High Stress',
+              emoji: '😰',
+              color: Colors.red[700]!,
+              voiceMessage: 'High mental load detected. Consider pulling over if this persists.',
+              alertMessage: 'High mental load detected. Your stress level is critical (81-100%). Consider pulling over safely if this persists. Take a break.',
+            ),
+            const SizedBox(height: 16),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _buildStressLevelButton({
+    required String label,
+    required String emoji,
+    required Color color,
+    required String voiceMessage,
+    required String alertMessage,
+  }) {
+    return ElevatedButton(
+      onPressed: () {
+        Navigator.of(context).pop();
+        _showDemoStressAlert(
+          stressLevel: label,
+          stressEmoji: emoji,
+          stressColor: color,
+          voiceMessage: voiceMessage,
+          alertMessage: alertMessage,
+        );
+      },
+      style: ElevatedButton.styleFrom(
+        backgroundColor: color.withOpacity(0.1),
+        foregroundColor: color,
+        padding: const EdgeInsets.symmetric(vertical: 16, horizontal: 20),
+        shape: RoundedRectangleBorder(
+          borderRadius: BorderRadius.circular(12),
+          side: BorderSide(color: color.withOpacity(0.3)),
+        ),
+      ),
+      child: Row(
+        children: [
+          Text(
+            emoji,
+            style: const TextStyle(fontSize: 28),
+          ),
+          const SizedBox(width: 16),
+          Expanded(
+            child: Text(
+              label,
+              style: TextStyle(
+                fontSize: 16,
+                fontWeight: FontWeight.bold,
+                color: color,
+              ),
+            ),
+          ),
+          Icon(Icons.arrow_forward_ios, color: color, size: 16),
+        ],
+      ),
+    );
   }
 
   Color _getStressColor() {
@@ -906,85 +1244,84 @@ class _Member2PageState extends State<Member2Page> {
     Color color,
     String freqRange,
     String description,
+    bool isSmallScreen,
   ) {
     double maxBand = eegBands.values.reduce(math.max);
     // Add a small minimum visual height even if 0, unless no signal
     double normalized = maxBand > 0 ? value / maxBand : 0.05;
 
-    return Expanded(
-      child: Padding(
-        padding: const EdgeInsets.symmetric(horizontal: 4.0),
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          mainAxisAlignment: MainAxisAlignment.end,
-          children: [
-            Text(
-              '${value.toInt()}',
-              style: TextStyle(
-                  fontSize: 10,
-                  color: color.withOpacity(0.8),
-                  fontWeight: FontWeight.bold),
+    return Padding(
+      padding: EdgeInsets.symmetric(horizontal: isSmallScreen ? 3.0 : 4.0),
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        mainAxisAlignment: MainAxisAlignment.end,
+        children: [
+          Text(
+            '${value.toInt()}',
+            style: TextStyle(
+                fontSize: isSmallScreen ? 9 : 10,
+                color: color.withOpacity(0.8),
+                fontWeight: FontWeight.bold),
+          ),
+          SizedBox(height: isSmallScreen ? 4 : 6),
+          Container(
+            height: isSmallScreen ? 120 : 160,
+            alignment: Alignment.bottomCenter,
+            decoration: BoxDecoration(
+              color: Colors.grey.shade100,
+              borderRadius: BorderRadius.circular(30),
             ),
-            const SizedBox(height: 6),
-            Container(
-              height: 160,
-              alignment: Alignment.bottomCenter,
-              decoration: BoxDecoration(
-                color: Colors.grey.shade100,
-                borderRadius: BorderRadius.circular(30),
-              ),
-              child: TweenAnimationBuilder<double>(
-                duration: const Duration(milliseconds: 300),
-                tween: Tween(begin: 0, end: normalized.clamp(0.05, 1.0)),
-                builder: (context, val, _) {
-                  return FractionallySizedBox(
-                    heightFactor: val,
-                    widthFactor: 1.0,
-                    child: Container(
-                      decoration: BoxDecoration(
-                        gradient: LinearGradient(
-                          begin: Alignment.bottomCenter,
-                          end: Alignment.topCenter,
-                          colors: [
-                            color.withOpacity(0.8),
-                            color.withOpacity(0.4)
-                          ],
-                        ),
-                        borderRadius: BorderRadius.circular(30),
+            child: TweenAnimationBuilder<double>(
+              duration: const Duration(milliseconds: 300),
+              tween: Tween(begin: 0, end: normalized.clamp(0.05, 1.0)),
+              builder: (context, val, _) {
+                return FractionallySizedBox(
+                  heightFactor: val,
+                  widthFactor: 1.0,
+                  child: Container(
+                    decoration: BoxDecoration(
+                      gradient: LinearGradient(
+                        begin: Alignment.bottomCenter,
+                        end: Alignment.topCenter,
+                        colors: [
+                          color.withOpacity(0.8),
+                          color.withOpacity(0.4)
+                        ],
                       ),
+                      borderRadius: BorderRadius.circular(30),
                     ),
-                  );
-                },
-              ),
+                  ),
+                );
+              },
             ),
-            const SizedBox(height: 12),
-            Text(
-              label,
-              style: const TextStyle(
-                  fontSize: 13,
-                  fontWeight: FontWeight.bold,
-                  letterSpacing: -0.5),
-              textAlign: TextAlign.center,
+          ),
+          SizedBox(height: isSmallScreen ? 8 : 12),
+          Text(
+            label,
+            style: TextStyle(
+                fontSize: isSmallScreen ? 11 : 13,
+                fontWeight: FontWeight.bold,
+                letterSpacing: -0.5),
+            textAlign: TextAlign.center,
+          ),
+          Text(
+            freqRange,
+            style: TextStyle(fontSize: isSmallScreen ? 9 : 10, color: Colors.black54),
+            textAlign: TextAlign.center,
+          ),
+          SizedBox(height: isSmallScreen ? 2 : 4),
+          Text(
+            description,
+            style: TextStyle(
+              fontSize: isSmallScreen ? 8 : 9,
+              color: Colors.black45,
+              height: 1.1,
             ),
-            Text(
-              freqRange,
-              style: const TextStyle(fontSize: 10, color: Colors.black54),
-              textAlign: TextAlign.center,
-            ),
-            const SizedBox(height: 4),
-            Text(
-              description,
-              style: const TextStyle(
-                fontSize: 9,
-                color: Colors.black45,
-                height: 1.1,
-              ),
-              textAlign: TextAlign.center,
-              maxLines: 2,
-              overflow: TextOverflow.ellipsis,
-            ),
-          ],
-        ),
+            textAlign: TextAlign.center,
+            maxLines: 2,
+            overflow: TextOverflow.ellipsis,
+          ),
+        ],
       ),
     );
   }
@@ -1127,6 +1464,11 @@ class _Member2PageState extends State<Member2Page> {
     final btManager = context.watch<BluetoothManager>();
     final isConnected = btManager.isConnected(deviceName);
     final bool hasGoodSignal = poorSignalLevel <= 50;
+    
+    // Responsive sizing
+    final screenWidth = MediaQuery.of(context).size.width;
+    final isSmallScreen = screenWidth < 360;
+    final isMediumScreen = screenWidth < 600;
 
     // NEW: Get sensor data for fallback stress calculation
     final sensorProvider = Provider.of<SensorDataProvider>(context);
@@ -1164,11 +1506,81 @@ class _Member2PageState extends State<Member2Page> {
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.stretch,
               children: [
+                // Helmet removal alert banner
+                if (!hasGoodSignal)
+                  Container(
+                    margin: const EdgeInsets.only(bottom: 20),
+                    padding: EdgeInsets.all(isSmallScreen ? 12 : 16),
+                    decoration: BoxDecoration(
+                      gradient: LinearGradient(
+                        begin: Alignment.topLeft,
+                        end: Alignment.bottomRight,
+                        colors: [
+                          Colors.orange.shade400,
+                          Colors.orange.shade600,
+                        ],
+                      ),
+                      borderRadius: BorderRadius.circular(16),
+                      boxShadow: [
+                        BoxShadow(
+                          color: Colors.orange.withOpacity(0.3),
+                          blurRadius: 12,
+                          offset: const Offset(0, 4),
+                        ),
+                      ],
+                    ),
+                    child: Row(
+                      children: [
+                        Container(
+                          padding: EdgeInsets.all(isSmallScreen ? 8 : 12),
+                          decoration: BoxDecoration(
+                            color: Colors.white.withOpacity(0.2),
+                            shape: BoxShape.circle,
+                          ),
+                          child: Icon(
+                            Icons.warning_amber_rounded,
+                            color: Colors.white,
+                            size: isSmallScreen ? 22 : 28,
+                          ),
+                        ),
+                        SizedBox(width: isSmallScreen ? 12 : 16),
+                        Expanded(
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              Text(
+                                'Helmet Removed',
+                                style: TextStyle(
+                                  color: Colors.white,
+                                  fontSize: isSmallScreen ? 15 : 18,
+                                  fontWeight: FontWeight.bold,
+                                ),
+                              ),
+                              SizedBox(height: isSmallScreen ? 2 : 4),
+                              Text(
+                                'Using heart rate for stress estimation',
+                                style: TextStyle(
+                                  color: Colors.white,
+                                  fontSize: isSmallScreen ? 11 : 13,
+                                  fontWeight: FontWeight.w500,
+                                ),
+                              ),
+                            ],
+                          ),
+                        ),
+                        Icon(
+                          Icons.arrow_forward_ios,
+                          color: Colors.white.withOpacity(0.8),
+                          size: isSmallScreen ? 14 : 16,
+                        ),
+                      ],
+                    ),
+                  ),
                 // Connection status card (unchanged)
                 // Connection status card (enhanced)
                 AnimatedContainer(
                   duration: const Duration(milliseconds: 300),
-                  padding: const EdgeInsets.all(20),
+                  padding: EdgeInsets.all(isSmallScreen ? 16 : 20),
                   decoration: BoxDecoration(
                     color: Colors.white,
                     borderRadius: BorderRadius.circular(20),
@@ -1197,24 +1609,24 @@ class _Member2PageState extends State<Member2Page> {
                               size: 28,
                             ),
                           ),
-                          const SizedBox(width: 16),
+                          SizedBox(width: isSmallScreen ? 12 : 16),
                           Expanded(
                             child: Column(
                               crossAxisAlignment: CrossAxisAlignment.start,
                               children: [
-                                const Text(
+                                Text(
                                   "Device Status",
                                   style: TextStyle(
-                                    fontSize: 14,
+                                    fontSize: isSmallScreen ? 12 : 14,
                                     color: Colors.black54,
                                     fontWeight: FontWeight.w500,
                                   ),
                                 ),
-                                const SizedBox(height: 4),
+                                SizedBox(height: isSmallScreen ? 2 : 4),
                                 Text(
                                   status,
                                   style: TextStyle(
-                                    fontSize: 18,
+                                    fontSize: isSmallScreen ? 15 : 18,
                                     fontWeight: FontWeight.w800,
                                     color: _getConnectionColor(),
                                   ),
@@ -1363,14 +1775,14 @@ class _Member2PageState extends State<Member2Page> {
                   ),
                 ),
 
-                const SizedBox(height: 30),
+                SizedBox(height: isSmallScreen ? 20 : 30),
 
                 // ─── NEW: Vital Signs from Smartwatch ─────────────────────────────────
                 VitalSignsCardWithStress(
                   eegAvailable: hasGoodSignal,
                 ),
 
-                const SizedBox(height: 30),
+                SizedBox(height: isSmallScreen ? 20 : 30),
 
                 // Stress Card (updated with dynamic color)
                 // Shows EEG-based stress when available, otherwise falls back to HR+Temp
@@ -1394,8 +1806,8 @@ class _Member2PageState extends State<Member2Page> {
                     ),
                   ),
                   child: Container(
-                    padding: const EdgeInsets.symmetric(
-                        vertical: 40, horizontal: 24),
+                    padding: EdgeInsets.symmetric(
+                        vertical: isSmallScreen ? 30 : 40, horizontal: 24),
                     decoration: BoxDecoration(
                       borderRadius: BorderRadius.circular(30),
                       gradient: LinearGradient(
@@ -1410,7 +1822,7 @@ class _Member2PageState extends State<Member2Page> {
                     child: Column(
                       children: [
                         Container(
-                          padding: const EdgeInsets.all(20),
+                          padding: EdgeInsets.all(isSmallScreen ? 16 : 20),
                           decoration: BoxDecoration(
                             color: Colors.white.withOpacity(0.2),
                             shape: BoxShape.circle,
@@ -1422,20 +1834,20 @@ class _Member2PageState extends State<Member2Page> {
                             ],
                           ),
                           child: Text(displayMoodEmoji,
-                              style:
-                                  const TextStyle(fontSize: 80, height: 1.1)),
+                              style: TextStyle(
+                                  fontSize: isSmallScreen ? 60 : 80, height: 1.1)),
                         ),
-                        const SizedBox(height: 24),
+                        SizedBox(height: isSmallScreen ? 16 : 24),
                         Text(
                           displayMood.toUpperCase(),
-                          style: const TextStyle(
-                            fontSize: 32,
+                          style: TextStyle(
+                            fontSize: isSmallScreen ? 24 : 32,
                             fontWeight: FontWeight.w900,
                             color: Colors.white,
-                            letterSpacing: 2,
+                            letterSpacing: isSmallScreen ? 1 : 2,
                           ),
                         ),
-                        const SizedBox(height: 12),
+                        SizedBox(height: isSmallScreen ? 8 : 12),
                         Container(
                           padding: const EdgeInsets.symmetric(
                               horizontal: 16, vertical: 8),
@@ -1448,8 +1860,8 @@ class _Member2PageState extends State<Member2Page> {
                                 ? _getStressMessage()
                                 : "Stress estimated using heart rate and body temperature. Helmet removed or no EEG signal.",
                             textAlign: TextAlign.center,
-                            style: const TextStyle(
-                              fontSize: 15,
+                            style: TextStyle(
+                              fontSize: isSmallScreen ? 13 : 15,
                               color: Colors.white,
                               fontWeight: FontWeight.w500,
                               height: 1.3,
@@ -1461,7 +1873,7 @@ class _Member2PageState extends State<Member2Page> {
                   ),
                 ),
 
-                const SizedBox(height: 30),
+                SizedBox(height: isSmallScreen ? 20 : 30),
 
                 // // ─── NEW: Fatigue Card ────────────────────────────────────────────────
                 // Card(
@@ -1510,9 +1922,9 @@ class _Member2PageState extends State<Member2Page> {
                 //   ),
                 // ),
 
-                const SizedBox(height: 30),
+                SizedBox(height: isSmallScreen ? 20 : 30),
                 Container(
-                  padding: const EdgeInsets.all(24),
+                  padding: EdgeInsets.all(isSmallScreen ? 16 : 24),
                   decoration: BoxDecoration(
                     color: Colors.white,
                     borderRadius: BorderRadius.circular(24),
@@ -1549,44 +1961,14 @@ class _Member2PageState extends State<Member2Page> {
                       ),
                       if (!hasGoodSignal) ...[
                         const SizedBox(height: 8),
-                        Container(
-                          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
-                          decoration: BoxDecoration(
-                            color: Colors.orange.withOpacity(0.1),
-                            borderRadius: BorderRadius.circular(8),
-                            border: Border.all(
-                              color: Colors.orange.withOpacity(0.3),
-                              width: 1,
-                            ),
-                          ),
-                          child: const Row(
-                            mainAxisSize: MainAxisSize.min,
-                            children: [
-                              Icon(
-                                Icons.info_outline,
-                                size: 14,
-                                color: Colors.orange,
-                              ),
-                              SizedBox(width: 6),
-                              Text(
-                                "Helmet removed. Using heart rate data for stress estimation.",
-                                style: TextStyle(
-                                  fontSize: 12,
-                                  color: Colors.orange,
-                                  fontWeight: FontWeight.w500,
-                                ),
-                              ),
-                            ],
-                          ),
-                        ),
                       ],
-                      const SizedBox(height: 30),
+                      SizedBox(height: isSmallScreen ? 20 : 30),
                       Stack(
                         alignment: Alignment.center,
                         children: [
                           SizedBox(
-                            width: 170,
-                            height: 170,
+                            width: isSmallScreen ? 140 : 170,
+                            height: isSmallScreen ? 140 : 170,
                             child: TweenAnimationBuilder<double>(
                               duration: const Duration(milliseconds: 800),
                               curve: Curves.easeOutCubic,
@@ -1596,7 +1978,7 @@ class _Member2PageState extends State<Member2Page> {
                               builder: (context, value, _) {
                                 return CircularProgressIndicator(
                                   value: value,
-                                  strokeWidth: 14,
+                                  strokeWidth: isSmallScreen ? 12 : 14,
                                   backgroundColor: Colors.grey.shade100,
                                   strokeCap: StrokeCap.round,
                                   valueColor: AlwaysStoppedAnimation(
@@ -1611,7 +1993,7 @@ class _Member2PageState extends State<Member2Page> {
                               Text(
                                 "${(displayStressScore * 100).toStringAsFixed(0)}%",
                                 style: TextStyle(
-                                  fontSize: 48,
+                                  fontSize: isSmallScreen ? 38 : 48,
                                   fontWeight: FontWeight.w900,
                                   color: displayMoodColor,
                                   height: 1.1,
@@ -1620,7 +2002,7 @@ class _Member2PageState extends State<Member2Page> {
                               Text(
                                 "Stress Load",
                                 style: TextStyle(
-                                  fontSize: 14,
+                                  fontSize: isSmallScreen ? 12 : 14,
                                   fontWeight: FontWeight.w600,
                                   letterSpacing: 0.5,
                                   color: hasGoodSignal ? Colors.black54 : Colors.orange.shade800,
@@ -1633,9 +2015,9 @@ class _Member2PageState extends State<Member2Page> {
                     ],
                   ),
                 ),
-                const SizedBox(height: 30),
+                SizedBox(height: isSmallScreen ? 20 : 30),
                 Container(
-                  padding: const EdgeInsets.all(24),
+                  padding: EdgeInsets.all(isSmallScreen ? 16 : 24),
                   decoration: BoxDecoration(
                     color: Colors.white,
                     borderRadius: BorderRadius.circular(24),
@@ -1653,39 +2035,39 @@ class _Member2PageState extends State<Member2Page> {
                       Row(
                         children: [
                           Container(
-                            padding: const EdgeInsets.all(8),
+                            padding: EdgeInsets.all(isSmallScreen ? 6 : 8),
                             decoration: BoxDecoration(
                               color: Colors.cyan.withOpacity(0.1),
                               borderRadius: BorderRadius.circular(10),
                             ),
-                            child: const Icon(Icons.waves,
-                                color: Colors.cyan, size: 20),
+                            child: Icon(Icons.waves,
+                                color: Colors.cyan, size: isSmallScreen ? 18 : 20),
                           ),
-                          const SizedBox(width: 12),
-                          const Column(
+                          SizedBox(width: isSmallScreen ? 10 : 12),
+                          Column(
                             crossAxisAlignment: CrossAxisAlignment.start,
                             children: [
                               Text(
                                 "Live Brainwaves",
                                 style: TextStyle(
-                                  fontSize: 18,
+                                  fontSize: isSmallScreen ? 16 : 18,
                                   fontWeight: FontWeight.bold,
                                 ),
                               ),
                               Text(
                                 "~1.5s sliding window",
                                 style: TextStyle(
-                                    fontSize: 13, color: Colors.black54),
+                                    fontSize: isSmallScreen ? 12 : 13, color: Colors.black54),
                               ),
                             ],
                           ),
                         ],
                       ),
-                      const SizedBox(height: 24),
+                      SizedBox(height: isSmallScreen ? 16 : 24),
                       Container(
-                        height: 220,
-                        padding: const EdgeInsets.only(
-                            top: 20, right: 10, bottom: 5),
+                        height: isSmallScreen ? 180 : 220,
+                        padding: EdgeInsets.only(
+                            top: isSmallScreen ? 16 : 20, right: 10, bottom: 5),
                         decoration: BoxDecoration(
                             color: const Color(
                                 0xFF1E1E2C), // modern dark bluish gray
@@ -1724,9 +2106,9 @@ class _Member2PageState extends State<Member2Page> {
                     ],
                   ),
                 ),
-                const SizedBox(height: 30),
+                SizedBox(height: isSmallScreen ? 20 : 30),
                 Container(
-                  padding: const EdgeInsets.all(24),
+                  padding: EdgeInsets.all(isSmallScreen ? 16 : 24),
                   decoration: BoxDecoration(
                     color: Colors.white,
                     borderRadius: BorderRadius.circular(24),
@@ -1744,58 +2126,78 @@ class _Member2PageState extends State<Member2Page> {
                       Row(
                         children: [
                           Container(
-                            padding: const EdgeInsets.all(8),
+                            padding: EdgeInsets.all(isSmallScreen ? 6 : 8),
                             decoration: BoxDecoration(
                               color: Colors.indigo.withOpacity(0.1),
                               borderRadius: BorderRadius.circular(10),
                             ),
-                            child: const Icon(Icons.bar_chart,
-                                color: Colors.indigo, size: 20),
+                            child: Icon(Icons.bar_chart,
+                                color: Colors.indigo, size: isSmallScreen ? 18 : 20),
                           ),
-                          const SizedBox(width: 12),
-                          const Column(
+                          SizedBox(width: isSmallScreen ? 10 : 12),
+                          Column(
                             crossAxisAlignment: CrossAxisAlignment.start,
                             children: [
                               Text(
                                 "Spectral Power",
                                 style: TextStyle(
-                                  fontSize: 18,
+                                  fontSize: isSmallScreen ? 16 : 18,
                                   fontWeight: FontWeight.bold,
                                 ),
                               ),
                               Text(
                                 "Frequency bands analysis",
                                 style: TextStyle(
-                                    fontSize: 13, color: Colors.black54),
+                                    fontSize: isSmallScreen ? 12 : 13, color: Colors.black54),
                               ),
                             ],
                           ),
                         ],
                       ),
-                      const SizedBox(height: 24),
+                      SizedBox(height: isSmallScreen ? 16 : 24),
                       if (hasGoodSignal)
-                        Row(
-                          crossAxisAlignment: CrossAxisAlignment.end,
-                          children: [
-                            _buildBandBar(
-                                'Delta',
-                                eegBands['Delta']!,
-                                const Color(0xFF7B1FA2),
-                                '0.5–4 Hz',
-                                'Deep relax'),
-                            _buildBandBar('Theta', eegBands['Theta']!,
-                                const Color(0xFF1976D2), '4–8 Hz', 'Drowsy'),
-                            _buildBandBar(
-                                'Alpha',
-                                eegBands['Alpha']!,
-                                const Color(0xFF388E3C),
-                                '8–13 Hz',
-                                'Calm focus'),
-                            _buildBandBar('Beta', eegBands['Beta']!,
-                                const Color(0xFFF57C00), '13–30 Hz', 'Active'),
-                            _buildBandBar('Gamma', eegBands['Gamma']!,
-                                const Color(0xFFD32F2F), '>30 Hz', 'Peak'),
-                          ],
+                        SingleChildScrollView(
+                          scrollDirection: Axis.horizontal,
+                          child: Row(
+                            crossAxisAlignment: CrossAxisAlignment.end,
+                            children: [
+                              SizedBox(
+                                width: isSmallScreen ? 70 : 80,
+                                child: _buildBandBar(
+                                    'Delta',
+                                    eegBands['Delta']!,
+                                    const Color(0xFF7B1FA2),
+                                    '0.5–4 Hz',
+                                    'Deep relax',
+                                    isSmallScreen),
+                              ),
+                              SizedBox(
+                                width: isSmallScreen ? 70 : 80,
+                                child: _buildBandBar('Theta', eegBands['Theta']!,
+                                    const Color(0xFF1976D2), '4–8 Hz', 'Drowsy', isSmallScreen),
+                              ),
+                              SizedBox(
+                                width: isSmallScreen ? 70 : 80,
+                                child: _buildBandBar(
+                                    'Alpha',
+                                    eegBands['Alpha']!,
+                                    const Color(0xFF388E3C),
+                                    '8–13 Hz',
+                                    'Calm focus',
+                                    isSmallScreen),
+                              ),
+                              SizedBox(
+                                width: isSmallScreen ? 70 : 80,
+                                child: _buildBandBar('Beta', eegBands['Beta']!,
+                                    const Color(0xFFF57C00), '13–30 Hz', 'Active', isSmallScreen),
+                              ),
+                              SizedBox(
+                                width: isSmallScreen ? 70 : 80,
+                                child: _buildBandBar('Gamma', eegBands['Gamma']!,
+                                    const Color(0xFFD32F2F), '>30 Hz', 'Peak', isSmallScreen),
+                              ),
+                            ],
+                          ),
                         )
                       else
                         Container(
@@ -1812,9 +2214,9 @@ class _Member2PageState extends State<Member2Page> {
                     ],
                   ),
                 ),
-                const SizedBox(height: 30),
+                SizedBox(height: isSmallScreen ? 20 : 30),
                 if (showRestAlert) ...[
-                  const SizedBox(height: 20),
+                  SizedBox(height: isSmallScreen ? 12 : 20),
                   Card(
                     elevation: 8,
                     color: Colors.red.shade50,
@@ -1822,20 +2224,80 @@ class _Member2PageState extends State<Member2Page> {
                         borderRadius: BorderRadius.circular(16)),
                     child: Padding(
                       padding: const EdgeInsets.all(16),
-                      child: Row(
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
                         children: [
-                          const Icon(Icons.warning,
-                              color: Colors.red, size: 32),
-                          const SizedBox(width: 12),
-                          const Expanded(
-                            child: Text(
-                              "High stress / fatigue detected for too long!\n"
-                              "For safety, pull over and rest before continuing your ride.",
-                              style: TextStyle(
-                                color: Colors.red,
-                                fontSize: 16,
-                                fontWeight: FontWeight.bold,
+                          Row(
+                            children: [
+                              const Icon(Icons.warning,
+                                  color: Colors.red, size: 32),
+                              const SizedBox(width: 12),
+                              const Expanded(
+                                child: Text(
+                                  "High stress / fatigue detected for too long!",
+                                  style: TextStyle(
+                                    color: Colors.red,
+                                    fontSize: 16,
+                                    fontWeight: FontWeight.bold,
+                                  ),
+                                ),
                               ),
+                            ],
+                          ),
+                          const SizedBox(height: 12),
+                          if (_distanceToDestinationKm != null && _estimatedTimeToDestination != null) ...[
+                            Container(
+                              padding: const EdgeInsets.all(12),
+                              decoration: BoxDecoration(
+                                color: Colors.white,
+                                borderRadius: BorderRadius.circular(8),
+                                border: Border.all(color: Colors.red.shade200),
+                              ),
+                              child: Column(
+                                crossAxisAlignment: CrossAxisAlignment.start,
+                                children: [
+                                  Row(
+                                    children: [
+                                      const Icon(Icons.location_on, color: Colors.red, size: 20),
+                                      const SizedBox(width: 8),
+                                      Text(
+                                        "Distance to destination: ${_distanceToDestinationKm!.toStringAsFixed(1)} km",
+                                        style: const TextStyle(
+                                          color: Colors.black87,
+                                          fontSize: 14,
+                                          fontWeight: FontWeight.w600,
+                                        ),
+                                      ),
+                                    ],
+                                  ),
+                                  const SizedBox(height: 8),
+                                  Row(
+                                    children: [
+                                      const Icon(Icons.access_time, color: Colors.red, size: 20),
+                                      const SizedBox(width: 8),
+                                      Text(
+                                        "Estimated time: $_estimatedTimeToDestination",
+                                        style: const TextStyle(
+                                          color: Colors.black87,
+                                          fontSize: 14,
+                                          fontWeight: FontWeight.w600,
+                                        ),
+                                      ),
+                                    ],
+                                  ),
+                                ],
+                              ),
+                            ),
+                            const SizedBox(height: 12),
+                          ],
+                          Text(
+                            _distanceToDestinationKm != null && _distanceToDestinationKm! < 5
+                                ? "⚠️ You're close to your destination. Consider taking a short break before completing your journey."
+                                : "For safety, pull over and rest before continuing your ride.",
+                            style: const TextStyle(
+                              color: Colors.red,
+                              fontSize: 14,
+                              fontWeight: FontWeight.w500,
                             ),
                           ),
                         ],
@@ -1844,14 +2306,14 @@ class _Member2PageState extends State<Member2Page> {
                   ),
                 ],
 
-                const SizedBox(height: 40),
+                SizedBox(height: isSmallScreen ? 30 : 40),
 
                 // ────────────────────────────────────────────────
                 // NEW: Button for weekly report
                 // ────────────────────────────────────────────────
                 Container(
                   width: double.infinity,
-                  height: 60,
+                  height: isSmallScreen ? 50 : 60,
                   decoration: BoxDecoration(
                     borderRadius: BorderRadius.circular(16),
                     gradient: const LinearGradient(
@@ -1875,11 +2337,11 @@ class _Member2PageState extends State<Member2Page> {
                             builder: (_) => const WeeklyStressReport()),
                       );
                     },
-                    icon: const Icon(Icons.analytics_rounded, size: 24),
-                    label: const Text(
+                    icon: Icon(Icons.analytics_rounded, size: isSmallScreen ? 20 : 24),
+                    label: Text(
                       'View Weekly Diagnostics',
                       style: TextStyle(
-                          fontSize: 16,
+                          fontSize: isSmallScreen ? 14 : 16,
                           fontWeight: FontWeight.bold,
                           letterSpacing: 0.5),
                     ),
@@ -1893,6 +2355,63 @@ class _Member2PageState extends State<Member2Page> {
                     ),
                   ),
                 ),
+                const SizedBox(height: 20),
+
+                // ────────────────────────────────────────────────
+                // DEMO: Stress Alert Toggle Button (Uncomment to enable)
+                // ────────────────────────────────────────────────
+                // This button allows testing the stress alert system by toggling
+                // the showRestAlert on/off to see how alerts appear during rides
+                //
+                // Container(
+                //   width: double.infinity,
+                //   height: isSmallScreen ? 50 : 60,
+                //   decoration: BoxDecoration(
+                //     borderRadius: BorderRadius.circular(16),
+                //     gradient: LinearGradient(
+                //       colors: showRestAlert
+                //           ? [Color(0xFFff416c), Color(0xFFff4b2b)]
+                //           : [Color(0xFF11998e), Color(0xFF38ef7d)],
+                //       begin: Alignment.topLeft,
+                //       end: Alignment.bottomRight,
+                //     ),
+                //     boxShadow: [
+                //       BoxShadow(
+                //         color: showRestAlert
+                //             ? const Color(0xFFff4b2b).withOpacity(0.4)
+                //             : const Color(0xFF38ef7d).withOpacity(0.4),
+                //         blurRadius: 12,
+                //         offset: const Offset(0, 6),
+                //       ),
+                //     ],
+                //   ),
+                //   child: ElevatedButton.icon(
+                //     onPressed: () {
+                //       setState(() {
+                //         showRestAlert = !showRestAlert;
+                //       });
+                //     },
+                //     icon: Icon(
+                //       showRestAlert ? Icons.notifications_active : Icons.notifications,
+                //       size: isSmallScreen ? 20 : 24,
+                //     ),
+                //     label: Text(
+                //       showRestAlert ? 'Alert ON' : 'Alert OFF',
+                //       style: TextStyle(
+                //           fontSize: isSmallScreen ? 14 : 16,
+                //           fontWeight: FontWeight.bold,
+                //           letterSpacing: 0.5),
+                //     ),
+                //     style: ElevatedButton.styleFrom(
+                //       backgroundColor: Colors.transparent,
+                //       foregroundColor: Colors.white,
+                //       shadowColor: Colors.transparent,
+                //       shape: RoundedRectangleBorder(
+                //         borderRadius: BorderRadius.circular(16),
+                //       ),
+                //     ),
+                //   ),
+                // ),
                 const SizedBox(height: 20),
               ],
             ),
