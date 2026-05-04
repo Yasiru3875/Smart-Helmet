@@ -41,6 +41,9 @@ class _JourneyReportScreenState extends State<JourneyReportScreen> {
   GoogleMapController? _mapController;
   Set<Marker>  _markers  = {};
   Set<Polyline> _polylines = {};
+  Set<Circle>  _circles  = {};
+  bool _dangerZonesLoaded = false;
+  final DangerZoneService _dangerZoneService = DangerZoneService();
 
   @override
   void initState() {
@@ -120,8 +123,7 @@ class _JourneyReportScreenState extends State<JourneyReportScreen> {
       final List<LatLng> eventPoints = [];
       for (final event in widget.journey.turnEvents) {
         if (event.latitude != 0.0 && event.longitude != 0.0) {
-          eventPoints.add(LatLng(event.l
-          atitude, event.longitude));
+          eventPoints.add(LatLng(event.latitude, event.longitude));
         }
       }
       for (final brake in widget.journey.brakingEvents) {
@@ -217,11 +219,18 @@ class _JourneyReportScreenState extends State<JourneyReportScreen> {
     return score.clamp(0, 100).toDouble();
   }
 
-  Color get _scoreColor {
-    if (j.riskScore >= 80) return Colors.green;
-    if (j.riskScore >= 60) return Colors.orange;
-    if (j.riskScore >= 40) return Colors.deepOrange;
+  Color _getScoreColor(double safetyScore) {
+    if (safetyScore >= 80) return Colors.green;
+    if (safetyScore >= 60) return Colors.orange;
+    if (safetyScore >= 40) return Colors.deepOrange;
     return Colors.red;
+  }
+
+  String _getScoreLabel(double safetyScore) {
+    if (safetyScore >= 80) return 'Excellent';
+    if (safetyScore >= 60) return 'Good';
+    if (safetyScore >= 40) return 'Fair';
+    return 'Poor';
   }
 
   // ═══════════════════════════════════════════════════════════
@@ -256,7 +265,7 @@ class _JourneyReportScreenState extends State<JourneyReportScreen> {
         child: Column(
           children: [
             // 1. Safety Score Header
-            _buildSafetyScoreHeader(safetyScore, duration),
+            _buildScoreHeader(),
 
             // 2. Risk Map (Heatmap)
             _buildRiskMap(),
@@ -282,7 +291,15 @@ class _JourneyReportScreenState extends State<JourneyReportScreen> {
 
   // ── 1. Score Header ──────────────────────────────────────
   Widget _buildScoreHeader() {
+    final score = _calculateSafetyScore();
+    final scoreColor = _getScoreColor(score);
+    final scoreLabel = _getScoreLabel(score);
+    final duration = widget.journey.endTime != null
+        ? widget.journey.endTime!.difference(widget.journey.startTime)
+        : Duration.zero;
+
     return Container(
+      margin: const EdgeInsets.all(16),
       padding: const EdgeInsets.all(24),
       decoration: BoxDecoration(
         gradient: const LinearGradient(
@@ -538,7 +555,7 @@ class _JourneyReportScreenState extends State<JourneyReportScreen> {
               SizedBox(
                 height: 250,
                 child: widget.journey.turnEvents.isNotEmpty
-                    ? LineChart(_createLineChartData())
+                    ? LineChart(_turnChartData())
                     : Center(
                         child: Text(
                           'No turn data available',
@@ -611,27 +628,10 @@ class _JourneyReportScreenState extends State<JourneyReportScreen> {
         ]),
       );
 
-  // ── 5. Turn Rate Chart ───────────────────────────────────
-  Widget _buildTurnChart() {
-    if (j.turnEvents.isEmpty) return const SizedBox();
-    return _section(
-      icon: Icons.show_chart,
-      title: 'Turn Rate Over Time',
-      child: Column(children: [
-        SizedBox(height: 220, child: LineChart(_turnChartData())),
-        const SizedBox(height: 12),
-        Wrap(spacing: 16, runSpacing: 6, children: [
-          _chartLegend(Colors.blue, 'Turn Rate (°/s)'),
-          _chartLegend(Colors.orange, 'Sharp ≥100°/s', dashed: true),
-          _chartLegend(Colors.red, 'Risky ≥150°/s', dashed: true),
-        ]),
-      ]),
-    );
-  }
-
+  // ── Turn Rate Chart Data ───────────────────────────────────
   LineChartData _turnChartData() {
-    final spots = j.turnEvents.map((e) {
-      final min = e.timestamp.difference(j.startTime).inSeconds / 60.0;
+    final spots = widget.journey.turnEvents.map((e) {
+      final min = e.timestamp.difference(widget.journey.startTime).inSeconds / 60.0;
       return FlSpot(min, e.turnRate.abs());
     }).toList();
     return LineChartData(
