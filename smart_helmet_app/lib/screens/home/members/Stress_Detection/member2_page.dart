@@ -23,6 +23,8 @@ import 'package:smart_helmet_app/providers/ride_session_provider.dart';
 import '../../../../services/auth_service.dart';
 
 import 'package:smart_helmet_app/providers/emotion_provider.dart';
+import 'package:smart_helmet_app/providers/alert_engine.dart'; // NEW: Alert engine for emergency alerts
+import 'package:smart_helmet_app/providers/user_profile_provider.dart'; // NEW: User profile for alerts
 import 'vital_signs_card.dart'; // NEW: Vital signs from smartwatch
 import '../../../../services/combined_stress_service.dart'; // NEW: Fallback stress calculation
 // If you have auth:
@@ -86,6 +88,10 @@ class _Member2PageState extends State<Member2Page> {
   // Demo stress alert functionality
   final FlutterTts _tts = FlutterTts();
   bool _isDemoAlertShowing = false;
+  int _demoStressLevelIndex = 0; // 0=off, 1=very relaxed, 2=relaxed, 3=neutral, 4=elevated, 5=high stress
+
+  // AlertEngine integration for emergency alerts during rides
+  final AlertEngine _alertEngine = AlertEngine();
 
   // === Enhanced Real-time EEG Waveform ===
   static const int waveformMaxPoints = 600;
@@ -121,6 +127,9 @@ class _Member2PageState extends State<Member2Page> {
     super.initState();
     _init(); // model + listeners
     _startLocationTracking();
+
+    // Initialize AlertEngine
+    _initializeAlertEngine();
 
     // Auto connect flow
     WidgetsBinding.instance.addPostFrameCallback((_) {
@@ -690,8 +699,24 @@ class _Member2PageState extends State<Member2Page> {
       relaxedScore = hybridRelaxed;
     });
 
-    // Persistence alert - only trigger if ride is active
+    // Persistence alert - use AlertEngine for proper emergency handling during rides
     final rideProvider = Provider.of<RideSessionProvider>(context, listen: false);
+    final sensorDataProvider = Provider.of<SensorDataProvider>(context, listen: false);
+    final userProfileProvider = Provider.of<UserProfileProvider>(context, listen: false);
+    final bluetoothManager = Provider.of<BluetoothManager>(context, listen: false);
+
+    if (rideProvider.isRideActive) {
+      // Feed stress data to AlertEngine for emergency monitoring
+      _alertEngine.onNewRiskReading(
+        riskPercent: (hybridStress * 100).toInt(),
+        hr: sensorDataProvider.heartRate.toDouble(),
+        temp: sensorDataProvider.temperature,
+        profile: userProfileProvider,
+        btManager: bluetoothManager,
+      );
+    }
+
+    // Keep the simple visual alert for non-emergency high stress display
     if (hybridStress > 0.7 && rideProvider.isRideActive) {
       _stressTimer ??= Timer(stressPersistenceThreshold, () {
         if (mounted) setState(() => showRestAlert = true);
@@ -908,275 +933,227 @@ class _Member2PageState extends State<Member2Page> {
     _positionStream?.cancel();
     interpreter?.close();
     _tts.stop();
+    _alertEngine.dispose();
     super.dispose();
   }
 
+  // Initialize AlertEngine with WhatsApp configuration
+  Future<void> _initializeAlertEngine() async {
+    // Configure WhatsApp service with cloud function URL
+    // You should replace this with your actual cloud function URL
+    _alertEngine.configureWhatsApp(
+      cloudFunctionUrl: 'https://us-central1-smart-helmet-app.cloudfunctions.net/sendWhatsAppAlert',
+    );
+    await _alertEngine.initializeBackgroundService();
+  }
+
   // Demo stress alert methods
-  Future<void> _showDemoStressAlert({
-    required String stressLevel,
-    required String stressEmoji,
-    required Color stressColor,
-    required String voiceMessage,
-    required String alertMessage,
-  }) async {
-    if (_isDemoAlertShowing) return;
-    
-    setState(() => _isDemoAlertShowing = true);
-    
-    // Speak the voice message
-    await _tts.setLanguage('en-US');
-    await _tts.setSpeechRate(0.5);
-    await _tts.speak(voiceMessage);
-    
-    // Show the alert dialog
-    if (mounted) {
-      showDialog(
-        context: context,
-        barrierDismissible: false,
-        builder: (context) => AlertDialog(
-          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
-          title: Row(
-            children: [
-              Container(
-                padding: const EdgeInsets.all(12),
-                decoration: BoxDecoration(
-                  color: stressColor.withOpacity(0.1),
-                  shape: BoxShape.circle,
-                ),
-                child: Text(
-                  stressEmoji,
-                  style: const TextStyle(fontSize: 32),
-                ),
-              ),
-              const SizedBox(width: 16),
-              Expanded(
-                child: Text(
-                  'Stress Alert: $stressLevel',
-                  style: TextStyle(
-                    fontSize: 20,
-                    fontWeight: FontWeight.bold,
-                    color: stressColor,
+  Future<void> _toggleDemoStressLevel() async {
+    _demoStressLevelIndex = (_demoStressLevelIndex + 1) % 6; // Cycle through 0-5
+
+    // Define stress levels
+    final stressLevels = [
+      {'level': 'Off', 'mood': 'No Signal', 'emoji': '📡', 'color': Colors.grey, 'stress': 0.0, 'fatigue': 0.0, 'msg': ''},
+      {'level': 'Very Relaxed', 'mood': 'Very Relaxed', 'emoji': '😌', 'color': Colors.green[800]!, 'stress': 0.15, 'fatigue': 0.2, 'msg': 'You are very relaxed. This is an ideal mental state for safe riding.'},
+      {'level': 'Relaxed', 'mood': 'Relaxed', 'emoji': '🙂', 'color': Colors.green[400]!, 'stress': 0.35, 'fatigue': 0.35, 'msg': 'You are calm and focused. Perfect for safe, steady riding.'},
+      {'level': 'Neutral', 'mood': 'Neutral', 'emoji': '😐', 'color': Colors.yellow[800]!, 'stress': 0.55, 'fatigue': 0.5, 'msg': 'Your mental state is balanced. Normal and stable.'},
+      {'level': 'Elevated', 'mood': 'Elevated', 'emoji': '😟', 'color': Colors.orange[700]!, 'stress': 0.75, 'fatigue': 0.65, 'msg': 'Mild tension is rising. Take slow breaths and stay aware.'},
+      {'level': 'High Stress', 'mood': 'High Stress', 'emoji': '😰', 'color': Colors.red[700]!, 'stress': 0.9, 'fatigue': 0.8, 'msg': 'High mental load detected. Consider pulling over if this persists.'},
+    ];
+
+    final current = stressLevels[_demoStressLevelIndex];
+
+    // Get providers for AlertEngine
+    final sensorDataProvider = Provider.of<SensorDataProvider>(context, listen: false);
+    final userProfileProvider = Provider.of<UserProfileProvider>(context, listen: false);
+    final bluetoothManager = Provider.of<BluetoothManager>(context, listen: false);
+
+    // Update the actual stress/fatigue data on the page
+    setState(() {
+      if (_demoStressLevelIndex == 0) {
+        currentMood = 'No Signal';
+        moodEmoji = '📡';
+        moodColor = Colors.grey;
+        stressScore = 0.0;
+        fatigueLevel = 'No Signal';
+        fatigueEmoji = '📡';
+        fatigueColor = Colors.grey;
+        fatigueScore = 0.0;
+        showRestAlert = false;
+      } else {
+        currentMood = current['mood'] as String;
+        moodEmoji = current['emoji'] as String;
+        moodColor = current['color'] as Color;
+        stressScore = current['stress'] as double;
+
+        // Update fatigue based on stress level
+        if (current['stress'] as double <= 0.25) {
+          fatigueLevel = "Alert";
+          fatigueEmoji = "⚡";
+          fatigueColor = Colors.green[700]!;
+        } else if (current['stress'] as double <= 0.45) {
+          fatigueLevel = "Mild Fatigue";
+          fatigueEmoji = "🥱";
+          fatigueColor = Colors.yellow[800]!;
+        } else if (current['stress'] as double <= 0.65) {
+          fatigueLevel = "Moderate Fatigue";
+          fatigueEmoji = "😴";
+          fatigueColor = Colors.orange[700]!;
+        } else {
+          fatigueLevel = "High Fatigue";
+          fatigueEmoji = "☠️";
+          fatigueColor = Colors.red[800]!;
+        }
+        fatigueScore = current['fatigue'] as double;
+
+        // Show alert for high stress
+        showRestAlert = (current['stress'] as double) > 0.7;
+      }
+    });
+
+    // Feed stress data to AlertEngine for high stress levels (to test emergency alerts)
+    if (_demoStressLevelIndex != 0 && (current['stress'] as double) >= 0.75) {
+      _alertEngine.onNewRiskReading(
+        riskPercent: ((current['stress'] as double) * 100).toInt(),
+        hr: sensorDataProvider.heartRate.toDouble(),
+        temp: sensorDataProvider.temperature,
+        profile: userProfileProvider,
+        btManager: bluetoothManager,
+      );
+    }
+
+    // Speak voice message (except for Off)
+    if (_demoStressLevelIndex != 0) {
+      await _tts.setLanguage('en-US');
+      await _tts.setSpeechRate(0.5);
+      await _tts.speak(current['msg'] as String);
+    } else {
+      _tts.stop();
+    }
+
+    // Show simple alert dialog for high stress (in addition to AlertEngine)
+    if ((current['stress'] as double) > 0.7 && _demoStressLevelIndex != 0) {
+      if (mounted) {
+        showDialog(
+          context: context,
+          barrierDismissible: false,
+          builder: (context) => AlertDialog(
+            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
+            title: Row(
+              children: [
+                Container(
+                  padding: const EdgeInsets.all(12),
+                  decoration: BoxDecoration(
+                    color: (current['color'] as Color).withOpacity(0.1),
+                    shape: BoxShape.circle,
+                  ),
+                  child: Text(
+                    current['emoji'] as String,
+                    style: const TextStyle(fontSize: 32),
                   ),
                 ),
-              ),
-            ],
-          ),
-          content: Column(
-            mainAxisSize: MainAxisSize.min,
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Container(
-                padding: const EdgeInsets.all(16),
-                decoration: BoxDecoration(
-                  color: stressColor.withOpacity(0.1),
-                  borderRadius: BorderRadius.circular(12),
-                  border: Border.all(color: stressColor.withOpacity(0.3)),
-                ),
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Row(
-                      children: [
-                        Icon(Icons.info_outline, color: stressColor, size: 20),
-                        const SizedBox(width: 8),
-                        Text(
-                          'Current Stress Level',
-                          style: TextStyle(
-                            fontSize: 14,
-                            fontWeight: FontWeight.bold,
-                            color: stressColor,
-                          ),
-                        ),
-                      ],
+                const SizedBox(width: 16),
+                Expanded(
+                  child: Text(
+                    'Stress Alert: ${current['level']}',
+                    style: TextStyle(
+                      fontSize: 20,
+                      fontWeight: FontWeight.bold,
+                      color: current['color'] as Color,
                     ),
-                    const SizedBox(height: 8),
-                    Text(
-                      alertMessage,
-                      style: const TextStyle(
-                        fontSize: 14,
-                        color: Colors.black87,
-                        height: 1.4,
+                  ),
+                ),
+              ],
+            ),
+            content: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Container(
+                  padding: const EdgeInsets.all(16),
+                  decoration: BoxDecoration(
+                    color: (current['color'] as Color).withOpacity(0.1),
+                    borderRadius: BorderRadius.circular(12),
+                    border: Border.all(color: (current['color'] as Color).withOpacity(0.3)),
+                  ),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Row(
+                        children: [
+                          Icon(Icons.info_outline, color: current['color'] as Color, size: 20),
+                          const SizedBox(width: 8),
+                          Text(
+                            'Current Stress Level',
+                            style: TextStyle(
+                              fontSize: 14,
+                              fontWeight: FontWeight.bold,
+                              color: current['color'] as Color,
+                            ),
+                          ),
+                        ],
+                      ),
+                      const SizedBox(height: 8),
+                      Text(
+                        current['msg'] as String,
+                        style: const TextStyle(
+                          fontSize: 14,
+                          color: Colors.black87,
+                          height: 1.4,
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+                const SizedBox(height: 16),
+                Row(
+                  children: [
+                    Icon(Icons.volume_up, color: current['color'] as Color, size: 20),
+                    const SizedBox(width: 8),
+                    const Text(
+                      'Voice guidance active',
+                      style: TextStyle(
+                        fontSize: 13,
+                        color: Colors.black54,
                       ),
                     ),
                   ],
                 ),
-              ),
-              const SizedBox(height: 16),
-              Row(
-                children: [
-                  Icon(Icons.volume_up, color: stressColor, size: 20),
-                  const SizedBox(width: 8),
-                  const Text(
-                    'Voice guidance active',
-                    style: TextStyle(
-                      fontSize: 13,
-                      color: Colors.black54,
-                    ),
+              ],
+            ),
+            actions: [
+              TextButton(
+                onPressed: () {
+                  Navigator.of(context).pop();
+                  _tts.stop();
+                },
+                child: const Text(
+                  'Close',
+                  style: TextStyle(
+                    fontWeight: FontWeight.bold,
+                    color: Colors.grey,
                   ),
-                ],
+                ),
+              ),
+              ElevatedButton(
+                onPressed: () {
+                  Navigator.of(context).pop();
+                  _tts.stop();
+                },
+                style: ElevatedButton.styleFrom(
+                  backgroundColor: current['color'] as Color,
+                  foregroundColor: Colors.white,
+                  shape: RoundedRectangleBorder(
+                    borderRadius: BorderRadius.circular(10),
+                  ),
+                ),
+                child: const Text('Acknowledge'),
               ),
             ],
           ),
-          actions: [
-            TextButton(
-              onPressed: () {
-                Navigator.of(context).pop();
-                setState(() => _isDemoAlertShowing = false);
-                _tts.stop();
-              },
-              child: const Text(
-                'Close',
-                style: TextStyle(
-                  fontWeight: FontWeight.bold,
-                  color: Colors.grey,
-                ),
-              ),
-            ),
-            ElevatedButton(
-              onPressed: () {
-                Navigator.of(context).pop();
-                setState(() => _isDemoAlertShowing = false);
-                _tts.stop();
-              },
-              style: ElevatedButton.styleFrom(
-                backgroundColor: stressColor,
-                foregroundColor: Colors.white,
-                shape: RoundedRectangleBorder(
-                  borderRadius: BorderRadius.circular(10),
-                ),
-              ),
-              child: const Text('Acknowledge'),
-            ),
-          ],
-        ),
-      );
-    }
-  }
-
-  Future<void> _showStressLevelSelector() async {
-    showModalBottomSheet(
-      context: context,
-      shape: const RoundedRectangleBorder(
-        borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
-      ),
-      builder: (context) => Container(
-        padding: const EdgeInsets.all(24),
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          crossAxisAlignment: CrossAxisAlignment.stretch,
-          children: [
-            const Text(
-              'Select Stress Level to Demo',
-              style: TextStyle(
-                fontSize: 20,
-                fontWeight: FontWeight.bold,
-              ),
-              textAlign: TextAlign.center,
-            ),
-            const SizedBox(height: 8),
-            const Text(
-              'Choose a stress level to see how alerts work with voice guidance',
-              style: TextStyle(
-                fontSize: 14,
-                color: Colors.black54,
-              ),
-              textAlign: TextAlign.center,
-            ),
-            const SizedBox(height: 24),
-            _buildStressLevelButton(
-              label: 'Very Relaxed',
-              emoji: '😌',
-              color: Colors.green[800]!,
-              voiceMessage: 'You are very relaxed. This is an ideal mental state for safe riding.',
-              alertMessage: 'Deep calm detected. Your stress level is very low (0-25%). This is the ideal mental state for safe and enjoyable riding.',
-            ),
-            const SizedBox(height: 12),
-            _buildStressLevelButton(
-              label: 'Relaxed',
-              emoji: '🙂',
-              color: Colors.green[400]!,
-              voiceMessage: 'You are calm and focused. Perfect for safe, steady riding.',
-              alertMessage: 'Calm and focused state detected. Your stress level is low (26-45%). Perfect for safe, steady riding.',
-            ),
-            const SizedBox(height: 12),
-            _buildStressLevelButton(
-              label: 'Neutral',
-              emoji: '😐',
-              color: Colors.yellow[800]!,
-              voiceMessage: 'Your mental state is balanced. Normal and stable.',
-              alertMessage: 'Balanced mental activity detected. Your stress level is moderate (46-65%). Normal and stable state.',
-            ),
-            const SizedBox(height: 12),
-            _buildStressLevelButton(
-              label: 'Elevated',
-              emoji: '😟',
-              color: Colors.orange[700]!,
-              voiceMessage: 'Mild tension is rising. Take slow breaths and stay aware.',
-              alertMessage: 'Mild tension rising detected. Your stress level is elevated (66-80%). Take slow breaths, stay aware of your surroundings.',
-            ),
-            const SizedBox(height: 12),
-            _buildStressLevelButton(
-              label: 'High Stress',
-              emoji: '😰',
-              color: Colors.red[700]!,
-              voiceMessage: 'High mental load detected. Consider pulling over if this persists.',
-              alertMessage: 'High mental load detected. Your stress level is critical (81-100%). Consider pulling over safely if this persists. Take a break.',
-            ),
-            const SizedBox(height: 16),
-          ],
-        ),
-      ),
-    );
-  }
-
-  Widget _buildStressLevelButton({
-    required String label,
-    required String emoji,
-    required Color color,
-    required String voiceMessage,
-    required String alertMessage,
-  }) {
-    return ElevatedButton(
-      onPressed: () {
-        Navigator.of(context).pop();
-        _showDemoStressAlert(
-          stressLevel: label,
-          stressEmoji: emoji,
-          stressColor: color,
-          voiceMessage: voiceMessage,
-          alertMessage: alertMessage,
         );
-      },
-      style: ElevatedButton.styleFrom(
-        backgroundColor: color.withOpacity(0.1),
-        foregroundColor: color,
-        padding: const EdgeInsets.symmetric(vertical: 16, horizontal: 20),
-        shape: RoundedRectangleBorder(
-          borderRadius: BorderRadius.circular(12),
-          side: BorderSide(color: color.withOpacity(0.3)),
-        ),
-      ),
-      child: Row(
-        children: [
-          Text(
-            emoji,
-            style: const TextStyle(fontSize: 28),
-          ),
-          const SizedBox(width: 16),
-          Expanded(
-            child: Text(
-              label,
-              style: TextStyle(
-                fontSize: 16,
-                fontWeight: FontWeight.bold,
-                color: color,
-              ),
-            ),
-          ),
-          Icon(Icons.arrow_forward_ios, color: color, size: 16),
-        ],
-      ),
-    );
+      }
+    }
   }
 
   Color _getStressColor() {
@@ -2358,49 +2335,57 @@ class _Member2PageState extends State<Member2Page> {
                 const SizedBox(height: 20),
 
                 // ────────────────────────────────────────────────
-                // DEMO: Stress Alert Toggle Button (Uncomment to enable)
+                // NEW: Demo stress alert toggle button
+                // Click to cycle through: Off → Very Relaxed → Relaxed → Neutral → Elevated → High Stress
+                // Elevated (75%) and High Stress (90%) will trigger AlertEngine with full emergency alerts
                 // ────────────────────────────────────────────────
-                // This button allows testing the stress alert system by toggling
-                // the showRestAlert on/off to see how alerts appear during rides
-                //
                 // Container(
                 //   width: double.infinity,
                 //   height: isSmallScreen ? 50 : 60,
                 //   decoration: BoxDecoration(
                 //     borderRadius: BorderRadius.circular(16),
                 //     gradient: LinearGradient(
-                //       colors: showRestAlert
-                //           ? [Color(0xFFff416c), Color(0xFFff4b2b)]
-                //           : [Color(0xFF11998e), Color(0xFF38ef7d)],
+                //       colors: _demoStressLevelIndex == 0
+                //           ? [Colors.grey, Colors.grey.shade700]
+                //           : [
+                //               moodColor.withOpacity(0.8),
+                //               moodColor,
+                //             ],
                 //       begin: Alignment.topLeft,
                 //       end: Alignment.bottomRight,
                 //     ),
                 //     boxShadow: [
                 //       BoxShadow(
-                //         color: showRestAlert
-                //             ? const Color(0xFFff4b2b).withOpacity(0.4)
-                //             : const Color(0xFF38ef7d).withOpacity(0.4),
+                //         color: moodColor.withOpacity(0.4),
                 //         blurRadius: 12,
                 //         offset: const Offset(0, 6),
                 //       ),
                 //     ],
                 //   ),
                 //   child: ElevatedButton.icon(
-                //     onPressed: () {
-                //       setState(() {
-                //         showRestAlert = !showRestAlert;
-                //       });
-                //     },
-                //     icon: Icon(
-                //       showRestAlert ? Icons.notifications_active : Icons.notifications,
-                //       size: isSmallScreen ? 20 : 24,
+                //     onPressed: _toggleDemoStressLevel,
+                //     icon: Text(
+                //       moodEmoji,
+                //       style: TextStyle(fontSize: isSmallScreen ? 20 : 24),
                 //     ),
-                //     label: Text(
-                //       showRestAlert ? 'Alert ON' : 'Alert OFF',
-                //       style: TextStyle(
-                //           fontSize: isSmallScreen ? 14 : 16,
-                //           fontWeight: FontWeight.bold,
-                //           letterSpacing: 0.5),
+                //     label: Column(
+                //       mainAxisSize: MainAxisSize.min,
+                //       children: [
+                //         Text(
+                //           _demoStressLevelIndex == 0 ? 'Demo: OFF' : 'Demo: $currentMood',
+                //           style: TextStyle(
+                //               fontSize: isSmallScreen ? 14 : 16,
+                //               fontWeight: FontWeight.bold,
+                //               letterSpacing: 0.5),
+                //         ),
+                //         if (_demoStressLevelIndex != 0)
+                //           Text(
+                //             'Stress: ${(stressScore * 100).toInt()}%',
+                //             style: TextStyle(
+                //                 fontSize: isSmallScreen ? 10 : 12,
+                //                 fontWeight: FontWeight.normal),
+                //           ),
+                //       ],
                 //     ),
                 //     style: ElevatedButton.styleFrom(
                 //       backgroundColor: Colors.transparent,
@@ -2425,7 +2410,7 @@ class _Member2PageState extends State<Member2Page> {
               child: Card(
                 color: Colors.black87,
                 child: Padding(
-                  padding: EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+                  padding: EdgeInsets.all(12),
                   child: Row(
                     mainAxisSize: MainAxisSize.min,
                     children: [
@@ -2433,11 +2418,12 @@ class _Member2PageState extends State<Member2Page> {
                         width: 16,
                         height: 16,
                         child: CircularProgressIndicator(
-                          strokeWidth: 2.5,
-                          color: Colors.white,
+                          strokeWidth: 2,
+                          valueColor:
+                              AlwaysStoppedAnimation<Color>(Colors.white),
                         ),
                       ),
-                      SizedBox(width: 12),
+                      SizedBox(width: 8),
                       Text(
                         "Saving...",
                         style: TextStyle(color: Colors.white, fontSize: 13),
@@ -2447,6 +2433,149 @@ class _Member2PageState extends State<Member2Page> {
                 ),
               ),
             ),
+
+          // AlertEngine emergency alert overlay with cancel window
+          Consumer<AlertEngine>(
+            builder: (context, alertEngine, child) {
+              if (!alertEngine.isAlerting) return const SizedBox.shrink();
+
+              return Positioned.fill(
+                child: Container(
+                  color: Colors.black.withOpacity(0.85),
+                  child: Column(
+                    mainAxisAlignment: MainAxisAlignment.center,
+                    children: [
+                      Card(
+                        margin: const EdgeInsets.symmetric(horizontal: 32),
+                        shape: RoundedRectangleBorder(
+                          borderRadius: BorderRadius.circular(20),
+                        ),
+                        child: Container(
+                          padding: const EdgeInsets.all(24),
+                          decoration: BoxDecoration(
+                            gradient: LinearGradient(
+                              begin: Alignment.topLeft,
+                              end: Alignment.bottomRight,
+                              colors: [
+                                Colors.red.shade600,
+                                Colors.red.shade800,
+                              ],
+                            ),
+                            borderRadius: BorderRadius.circular(20),
+                          ),
+                          child: Column(
+                            mainAxisSize: MainAxisSize.min,
+                            children: [
+                              // Warning icon
+                              Container(
+                                padding: const EdgeInsets.all(20),
+                                decoration: BoxDecoration(
+                                  color: Colors.white.withOpacity(0.2),
+                                  shape: BoxShape.circle,
+                                ),
+                                child: const Icon(
+                                  Icons.warning_amber_rounded,
+                                  color: Colors.white,
+                                  size: 64,
+                                ),
+                              ),
+                              const SizedBox(height: 24),
+
+                              // Alert title
+                              const Text(
+                                '⚠️ EMERGENCY ALERT',
+                                style: TextStyle(
+                                  color: Colors.white,
+                                  fontSize: 28,
+                                  fontWeight: FontWeight.bold,
+                                  letterSpacing: 2,
+                                ),
+                                textAlign: TextAlign.center,
+                              ),
+                              const SizedBox(height: 12),
+
+                              // Alert message
+                              const Text(
+                                'High stress/fatigue detected!\nEmergency alert will be sent automatically.',
+                                style: TextStyle(
+                                  color: Colors.white,
+                                  fontSize: 16,
+                                  height: 1.5,
+                                ),
+                                textAlign: TextAlign.center,
+                              ),
+                              const SizedBox(height: 24),
+
+                              // Countdown timer
+                              Container(
+                                padding: const EdgeInsets.symmetric(
+                                  horizontal: 32,
+                                  vertical: 16,
+                                ),
+                                decoration: BoxDecoration(
+                                  color: Colors.white.withOpacity(0.2),
+                                  borderRadius: BorderRadius.circular(16),
+                                ),
+                                child: Column(
+                                  children: [
+                                    const Text(
+                                      'Cancel Window',
+                                      style: TextStyle(
+                                        color: Colors.white70,
+                                        fontSize: 14,
+                                        fontWeight: FontWeight.w500,
+                                      ),
+                                    ),
+                                    const SizedBox(height: 8),
+                                    Text(
+                                      '${alertEngine.cancelCountdown}s',
+                                      style: const TextStyle(
+                                        color: Colors.white,
+                                        fontSize: 48,
+                                        fontWeight: FontWeight.bold,
+                                      ),
+                                    ),
+                                  ],
+                                ),
+                              ),
+                              const SizedBox(height: 24),
+
+                              // Cancel button
+                              SizedBox(
+                                width: double.infinity,
+                                height: 56,
+                                child: ElevatedButton(
+                                  onPressed: () {
+                                    alertEngine.cancelAlert();
+                                  },
+                                  style: ElevatedButton.styleFrom(
+                                    backgroundColor: Colors.white,
+                                    foregroundColor: Colors.red.shade700,
+                                    shape: RoundedRectangleBorder(
+                                      borderRadius: BorderRadius.circular(12),
+                                    ),
+                                    elevation: 4,
+                                  ),
+                                  child: const Text(
+                                    'CANCEL ALERT',
+                                    style: TextStyle(
+                                      fontSize: 18,
+                                      fontWeight: FontWeight.bold,
+                                      letterSpacing: 1,
+                                    ),
+                                  ),
+                                ),
+                              ),
+                            ],
+                          ),
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              );
+            },
+          ),
         ],
       ),
     );
